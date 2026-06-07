@@ -40,12 +40,15 @@ Full detail (accounts, registry-side trusted-publisher config, setup steps) is i
 | Rust | crates.io | OIDC trusted publishing | — (fallback `CARGO_REGISTRY_TOKEN`) |
 | TypeScript | npm | OIDC + `--provenance` | — (fallback `NPM_TOKEN`) |
 | C# | NuGet.org | OIDC trusted publishing | — (fallback `NUGET_API_KEY`) |
-| Java | Maven Central | Portal token + GPG | `MAVEN_CENTRAL_USERNAME`, `MAVEN_CENTRAL_PASSWORD`, `MAVEN_GPG_PRIVATE_KEY`, `MAVEN_GPG_PASSPHRASE` |
+| Java | Maven Central | Portal token + GPG | `MAVEN_CENTRAL_PASSWORD`, `MAVEN_GPG_PRIVATE_KEY`, `MAVEN_GPG_PASSPHRASE` (+ var `MAVEN_CENTRAL_USERNAME`) |
 | Go | module proxy | none | — |
 
 **Recommended-path secret set (OIDC for PyPI/crates/npm/NuGet):**
-`MAVEN_CENTRAL_USERNAME`, `MAVEN_CENTRAL_PASSWORD`, `MAVEN_GPG_PRIVATE_KEY`,
-`MAVEN_GPG_PASSPHRASE` (Maven only). `NUGET_API_KEY` only if you skip NuGet OIDC.
+`MAVEN_CENTRAL_PASSWORD`, `MAVEN_GPG_PRIVATE_KEY`, `MAVEN_GPG_PASSPHRASE` (Maven
+only). `NUGET_API_KEY` only if you skip NuGet OIDC.
+
+**Variables (readable, not secret):** `NUGET_USER` (= `kanonak-oss`) and
+`MAVEN_CENTRAL_USERNAME` (the Sonatype token username).
 
 **All publish jobs run in the `production` GitHub environment** — configure each
 trusted publisher (PyPI/crates/npm/NuGet) with environment `production` so the

@@ -21,7 +21,6 @@ meta:
 # ----------------------------------------------------------------------------
 # Recommended-path secrets you must create (GitHub > repo > Settings > Secrets):
 #   With OIDC trusted publishing on PyPI + crates.io + npm + NuGet, you only need:
-#     MAVEN_CENTRAL_USERNAME      (Sonatype Central Portal user token)
 #     MAVEN_CENTRAL_PASSWORD      (Sonatype Central Portal pass token)
 #     MAVEN_GPG_PRIVATE_KEY       (ASCII-armored signing key)
 #     MAVEN_GPG_PASSPHRASE
@@ -32,7 +31,8 @@ meta:
 #
 # Non-secret config goes in GitHub Actions VARIABLES (Settings > Variables - values
 # stay readable, so you can audit which account publishes), NOT Secrets:
-#     NUGET_USER = kanonak-oss   (the publishing account handle)
+#     NUGET_USER = kanonak-oss              (the NuGet publishing account handle)
+#     MAVEN_CENTRAL_USERNAME = <token user>  (Sonatype Central token username half)
 # Reserve Secrets for true secrets only (tokens / passwords / keys).
 # ----------------------------------------------------------------------------
 
@@ -126,8 +126,9 @@ targets:
       codec: "org.kanonak:kanonak-codec"
     account_namespace: "Sonatype Central account; verify the org.kanonak namespace"
     auth: portal-token + gpg
+    github_variables:
+      - MAVEN_CENTRAL_USERNAME      # readable: the Sonatype Central token username
     github_secrets:
-      - MAVEN_CENTRAL_USERNAME
       - MAVEN_CENTRAL_PASSWORD
       - MAVEN_GPG_PRIVATE_KEY
       - MAVEN_GPG_PASSPHRASE
