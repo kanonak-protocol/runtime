@@ -26,11 +26,15 @@
     </scm>
     <developers>
         <developer>
-            <name>Kanonak</name>
+            <name>Kanonak Maintainers</name>
             <organization>Kanonak</organization>
             <organizationUrl>https://kanonak.org</organizationUrl>
         </developer>
     </developers>
+    <issueManagement>
+        <system>GitHub Issues</system>
+        <url>https://github.com/kanonak-protocol/runtime/issues</url>
+    </issueManagement>
 
     <properties>
         <maven.compiler.release>17</maven.compiler.release>

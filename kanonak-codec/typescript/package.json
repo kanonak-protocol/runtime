@@ -4,6 +4,8 @@
   "description": "The generic Kanonak codec runtime: builds the canonical input model from typed nodes + an embedded schema, content-addresses via canonicalHash (kanonak.org/canonical-form), and serializes/deserializes the normalized-JSON wire form. Referenced by generated typed SDKs; pairs with @kanonak-protocol/sdk.",
   "license": "Apache-2.0",
   "homepage": "https://kanonak.org",
+  "author": "Kanonak Maintainers (https://github.com/kanonak-protocol/runtime)",
+  "bugs": { "url": "https://github.com/kanonak-protocol/runtime/issues" },
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",

@@ -8,10 +8,12 @@ version = "0.1.0"
 description = "Kanonak canonical form + content hash (canonicalFormVersion 1). Conformant port of kanonak.org/canonical-form, verified against the golden vectors. Standard-library only."
 requires-python = ">=3.8"
 license = { text = "Apache-2.0" }
+authors = [{ name = "Kanonak Maintainers" }]
 
 [project.urls]
 Homepage = "https://kanonak.org"
 Repository = "https://github.com/kanonak-protocol/runtime"
+Issues = "https://github.com/kanonak-protocol/runtime/issues"
 
 [tool.setuptools]
 packages = ["kanonak_canonical"]
