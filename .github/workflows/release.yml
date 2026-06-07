@@ -183,7 +183,7 @@ jobs:
         uses: NuGet/login@v1
         id: nuget-login
         with:
-          user: kanonak-oss   # NuGet.org username that owns the trusted-publisher policy
+          user: ${{ vars.NUGET_USER }}   # repo Variable (set to kanonak-oss in Settings > Variables) - non-secret, auditable
       - name: push canonical then codec (NuGet)
         run: |
           dotnet nuget push "kanonak-canonical/csharp/**/bin/Release/*.nupkg" --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
