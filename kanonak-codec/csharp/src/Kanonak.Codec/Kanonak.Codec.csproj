@@ -12,6 +12,7 @@
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageProjectUrl>https://kanonak.org</PackageProjectUrl>
     <RepositoryUrl>https://github.com/kanonak-protocol/runtime</RepositoryUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -19,6 +20,10 @@
          not in the netstandard2.0 BCL, so reference it explicitly. -->
     <PackageReference Include="System.Text.Json" Version="8.0.5" Condition="'$(TargetFramework)' == 'netstandard2.0'" />
     <ProjectReference Include="..\..\..\..\kanonak-canonical\csharp\src\Kanonak.Canonical\Kanonak.Canonical.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
   </ItemGroup>
 
 </Project>

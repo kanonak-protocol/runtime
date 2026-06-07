@@ -5,6 +5,7 @@ edition = "2021"
 authors = ["Kanonak Maintainers (https://github.com/kanonak-protocol/runtime)"]
 description = "Kanonak canonical form + content hash (canonicalFormVersion 1). Conformant port of kanonak.org/canonical-form, verified against the golden vectors."
 license = "Apache-2.0"
+readme = "README.md"
 homepage = "https://kanonak.org"
 repository = "https://github.com/kanonak-protocol/runtime"
 
