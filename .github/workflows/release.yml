@@ -123,10 +123,10 @@ jobs:
       - run: python -m build kanonak-canonical/python && python -m build kanonak-codec/python
       - name: publish canonical (PyPI, OIDC trusted publishing)
         uses: pypa/gh-action-pypi-publish@release/v1
-        with: { packages-dir: kanonak-canonical/python/dist }
+        with: { packages-dir: kanonak-canonical/python/dist, skip-existing: true }
       - name: publish codec
         uses: pypa/gh-action-pypi-publish@release/v1
-        with: { packages-dir: kanonak-codec/python/dist }
+        with: { packages-dir: kanonak-codec/python/dist, skip-existing: true }
 
   publish-rust:
     needs: test-rust
@@ -183,7 +183,7 @@ jobs:
         uses: NuGet/login@v1
         id: nuget-login
         with:
-          user: ${{ vars.NUGET_USER }}   # repo Variable (set to kanonak-oss in Settings > Variables) - non-secret, auditable
+          user: ${{ vars.NUGET_USER }}   # repo Variable = kanonak-oss (the POLICY CREATOR account, NOT the org/package owner)
       - name: push canonical then codec (NuGet)
         run: |
           dotnet nuget push "kanonak-canonical/csharp/**/bin/Release/*.nupkg" --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
