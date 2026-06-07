@@ -71,7 +71,8 @@ jobs:
         id: auth
       - name: publish canonical then codec
         if: env.DO_PUBLISH == 'true'
-        env: { CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }} }
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
           cargo publish --manifest-path kanonak-canonical/rust/Cargo.toml
           sleep 30   # let the index surface canonical before codec resolves it
@@ -100,7 +101,8 @@ jobs:
       - name: publish @kanonak-protocol/codec (npm, provenance)
         if: env.DO_PUBLISH == 'true'
         run: cd kanonak-codec/typescript && npm publish --provenance --access public
-        env: { NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} }   # or npm trusted publishing (drop the token)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}   # or npm trusted publishing (drop the token)
 
   csharp:
     runs-on: ubuntu-latest
