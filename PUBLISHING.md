@@ -24,7 +24,7 @@ the bare lib name (`canonical` / `codec`):
 | TypeScript | npm | *(via `@kanonak-protocol/sdk`)* | `@kanonak-protocol/codec` |
 | C# | NuGet | `Kanonak.Canonical` | `Kanonak.Codec` |
 | Java | Maven Central | `org.kanonak:kanonak-canonical` | `org.kanonak:kanonak-codec` |
-| Go | module proxy | `kanonak.org/canonical` | `kanonak.org/codec` |
+| Go | module proxy | `github.com/kanonak-protocol/runtime/kanonak-canonical/go` | `.../kanonak-codec/go` |
 
 Every package: `homepage` = `https://kanonak.org`, `repository` =
 `https://github.com/kanonak-protocol/runtime`, license **Apache-2.0**.
@@ -69,4 +69,4 @@ see each target's `registry_side_config` in `release-targets.yml`.
    NuGet `Kanonak.*` prefix, npm org `@kanonak-protocol`, Sonatype `org.kanonak`.
 2. Configure trusted publishers (PyPI, crates.io, npm) → repo + `release.yml`.
 3. Create the secrets listed above (NuGet key; Maven Portal token + GPG).
-4. Go: stand up the `kanonak.org` vanity `go-import` meta (last; needs design).
+4. Go: push subdir tags `kanonak-canonical/go/vX.Y.Z` then `kanonak-codec/go/vX.Y.Z` (no infra; canonical first).

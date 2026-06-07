@@ -14,7 +14,7 @@ package codec
 import (
 	"fmt"
 
-	"kanonak.org/canonical"
+	canonical "github.com/kanonak-protocol/runtime/kanonak-canonical/go"
 )
 
 // envelopeKeys are the $-envelope keys excluded from statement/field emission.

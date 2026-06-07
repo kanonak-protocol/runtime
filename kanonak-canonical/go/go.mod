@@ -1,4 +1,4 @@
-module kanonak.org/canonical
+module github.com/kanonak-protocol/runtime/kanonak-canonical/go
 
 go 1.25.0
 

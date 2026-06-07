@@ -87,8 +87,8 @@ jobs:
         run: |
           (cd kanonak-canonical/go && go test ./...)
           (cd kanonak-codec/go && go test ./...)
-      # Go "publish" = the pushed semver tag, which the module proxy fetches on first
-      # `go get`. Requires the kanonak.org go-import vanity meta (see release-targets.yml).
+      # Go "publish" = push subdir tags kanonak-canonical/go/vX.Y.Z then kanonak-codec/go/vX.Y.Z;
+      # the module proxy fetches on first `go get`. No publish step here (this job runs conformance).
 
   typescript:
     runs-on: ubuntu-latest

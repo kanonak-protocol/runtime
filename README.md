@@ -40,7 +40,7 @@ hash, serialization)` golden vectors.
 | TypeScript | npm | *(in `@kanonak-protocol/sdk`)* | `@kanonak-protocol/codec` |
 | C# | NuGet | `Kanonak.Canonical` | `Kanonak.Codec` |
 | Java | Maven Central | `org.kanonak:kanonak-canonical` | `org.kanonak:kanonak-codec` |
-| Go | proxy | `kanonak.org/canonical` | `kanonak.org/codec` |
+| Go | proxy | `github.com/kanonak-protocol/runtime/kanonak-canonical/go` | `.../kanonak-codec/go` |
 
 ## Releasing
 

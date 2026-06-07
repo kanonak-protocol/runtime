@@ -133,15 +133,15 @@ targets:
     registry: Go module proxy
     registry_url: https://proxy.golang.org
     publishes:
-      canonical: kanonak.org/canonical
-      codec: kanonak.org/codec
+      canonical: github.com/kanonak-protocol/runtime/kanonak-canonical/go
+      codec: github.com/kanonak-protocol/runtime/kanonak-codec/go
     account_namespace: "none (proxy auto-fetches on first request)"
     auth: none
     github_secrets: []
     fallback_secret: null
     registry_side_config: {}
     setup:
-      - Serve the `go-import` vanity meta at kanonak.org for kanonak.org/canonical and kanonak.org/codec.
-      - Release = push a semver git tag; the proxy fetches on first `go get`.
+      - Release = push subdir semver tags `kanonak-canonical/go/vX.Y.Z` then `kanonak-codec/go/vX.Y.Z`; the proxy fetches on first `go get`.
+      - Publish canonical's tag first so codec's require resolves from the proxy.
     gotchas:
-      - "Vanity host + monorepo subdir: the module lives at kanonak-codec/go, so tagging/meta mapping needs design before first release. Lowest priority of the six."
+      - "GitHub module paths (not a kanonak.org vanity): the monorepo subdir layout is incompatible with vanity import-prefix derivation. codec/go.mod keeps a local replace for monorepo dev; consumers ignore it and resolve canonical v0.1.0 from the proxy."
