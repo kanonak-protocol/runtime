@@ -8,7 +8,7 @@ Two libraries, six languages each, conformance-verified to produce a
 **byte-identical content address** across all of them:
 
 - **`kanonak-canonical`** — the canonical form + content hash; the reference
-  implementation of the open spec [`kanonak.org/canonical-form`](https://kanonak.org)
+  implementation of the open spec [`kanonak.org/canonical-form`](https://kanonak.org/canonical-form)
   (`canonicalFormVersion "1"`).
 - **`kanonak-codec`** — the generic, ontology-independent codec runtime: builds
   the canonical input model from typed nodes + an embedded schema,

@@ -4,7 +4,7 @@ Per-language libraries that compute the **Kanonak canonical form** and its
 **content hash** — the permanent content address of a Package / EphemeralPackage
 (`sha256:…`, `q-<hex16>` name, `kanonak.lock` integrity).
 
-The cross-language contract is the spec [`kanonak.org/canonical-form@1.0.0`] plus
+The cross-language contract is the spec [`kanonak.org/canonical-form`](https://kanonak.org/canonical-form) plus
 the **golden conformance vectors** in [`vectors/`](./vectors). Each port is an
 independent conformant implementation: it passes 100% of the vectors and is
 therefore guaranteed to agree on content addresses with the TypeScript SDK, the
