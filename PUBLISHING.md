@@ -39,13 +39,17 @@ Full detail (accounts, registry-side trusted-publisher config, setup steps) is i
 | Python | PyPI | OIDC trusted publishing | — (fallback `PYPI_API_TOKEN`) |
 | Rust | crates.io | OIDC trusted publishing | — (fallback `CARGO_REGISTRY_TOKEN`) |
 | TypeScript | npm | OIDC + `--provenance` | — (fallback `NPM_TOKEN`) |
-| C# | NuGet.org | API key | `NUGET_API_KEY` |
+| C# | NuGet.org | OIDC trusted publishing | — (fallback `NUGET_API_KEY`) |
 | Java | Maven Central | Portal token + GPG | `MAVEN_CENTRAL_USERNAME`, `MAVEN_CENTRAL_PASSWORD`, `MAVEN_GPG_PRIVATE_KEY`, `MAVEN_GPG_PASSPHRASE` |
 | Go | module proxy | none | — |
 
-**Recommended-path secret set (OIDC for PyPI/crates/npm):**
-`NUGET_API_KEY`, `MAVEN_CENTRAL_USERNAME`, `MAVEN_CENTRAL_PASSWORD`,
-`MAVEN_GPG_PRIVATE_KEY`, `MAVEN_GPG_PASSPHRASE`. Everything else is keyless.
+**Recommended-path secret set (OIDC for PyPI/crates/npm/NuGet):**
+`MAVEN_CENTRAL_USERNAME`, `MAVEN_CENTRAL_PASSWORD`, `MAVEN_GPG_PRIVATE_KEY`,
+`MAVEN_GPG_PASSPHRASE` (Maven only). `NUGET_API_KEY` only if you skip NuGet OIDC.
+
+**All publish jobs run in the `production` GitHub environment** — configure each
+trusted publisher (PyPI/crates/npm/NuGet) with environment `production` so the
+OIDC claim matches, and optionally add a required-reviewer rule to gate releases.
 
 With OIDC, you configure a **trusted publisher on the registry** (pointing at
 `kanonak-protocol/runtime` + the release workflow) instead of storing a token —
@@ -67,6 +71,7 @@ see each target's `registry_side_config` in `release-targets.yml`.
 
 1. Reserve names: PyPI (`kanonak-canonical`/`kanonak-codec`), crates.io (same),
    NuGet `Kanonak.*` prefix, npm org `@kanonak-protocol`, Sonatype `org.kanonak`.
-2. Configure trusted publishers (PyPI, crates.io, npm) → repo + `release.yml`.
-3. Create the secrets listed above (NuGet key; Maven Portal token + GPG).
-4. Go: push subdir tags `kanonak-canonical/go/vX.Y.Z` then `kanonak-codec/go/vX.Y.Z` (no infra; canonical first).
+2. Configure trusted publishers (PyPI, crates.io, npm, NuGet) → repo + `release.yml` + environment `production`.
+3. Create a **`production` GitHub environment** (Settings → Environments; optionally add required reviewers to gate publishing).
+4. Create the Maven secrets (`MAVEN_CENTRAL_*`, `MAVEN_GPG_*`). PyPI/crates/npm/NuGet are keyless via OIDC.
+5. Go: push subdir tags `kanonak-canonical/go/vX.Y.Z` then `kanonak-codec/go/vX.Y.Z` (no infra; canonical first).

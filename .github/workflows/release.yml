@@ -1,13 +1,17 @@
 # Test + publish the Kanonak runtime libraries to the public registries.
 # Source of truth for connections/secrets: ../../release-targets.yml
 #
-# Every job RUNS CONFORMANCE (against the shared golden vectors) first; publish
-# steps only run on a `v*` tag or a manual dispatch with publish=true, and always
-# in the order canonical -> codec.
+# TEST jobs run on every PR / tag / dispatch (conformance against the golden
+# vectors). PUBLISH jobs run only on a `v*` tag or a manual dispatch with
+# publish=true, and run in the `production` GitHub Environment so (a) NuGet's
+# trusted-publishing OIDC claim matches, and (b) you can gate releases behind a
+# required-reviewer rule without blocking CI. Publish order is always
+# canonical -> codec.
 #
-# Runner: ubuntu-latest, toolchains pinned via setup-* actions to match what the
-# libraries are verified against (Python 3.12, Node 22, Go (go.mod), Temurin 17,
-# .NET 8, Rust stable).
+# Trusted publishers (PyPI / crates.io / npm / NuGet) must each be configured
+# with environment = production to match the OIDC claim these jobs present.
+#
+# Runner: ubuntu-latest, toolchains pinned via setup-* (Node-24 majors).
 
 name: release
 
@@ -23,62 +27,36 @@ on:
         default: false
 
 permissions:
-  id-token: write        # OIDC: PyPI / crates.io trusted publishing, npm provenance, attestations
+  id-token: write        # OIDC: PyPI / crates.io / npm provenance / NuGet trusted publishing
   contents: read
   attestations: write
-
-env:
-  DO_PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
 
 defaults:
   run:
     shell: bash
 
 jobs:
-  python:
+  # ======================= TEST (always) =======================
+  test-python:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
-      - run: pip install build
-      - name: conformance
-        run: |
+      - run: |
           python kanonak-canonical/python/conformance.py
           python kanonak-codec/python/conformance.py
-      - run: python -m build kanonak-canonical/python && python -m build kanonak-codec/python
-      - name: publish canonical (PyPI, OIDC trusted publishing)
-        if: env.DO_PUBLISH == 'true'
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with: { packages-dir: kanonak-canonical/python/dist }
-      - name: publish codec
-        if: env.DO_PUBLISH == 'true'
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with: { packages-dir: kanonak-codec/python/dist }
 
-  rust:
+  test-rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - name: conformance
-        run: |
+      - run: |
           cargo test --manifest-path kanonak-canonical/rust/Cargo.toml
           cargo test --manifest-path kanonak-codec/rust/Cargo.toml
-      - name: crates.io auth (OIDC trusted publishing)
-        if: env.DO_PUBLISH == 'true'
-        uses: rust-lang/crates-io-auth-action@v1
-        id: auth
-      - name: publish canonical then codec
-        if: env.DO_PUBLISH == 'true'
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: |
-          cargo publish --manifest-path kanonak-canonical/rust/Cargo.toml
-          sleep 30   # let the index surface canonical before codec resolves it
-          cargo publish --manifest-path kanonak-codec/rust/Cargo.toml
 
-  go:
+  test-go:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -86,60 +64,137 @@ jobs:
         with:
           go-version: "stable"
           cache-dependency-path: "**/go.sum"
-      - name: conformance
-        run: |
+      - run: |
           (cd kanonak-canonical/go && go test ./...)
           (cd kanonak-codec/go && go test ./...)
-      # Go "publish" = push subdir tags kanonak-canonical/go/vX.Y.Z then kanonak-codec/go/vX.Y.Z;
-      # the module proxy fetches on first `go get`. No publish step here (this job runs conformance).
+      # Go has no registry/account: "publish" = push subdir tags
+      # kanonak-canonical/go/vX.Y.Z then kanonak-codec/go/vX.Y.Z; the proxy fetches.
 
-  typescript:
-    # npm workspace: kanonak-canonical/typescript + kanonak-codec/typescript.
-    # codec depends on canonical (^0.1.0), resolved locally via the workspace.
+  test-typescript:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-          registry-url: "https://registry.npmjs.org"
+        with: { node-version: "22" }
       - run: npm install --no-audit --no-fund
-      - name: build + conformance (canonical, then codec)
-        run: |
+      - run: |
           npm run build      -w @kanonak-protocol/canonical
           npm run typecheck  -w @kanonak-protocol/canonical
           npm run conformance -w @kanonak-protocol/canonical
           npm run build      -w @kanonak-protocol/codec
           npm run typecheck  -w @kanonak-protocol/codec
           npm run conformance -w @kanonak-protocol/codec
-      - name: publish canonical then codec (npm, provenance)
-        if: env.DO_PUBLISH == 'true'
-        run: |
-          npm publish -w @kanonak-protocol/canonical --provenance --access public
-          npm publish -w @kanonak-protocol/codec     --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}   # or npm trusted publishing (drop the token)
 
-  csharp:
+  test-csharp:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-dotnet@v5
         with: { dotnet-version: "8.0.x" }
-      - name: conformance
-        run: |
+      - run: |
           dotnet run -c Release --project kanonak-canonical/csharp/test/Kanonak.Canonical.Conformance -- "$PWD/kanonak-canonical/vectors"
           dotnet run -c Release --project kanonak-codec/csharp/test/Kanonak.Codec.Conformance -- "$PWD/kanonak-codec/vectors/codec-vectors.json"
+
+  test-java:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with: { distribution: temurin, java-version: "17" }
+      - run: |
+          cd kanonak-canonical/java
+          javac -d out src/main/java/org/kanonak/canonical/*.java conformance/Conformance.java
+          java -cp out Conformance ../vectors
+          cd ../../kanonak-codec/java
+          javac -d out ../../kanonak-canonical/java/src/main/java/org/kanonak/canonical/*.java src/main/java/org/kanonak/codec/*.java conformance/Conformance.java
+          java -cp out Conformance ../vectors/codec-vectors.json
+
+  # =============== PUBLISH (only on publish; gated by the production env) ===============
+  publish-python:
+    needs: test-python
+    if: ${{ github.event_name == 'push' || inputs.publish }}
+    environment: production
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install build
+      - run: python -m build kanonak-canonical/python && python -m build kanonak-codec/python
+      - name: publish canonical (PyPI, OIDC trusted publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with: { packages-dir: kanonak-canonical/python/dist }
+      - name: publish codec
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with: { packages-dir: kanonak-codec/python/dist }
+
+  publish-rust:
+    needs: test-rust
+    if: ${{ github.event_name == 'push' || inputs.publish }}
+    environment: production
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: crates.io auth (OIDC trusted publishing)
+        uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - name: publish canonical then codec
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          cargo publish --manifest-path kanonak-canonical/rust/Cargo.toml
+          sleep 30   # let the index surface canonical before codec resolves it
+          cargo publish --manifest-path kanonak-codec/rust/Cargo.toml
+
+  publish-typescript:
+    needs: test-typescript
+    if: ${{ github.event_name == 'push' || inputs.publish }}
+    environment: production
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with: { node-version: "22", registry-url: "https://registry.npmjs.org" }
+      - run: npm install --no-audit --no-fund
+      - run: |
+          npm run build -w @kanonak-protocol/canonical
+          npm run build -w @kanonak-protocol/codec
+      - name: publish canonical then codec (npm, provenance)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}   # or npm trusted publishing (drop the token)
+        run: |
+          npm publish -w @kanonak-protocol/canonical --provenance --access public
+          npm publish -w @kanonak-protocol/codec     --provenance --access public
+
+  publish-csharp:
+    needs: test-csharp
+    if: ${{ github.event_name == 'push' || inputs.publish }}
+    environment: production
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with: { dotnet-version: "8.0.x" }
       - run: |
           dotnet pack -c Release kanonak-canonical/csharp/src/Kanonak.Canonical/Kanonak.Canonical.csproj
           dotnet pack -c Release kanonak-codec/csharp/src/Kanonak.Codec/Kanonak.Codec.csproj
+      - name: NuGet trusted-publishing login (OIDC -> temp API key)
+        uses: NuGet/login@v1
+        id: nuget-login
+        with:
+          user: kanonak-oss   # NuGet.org username that owns the trusted-publisher policy
       - name: push canonical then codec (NuGet)
-        if: env.DO_PUBLISH == 'true'
         run: |
-          dotnet nuget push "kanonak-canonical/csharp/**/bin/Release/*.nupkg" -k "${{ secrets.NUGET_API_KEY }}" -s https://api.nuget.org/v3/index.json --skip-duplicate
-          dotnet nuget push "kanonak-codec/csharp/**/bin/Release/*.nupkg"     -k "${{ secrets.NUGET_API_KEY }}" -s https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push "kanonak-canonical/csharp/**/bin/Release/*.nupkg" --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push "kanonak-codec/csharp/**/bin/Release/*.nupkg"     --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
+        # Fallback if not using OIDC: replace the login step with a NUGET_API_KEY secret and
+        # `--api-key ${{ secrets.NUGET_API_KEY }}`.
 
-  java:
+  publish-java:
+    needs: test-java
+    if: ${{ github.event_name == 'push' || inputs.publish }}
+    environment: production
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -147,21 +202,12 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-          server-id: central                       # Sonatype Central
+          server-id: central
           server-username: MAVEN_CENTRAL_USERNAME
           server-password: MAVEN_CENTRAL_PASSWORD
           gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
-      - name: conformance (javac + run against the shared vectors)
-        run: |
-          cd kanonak-canonical/java
-          javac -d out src/main/java/org/kanonak/canonical/*.java conformance/Conformance.java
-          java -cp out Conformance ../vectors
-          cd ../../kanonak-codec/java
-          javac -d out ../../kanonak-canonical/java/src/main/java/org/kanonak/canonical/*.java src/main/java/org/kanonak/codec/*.java conformance/Conformance.java
-          java -cp out Conformance ../vectors/codec-vectors.json
       - name: deploy canonical then codec (Maven Central, signed)
-        if: env.DO_PUBLISH == 'true'
         env:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
