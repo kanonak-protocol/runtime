@@ -1,7 +1,7 @@
 {
-  "name": "@kanonak-protocol/codec",
+  "name": "@kanonak-protocol/canonical",
   "version": "0.1.0",
-  "description": "The generic Kanonak codec runtime: builds the canonical input model from typed nodes + an embedded schema, content-addresses it via @kanonak-protocol/canonical, and serializes/deserializes the normalized-JSON wire form. Referenced by generated typed SDKs; its only dependency is the lightweight canonical-form library.",
+  "description": "The Kanonak canonical form + content hash (canonicalFormVersion \"1\") — the TypeScript port of kanonak.org/canonical-form, verified byte-for-byte against the shared golden vectors. The identity primitive every generated SDK content-addresses through.",
   "license": "Apache-2.0",
   "homepage": "https://kanonak.org",
   "author": "Kanonak Maintainers (https://github.com/kanonak-protocol/runtime)",
@@ -31,9 +31,9 @@
   },
   "keywords": [
     "kanonak",
-    "codec",
     "canonical-form",
     "content-address",
+    "sha256",
     "sdk"
   ],
   "repository": {
@@ -44,9 +44,6 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "conformance": "tsx src/conformance.ts"
-  },
-  "dependencies": {
-    "@kanonak-protocol/canonical": "^0.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

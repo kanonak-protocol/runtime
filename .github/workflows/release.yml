@@ -94,15 +94,29 @@ jobs:
       # the module proxy fetches on first `go get`. No publish step here (this job runs conformance).
 
   typescript:
+    # npm workspace: kanonak-canonical/typescript + kanonak-codec/typescript.
+    # codec depends on canonical (^0.1.0), resolved locally via the workspace.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
-        with: { node-version: "22", registry-url: "https://registry.npmjs.org" }
-      - run: cd kanonak-codec/typescript && npm install --no-audit --no-fund && npm run build && npm run typecheck
-      - name: publish @kanonak-protocol/codec (npm, provenance)
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - run: npm install --no-audit --no-fund
+      - name: build + conformance (canonical, then codec)
+        run: |
+          npm run build      -w @kanonak-protocol/canonical
+          npm run typecheck  -w @kanonak-protocol/canonical
+          npm run conformance -w @kanonak-protocol/canonical
+          npm run build      -w @kanonak-protocol/codec
+          npm run typecheck  -w @kanonak-protocol/codec
+          npm run conformance -w @kanonak-protocol/codec
+      - name: publish canonical then codec (npm, provenance)
         if: env.DO_PUBLISH == 'true'
-        run: cd kanonak-codec/typescript && npm publish --provenance --access public
+        run: |
+          npm publish -w @kanonak-protocol/canonical --provenance --access public
+          npm publish -w @kanonak-protocol/codec     --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}   # or npm trusted publishing (drop the token)
 

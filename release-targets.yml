@@ -76,7 +76,8 @@ targets:
     registry: npm
     registry_url: https://registry.npmjs.org
     publishes:
-      codec: "@kanonak-protocol/codec"   # canonical ships inside @kanonak-protocol/sdk
+      canonical: "@kanonak-protocol/canonical"
+      codec: "@kanonak-protocol/codec"
     account_namespace: "npm org @kanonak-protocol (publisher must be a member with publish rights)"
     auth: oidc-provenance               # --provenance via GitHub OIDC; trusted publishing if enabled
     github_secrets: []                  # OIDC; else NPM_TOKEN
@@ -86,9 +87,9 @@ targets:
       access: public
     setup:
       - Ensure the @kanonak-protocol npm org exists and the release identity can publish.
-      - Publish with `npm publish --provenance --access public` from this repo (OIDC).
+      - Publish canonical THEN codec with `npm publish --provenance --access public` (OIDC).
     gotchas:
-      - "Only codec is published here; TS consumers get the canonical form from @kanonak-protocol/sdk."
+      - "npm workspace at the repo root; codec depends on @kanonak-protocol/canonical (^0.1.0) - publish canonical first."
 
   - language: csharp
     registry: NuGet.org

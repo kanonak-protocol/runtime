@@ -18,3 +18,6 @@
 *.log
 .vs/
 .DS_Store
+
+# npm lockfile (not committed for these libs)
+package-lock.json

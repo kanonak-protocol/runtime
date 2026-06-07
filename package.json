@@ -1,0 +1,11 @@
+{
+  "name": "kanonak-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Workspace root for the TypeScript Kanonak runtime packages (canonical + codec). Not published.",
+  "license": "Apache-2.0",
+  "workspaces": [
+    "kanonak-canonical/typescript",
+    "kanonak-codec/typescript"
+  ]
+}

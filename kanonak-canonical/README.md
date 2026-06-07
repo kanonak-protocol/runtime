@@ -17,13 +17,13 @@ ordering, or wire layout requires a NEW version, never an edit in place.
 ## Vectors
 
 - `vectors/lexical-vectors.json` — per-carrier `(carrier, raw token) → canonical
-  lexical` (or `expectError`). Copied from the SDK (`@kanonak-protocol/sdk`).
+  lexical` (or `expectError`).
 - `vectors/full-form-vectors.json` — `input → exact canonical-form bytes → hash`,
   over the language-neutral typed-value input model.
 
 ## Ports
 
-All five ports pass 100% of the golden vectors (64 lexical + 9 full-form).
+All six ports pass 100% of the golden vectors (64 lexical + 9 full-form).
 
 | Language | Path | Status | Conformance command |
 |---|---|---|---|
@@ -32,9 +32,10 @@ All five ports pass 100% of the golden vectors (64 lexical + 9 full-form).
 | Go | [`go/`](./go) | ✅ | `go test ./...` (in `go/`) |
 | Java | [`java/`](./java) | ✅ | `javac -d out src/main/java/org/kanonak/canonical/*.java conformance/Conformance.java && java -cp out Conformance ../vectors` (in `java/`) |
 | Python | [`python/`](./python) | ✅ | `python conformance.py ../vectors` (in `python/`) |
+| TypeScript | [`typescript/`](./typescript) | ✅ | `npm install && npm run conformance` (in `typescript/`) |
 
-TypeScript needs no port — the SDK *is* the TypeScript implementation (consume
-`@kanonak-protocol/sdk`'s `canonical` module directly).
+The TypeScript port is published as `@kanonak-protocol/canonical`; the SDK and
+the codec consume it (it is no longer bundled inside the SDK).
 
 ## What a port implements
 

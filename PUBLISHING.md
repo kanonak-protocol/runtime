@@ -21,7 +21,7 @@ the bare lib name (`canonical` / `codec`):
 |---|---|---|---|
 | Python | PyPI | `kanonak-canonical` | `kanonak-codec` |
 | Rust | crates.io | `kanonak-canonical` | `kanonak-codec` |
-| TypeScript | npm | *(via `@kanonak-protocol/sdk`)* | `@kanonak-protocol/codec` |
+| TypeScript | npm | `@kanonak-protocol/canonical` | `@kanonak-protocol/codec` |
 | C# | NuGet | `Kanonak.Canonical` | `Kanonak.Codec` |
 | Java | Maven Central | `org.kanonak:kanonak-canonical` | `org.kanonak:kanonak-codec` |
 | Go | module proxy | `github.com/kanonak-protocol/runtime/kanonak-canonical/go` | `.../kanonak-codec/go` |

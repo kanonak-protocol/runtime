@@ -23,7 +23,7 @@ are a separate, commercial concern and are not part of this repo.)
 ## Layout
 
 ```
-kanonak-canonical/{python,rust,go,java,csharp}/   + vectors/
+kanonak-canonical/{python,rust,go,java,csharp,typescript}/   + vectors/
 kanonak-codec/{python,rust,go,java,csharp,typescript}/ + vectors/
 ```
 
@@ -37,7 +37,7 @@ hash, serialization)` golden vectors.
 |---|---|---|---|
 | Python | PyPI | `kanonak-canonical` | `kanonak-codec` |
 | Rust | crates.io | `kanonak-canonical` | `kanonak-codec` |
-| TypeScript | npm | *(in `@kanonak-protocol/sdk`)* | `@kanonak-protocol/codec` |
+| TypeScript | npm | `@kanonak-protocol/canonical` | `@kanonak-protocol/codec` |
 | C# | NuGet | `Kanonak.Canonical` | `Kanonak.Codec` |
 | Java | Maven Central | `org.kanonak:kanonak-canonical` | `org.kanonak:kanonak-codec` |
 | Go | proxy | `github.com/kanonak-protocol/runtime/kanonak-canonical/go` | `.../kanonak-codec/go` |
