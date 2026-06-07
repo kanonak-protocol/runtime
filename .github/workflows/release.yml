@@ -175,12 +175,19 @@ jobs:
       - run: |
           npm run build -w @kanonak-protocol/canonical
           npm run build -w @kanonak-protocol/codec
-      - name: publish canonical then codec (npm, provenance)
+      - name: publish canonical then codec (npm, provenance; skip already-published)
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}   # or npm trusted publishing (drop the token)
         run: |
-          npm publish -w @kanonak-protocol/canonical --provenance --access public
-          npm publish -w @kanonak-protocol/codec     --provenance --access public
+          for spec in "@kanonak-protocol/canonical:kanonak-canonical/typescript" "@kanonak-protocol/codec:kanonak-codec/typescript"; do
+            name="${spec%%:*}"; dir="${spec##*:}"
+            ver=$(node -p "require('./$dir/package.json').version")
+            if npm view "$name@$ver" version >/dev/null 2>&1; then
+              echo "$name@$ver already published - skipping"
+            else
+              npm publish -w "$name" --provenance --access public
+            fi
+          done
 
   publish-csharp:
     needs: test-csharp
