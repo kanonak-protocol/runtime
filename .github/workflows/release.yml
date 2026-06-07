@@ -97,7 +97,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "22", registry-url: "https://registry.npmjs.org" }
-      - run: cd kanonak-codec/typescript && npm ci && npm run build && npm run typecheck
+      - run: cd kanonak-codec/typescript && npm install --no-audit --no-fund && npm run build && npm run typecheck
       - name: publish @kanonak-protocol/codec (npm, provenance)
         if: env.DO_PUBLISH == 'true'
         run: cd kanonak-codec/typescript && npm publish --provenance --access public
