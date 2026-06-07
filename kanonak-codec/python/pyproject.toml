@@ -1,13 +1,14 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "kanonak-codec"
 version = "0.1.0"
+readme = "README.md"
 description = "Kanonak codec runtime (Python port): build the canonical input model from typed nodes + an embedded schema, content-address via kanonak-canonical, and (de)serialize the normalized-JSON wire form. Referenced by generated typed SDKs."
 requires-python = ">=3.8"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
 authors = [{ name = "Kanonak Maintainers" }]
 dependencies = ["kanonak-canonical>=0.1.0"]
 
