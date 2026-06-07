@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>netstandard2.0</TargetFramework>
+    <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
     <LangVersion>latest</LangVersion>
     <AssemblyName>Kanonak.Codec</AssemblyName>
     <RootNamespace>Kanonak.Codec</RootNamespace>
@@ -17,7 +17,7 @@
   <ItemGroup>
     <!-- CodecSchema.FromJson parses the embedded schema JSON; System.Text.Json is
          not in the netstandard2.0 BCL, so reference it explicitly. -->
-    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <PackageReference Include="System.Text.Json" Version="8.0.5" Condition="'$(TargetFramework)' == 'netstandard2.0'" />
     <ProjectReference Include="..\..\..\..\kanonak-canonical\csharp\src\Kanonak.Canonical\Kanonak.Canonical.csproj" />
   </ItemGroup>
 
