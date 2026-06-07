@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>Kanonak.Canonical</AssemblyName>
+    <RootNamespace>Kanonak.Canonical</RootNamespace>
+    <Nullable>disable</Nullable>
+    <Description>Kanonak canonical form + content hash (canonicalFormVersion 1). Conformant port of kanonak.org/canonical-form, verified against the golden vectors.</Description>
+    <Version>0.1.0</Version>
+    <Authors>Kanonak</Authors>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://kanonak.org</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/kanonak-protocol/runtime</RepositoryUrl>
+  </PropertyGroup>
+
+</Project>

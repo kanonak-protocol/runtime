@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>Kanonak.Codec</AssemblyName>
+    <RootNamespace>Kanonak.Codec</RootNamespace>
+    <Nullable>disable</Nullable>
+    <Description>Kanonak codec runtime — turns typed nodes + an embedded CodecSchema into the canonical input model (hashed via Kanonak.Canonical) and the normalized-JSON wire form. Conformant port of @kanonak-protocol/codec, verified against the shared codec vectors.</Description>
+    <Version>0.1.0</Version>
+    <Authors>Kanonak</Authors>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://kanonak.org</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/kanonak-protocol/runtime</RepositoryUrl>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- CodecSchema.FromJson parses the embedded schema JSON; System.Text.Json is
+         not in the netstandard2.0 BCL, so reference it explicitly. -->
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <ProjectReference Include="..\..\..\..\kanonak-canonical\csharp\src\Kanonak.Canonical\Kanonak.Canonical.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,147 @@
+# release-targets.yml
+# SINGLE SOURCE OF TRUTH for publishing the Kanonak runtime libraries.
+# Every registry connection, account/namespace, auth method, and GitHub Actions
+# secret is listed here so there is one place to review what must be set up.
+#
+# Stack: `canonical` (canonical form + content hash) -> `codec` (depends on it).
+# ALWAYS publish canonical before codec.
+
+meta:
+  source_repo: kanonak-protocol/runtime          # public; build + publish happen here
+  homepage: https://kanonak.org
+  license: Apache-2.0
+  package_version: "0.1.0"                        # both libs; codec deps canonical >= this
+  canonical_form_version: "1"                     # frozen content-address rules
+  publish_order: [canonical, codec]
+  # GitHub Actions OIDC (no stored token) is preferred where supported. A workflow
+  # using OIDC needs:  permissions: { id-token: write, contents: read, attestations: write }
+
+# ----------------------------------------------------------------------------
+# Recommended-path secrets you must create (GitHub > repo > Settings > Secrets):
+#   With OIDC trusted publishing on PyPI + crates.io + npm, you only need:
+#     NUGET_API_KEY
+#     MAVEN_CENTRAL_USERNAME      (Sonatype Central Portal user token)
+#     MAVEN_CENTRAL_PASSWORD      (Sonatype Central Portal pass token)
+#     MAVEN_GPG_PRIVATE_KEY       (ASCII-armored signing key)
+#     MAVEN_GPG_PASSPHRASE
+#   Go needs NO secret (release = a git tag; see notes).
+#
+# Token-fallback secrets (only if you choose NOT to use OIDC for these):
+#     PYPI_API_TOKEN, CARGO_REGISTRY_TOKEN, NPM_TOKEN
+# ----------------------------------------------------------------------------
+
+targets:
+
+  - language: python
+    registry: PyPI
+    registry_url: https://pypi.org
+    publishes:
+      canonical: kanonak-canonical
+      codec: kanonak-codec
+    account_namespace: "PyPI account/org that owns both projects (reserve the two names)"
+    auth: oidc-trusted-publishing
+    github_secrets: []                 # none with OIDC
+    fallback_secret: PYPI_API_TOKEN
+    registry_side_config:              # set on PyPI, per project, under Publishing
+      owner: kanonak-protocol
+      repository: runtime
+      workflow: release.yml
+      environment: pypi                # optional GitHub environment gate
+    setup:
+      - Reserve projects kanonak-canonical and kanonak-codec on PyPI.
+      - Add a Trusted Publisher to each project -> (kanonak-protocol/runtime, release.yml).
+    gotchas: []
+
+  - language: rust
+    registry: crates.io
+    registry_url: https://crates.io
+    publishes:
+      canonical: kanonak-canonical
+      codec: kanonak-codec
+    account_namespace: "crates.io account (GitHub-linked) owning both crates"
+    auth: oidc-trusted-publishing      # crates.io Trusted Publishing (GA 2025)
+    github_secrets: []
+    fallback_secret: CARGO_REGISTRY_TOKEN
+    registry_side_config:
+      owner: kanonak-protocol
+      repository: runtime
+      workflow: release.yml
+    setup:
+      - Reserve crate names kanonak-canonical and kanonak-codec.
+      - Configure Trusted Publishing on each crate -> this repo + workflow.
+    gotchas:
+      - "codec depends on canonical via {version, path}; cargo publishes canonical first, then codec resolves it from crates.io."
+
+  - language: typescript
+    registry: npm
+    registry_url: https://registry.npmjs.org
+    publishes:
+      codec: "@kanonak-protocol/codec"   # canonical ships inside @kanonak-protocol/sdk
+    account_namespace: "npm org @kanonak-protocol (publisher must be a member with publish rights)"
+    auth: oidc-provenance               # --provenance via GitHub OIDC; trusted publishing if enabled
+    github_secrets: []                  # OIDC; else NPM_TOKEN
+    fallback_secret: NPM_TOKEN
+    registry_side_config:
+      org: "@kanonak-protocol"
+      access: public
+    setup:
+      - Ensure the @kanonak-protocol npm org exists and the release identity can publish.
+      - Publish with `npm publish --provenance --access public` from this repo (OIDC).
+    gotchas:
+      - "Only codec is published here; TS consumers get the canonical form from @kanonak-protocol/sdk."
+
+  - language: csharp
+    registry: NuGet.org
+    registry_url: https://api.nuget.org/v3/index.json
+    publishes:
+      canonical: Kanonak.Canonical
+      codec: Kanonak.Codec
+    account_namespace: "NuGet.org account; reserve the 'Kanonak.' package-ID prefix"
+    auth: api-key
+    github_secrets: [NUGET_API_KEY]
+    fallback_secret: null
+    registry_side_config: {}
+    setup:
+      - Reserve the Kanonak.* ID prefix on NuGet.org.
+      - Create an API key scoped to Kanonak.Canonical + Kanonak.Codec -> secret NUGET_API_KEY.
+    gotchas: []
+
+  - language: java
+    registry: Maven Central
+    registry_url: https://central.sonatype.com
+    publishes:
+      canonical: "org.kanonak:kanonak-canonical"
+      codec: "org.kanonak:kanonak-codec"
+    account_namespace: "Sonatype Central account; verify the org.kanonak namespace"
+    auth: portal-token + gpg
+    github_secrets:
+      - MAVEN_CENTRAL_USERNAME
+      - MAVEN_CENTRAL_PASSWORD
+      - MAVEN_GPG_PRIVATE_KEY
+      - MAVEN_GPG_PASSPHRASE
+    fallback_secret: null
+    registry_side_config:
+      namespace: org.kanonak
+    setup:
+      - Register/verify the org.kanonak namespace on Sonatype Central (DNS TXT on kanonak.org).
+      - Generate a GPG key, publish the public key to a keyserver, store the private key + passphrase as secrets.
+      - Generate a Central Portal user token -> MAVEN_CENTRAL_USERNAME / _PASSWORD.
+    gotchas:
+      - "Artifacts must be GPG-signed and pass Central validation before release."
+
+  - language: go
+    registry: Go module proxy
+    registry_url: https://proxy.golang.org
+    publishes:
+      canonical: kanonak.org/canonical
+      codec: kanonak.org/codec
+    account_namespace: "none (proxy auto-fetches on first request)"
+    auth: none
+    github_secrets: []
+    fallback_secret: null
+    registry_side_config: {}
+    setup:
+      - Serve the `go-import` vanity meta at kanonak.org for kanonak.org/canonical and kanonak.org/codec.
+      - Release = push a semver git tag; the proxy fetches on first `go get`.
+    gotchas:
+      - "Vanity host + monorepo subdir: the module lives at kanonak-codec/go, so tagging/meta mapping needs design before first release. Lowest priority of the six."

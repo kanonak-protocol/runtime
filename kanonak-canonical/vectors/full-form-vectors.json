@@ -1,0 +1,254 @@
+{
+  "canonicalFormVersion": "1",
+  "hashAlgorithm": "sha256",
+  "description": "Golden conformance vectors for canonicalForm/canonicalHash over the typed-value input model (issue #55). input -> expectedCanonicalForm (exact UTF-8 JSON bytes) -> expectedHash. The same file drives every kanonak-canonical port. See decode.mjs for the input-model decoder. Expected values are authoritative.",
+  "vectors": [
+    {
+      "id": "typed-scalars-mixed",
+      "description": "One subject with integer/decimal/boolean/dateTime/string/anyURI properties — the typed blob in a full form; statements emitted in predicate UTF-8 byte order.",
+      "input": {
+        "subjects": [
+          {
+            "uri": "example.org/data@1.0.0/Tick",
+            "statements": [
+              {
+                "predicate": "example.org/data@1.0.0/qty",
+                "value": {
+                  "lit": "0100",
+                  "datatype": "kanonak.org/core-xsd/integer"
+                }
+              },
+              {
+                "predicate": "example.org/data@1.0.0/price",
+                "value": {
+                  "lit": "1.230",
+                  "datatype": "kanonak.org/core-xsd/decimal"
+                }
+              },
+              {
+                "predicate": "example.org/data@1.0.0/active",
+                "value": {
+                  "lit": "1",
+                  "datatype": "kanonak.org/core-xsd/boolean"
+                }
+              },
+              {
+                "predicate": "example.org/data@1.0.0/at",
+                "value": {
+                  "lit": "2026-05-31T13:00:00+01:00",
+                  "datatype": "kanonak.org/core-xsd/dateTime"
+                }
+              },
+              {
+                "predicate": "example.org/data@1.0.0/label",
+                "value": {
+                  "lit": "hello",
+                  "datatype": "kanonak.org/core-xsd/string"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"example.org/data@1.0.0/Tick\",\"statements\":[{\"predicate\":\"example.org/data@1.0.0/active\",\"type\":\"typed\",\"carrier\":\"boolean\",\"value\":\"true\"},{\"predicate\":\"example.org/data@1.0.0/at\",\"type\":\"typed\",\"carrier\":\"dateTime\",\"value\":\"2026-05-31T12:00:00Z\"},{\"predicate\":\"example.org/data@1.0.0/label\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"hello\"},{\"predicate\":\"example.org/data@1.0.0/price\",\"type\":\"typed\",\"carrier\":\"decimal\",\"value\":\"1.23\"},{\"predicate\":\"example.org/data@1.0.0/qty\",\"type\":\"typed\",\"carrier\":\"integer\",\"value\":\"100\"}]}]}",
+      "expectedHash": "sha256:e55ab7be11235de58360a8c8b069c8c19f21bb5fcde7c4638abd2f731ea8b704"
+    },
+    {
+      "id": "decimal-five",
+      "description": "A decimal-valued 5.0 — distinct identity from the integer 5 below (carrier tag differs).",
+      "input": {
+        "subjects": [
+          {
+            "uri": "example.org/data@1.0.0/N",
+            "statements": [
+              {
+                "predicate": "example.org/data@1.0.0/v",
+                "value": {
+                  "lit": "5.0",
+                  "datatype": "kanonak.org/core-xsd/decimal"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"example.org/data@1.0.0/N\",\"statements\":[{\"predicate\":\"example.org/data@1.0.0/v\",\"type\":\"typed\",\"carrier\":\"decimal\",\"value\":\"5\"}]}]}",
+      "expectedHash": "sha256:705b20070647ddf964b713b5e68207c4c1767ba83be597ccfdf8d7e55a183c94"
+    },
+    {
+      "id": "integer-five",
+      "description": "An integer-valued 5 — same lexical \"5\" as decimal-five but a different carrier, so a different hash.",
+      "input": {
+        "subjects": [
+          {
+            "uri": "example.org/data@1.0.0/N",
+            "statements": [
+              {
+                "predicate": "example.org/data@1.0.0/v",
+                "value": {
+                  "lit": "5",
+                  "datatype": "kanonak.org/core-xsd/integer"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"example.org/data@1.0.0/N\",\"statements\":[{\"predicate\":\"example.org/data@1.0.0/v\",\"type\":\"typed\",\"carrier\":\"integer\",\"value\":\"5\"}]}]}",
+      "expectedHash": "sha256:f32b37ab13e5ccb84afc2a1c6ce3fd2ee13dcf53dda0dc17fa1d4a0bc798c7e3"
+    },
+    {
+      "id": "long-hundred",
+      "description": "xsd:long 0100 — collapses to the integer carrier, equal identity to integer-hundred.",
+      "input": {
+        "subjects": [
+          {
+            "uri": "example.org/data@1.0.0/N",
+            "statements": [
+              {
+                "predicate": "example.org/data@1.0.0/v",
+                "value": {
+                  "lit": "0100",
+                  "datatype": "kanonak.org/core-xsd/long"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"example.org/data@1.0.0/N\",\"statements\":[{\"predicate\":\"example.org/data@1.0.0/v\",\"type\":\"typed\",\"carrier\":\"integer\",\"value\":\"100\"}]}]}",
+      "expectedHash": "sha256:653ec69910e2f7022208305c0ff44915f6eddf0163771a38f4af26161476caa4"
+    },
+    {
+      "id": "integer-hundred",
+      "description": "xsd:integer 100 — same carrier+value as long-hundred, so an identical hash.",
+      "input": {
+        "subjects": [
+          {
+            "uri": "example.org/data@1.0.0/N",
+            "statements": [
+              {
+                "predicate": "example.org/data@1.0.0/v",
+                "value": {
+                  "lit": "100",
+                  "datatype": "kanonak.org/core-xsd/integer"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"example.org/data@1.0.0/N\",\"statements\":[{\"predicate\":\"example.org/data@1.0.0/v\",\"type\":\"typed\",\"carrier\":\"integer\",\"value\":\"100\"}]}]}",
+      "expectedHash": "sha256:653ec69910e2f7022208305c0ff44915f6eddf0163771a38f4af26161476caa4"
+    },
+    {
+      "id": "extra-untyped-raw-token",
+      "description": "An untyped/open-world scalar (no datatype): the raw token \"1.10\" is preserved verbatim, NOT decimal-collapsed to \"1.1\" — the open-world tier.",
+      "input": {
+        "subjects": [
+          {
+            "uri": "example.org/data@1.0.0/N",
+            "statements": [
+              {
+                "predicate": "example.org/data@1.0.0/x",
+                "value": {
+                  "raw": "1.10"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"example.org/data@1.0.0/N\",\"statements\":[{\"predicate\":\"example.org/data@1.0.0/x\",\"type\":\"string\",\"value\":\"1.10\"}]}]}",
+      "expectedHash": "sha256:0b48e715952fb38d57d944b6bcbda77932f424b49868fce687728b3fa212e3e8"
+    },
+    {
+      "id": "list-order-preserved",
+      "description": "A list of references keeps source order [B, A] (lists carry semantic order).",
+      "input": {
+        "subjects": [
+          {
+            "uri": "example.org/data@1.0.0/L",
+            "statements": [
+              {
+                "predicate": "example.org/data@1.0.0/items",
+                "value": {
+                  "list": [
+                    {
+                      "ref": "example.org/data@1.0.0/B"
+                    },
+                    {
+                      "ref": "example.org/data@1.0.0/A"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"example.org/data@1.0.0/L\",\"statements\":[{\"predicate\":\"example.org/data@1.0.0/items\",\"type\":\"list\",\"items\":[{\"type\":\"ref\",\"value\":\"example.org/data@1.0.0/B\"},{\"type\":\"ref\",\"value\":\"example.org/data@1.0.0/A\"}]}]}]}",
+      "expectedHash": "sha256:ea18909364cd74f16e1537d9796964508cc3821fbe530993a9f6784bf79afc0c"
+    },
+    {
+      "id": "ref-and-embedded",
+      "description": "A reference property and an embedded node property.",
+      "input": {
+        "subjects": [
+          {
+            "uri": "example.org/data@1.0.0/R",
+            "statements": [
+              {
+                "predicate": "example.org/data@1.0.0/owner",
+                "value": {
+                  "ref": "example.org/data@1.0.0/Alice"
+                }
+              },
+              {
+                "predicate": "example.org/data@1.0.0/meta",
+                "value": {
+                  "embed": {
+                    "name": "m",
+                    "statements": [
+                      {
+                        "predicate": "example.org/data@1.0.0/n",
+                        "value": {
+                          "lit": "7",
+                          "datatype": "kanonak.org/core-xsd/integer"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"example.org/data@1.0.0/R\",\"statements\":[{\"predicate\":\"example.org/data@1.0.0/meta\",\"type\":\"embedded\",\"name\":\"m\",\"statements\":[{\"predicate\":\"example.org/data@1.0.0/n\",\"type\":\"typed\",\"carrier\":\"integer\",\"value\":\"7\"}]},{\"predicate\":\"example.org/data@1.0.0/owner\",\"type\":\"ref\",\"value\":\"example.org/data@1.0.0/Alice\"}]}]}",
+      "expectedHash": "sha256:fd4700f77a5825ba362394c328c25b3eefd795926101aa18bf0af1804432908f"
+    },
+    {
+      "id": "nfc-normalization",
+      "description": "A string property whose value is authored as NFD (e + combining acute) canonicalizes to NFC.",
+      "input": {
+        "subjects": [
+          {
+            "uri": "example.org/data@1.0.0/N",
+            "statements": [
+              {
+                "predicate": "example.org/data@1.0.0/label",
+                "value": {
+                  "lit": "é",
+                  "datatype": "kanonak.org/core-xsd/string"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"example.org/data@1.0.0/N\",\"statements\":[{\"predicate\":\"example.org/data@1.0.0/label\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"é\"}]}]}",
+      "expectedHash": "sha256:25b63ea3f42aa11307cbe4793caa56009be337707db7254fa64f7b6ae8b06cce"
+    }
+  ]
+}

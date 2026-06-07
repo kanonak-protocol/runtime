@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>org.kanonak</groupId>
+    <artifactId>kanonak-codec</artifactId>
+    <version>0.1.0</version>
+    <packaging>jar</packaging>
+
+    <name>kanonak-codec</name>
+    <description>Kanonak generic codec runtime: build the canonical input model from typed nodes + an embedded schema and content-address it via kanonak-canonical. Backs every generated typed SDK. JDK-only, verified against the shared codec vectors.</description>
+
+    <url>https://kanonak.org</url>
+    <licenses>
+        <license>
+            <name>Apache-2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+        </license>
+    </licenses>
+    <scm>
+        <url>https://github.com/kanonak-protocol/runtime</url>
+    </scm>
+
+    <properties>
+        <maven.compiler.release>17</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.kanonak</groupId>
+            <artifactId>kanonak-canonical</artifactId>
+            <version>0.1.0</version>
+        </dependency>
+    </dependencies>
+
+    <!--
+      Conformance (JDK-only, mirrors the kanonak-canonical port — compile the
+      canonical sources, the codec sources, and the conformance driver together
+      on one javac classpath, then run):
+
+      javac -d out \
+        ../../kanonak-canonical/java/src/main/java/org/kanonak/canonical/*.java \
+        src/main/java/org/kanonak/codec/*.java \
+        conformance/Conformance.java
+      java -cp out Conformance ../vectors/codec-vectors.json
+    -->
+</project>

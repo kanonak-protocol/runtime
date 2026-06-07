@@ -1,0 +1,20 @@
+# Build outputs
+**/target/
+**/obj/
+**/bin/
+**/out/
+**/dist/
+**/node_modules/
+**/.turbo/
+*.tsbuildinfo
+
+# Python
+**/__pycache__/
+*.pyc
+*.egg-info/
+**/build/
+
+# Logs / caches / editor
+*.log
+.vs/
+.DS_Store

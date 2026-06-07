@@ -1,0 +1,12 @@
+[package]
+name = "kanonak-codec"
+version = "0.1.0"
+edition = "2021"
+description = "Kanonak codec runtime (Rust port). Builds the canonical input model from typed nodes + an embedded CodecSchema and content-addresses it via kanonak-canonical."
+license = "Apache-2.0"
+homepage = "https://kanonak.org"
+repository = "https://github.com/kanonak-protocol/runtime"
+
+[dependencies]
+kanonak-canonical = { version = "0.1.0", path = "../../kanonak-canonical/rust" }
+serde_json = "1"

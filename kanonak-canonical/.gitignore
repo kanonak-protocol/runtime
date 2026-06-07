@@ -1,0 +1,8 @@
+# Build artifacts across the language ports
+**/bin/
+**/obj/
+**/target/
+**/out/
+**/__pycache__/
+*.class
+go/**/*.test

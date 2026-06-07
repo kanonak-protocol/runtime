@@ -1,0 +1,81 @@
+{
+  "canonicalFormVersion": "1",
+  "description": "Golden conformance vectors for per-carrier canonical lexical forms (issue #55). Language-neutral: each vector is (carrier, input raw token) -> expected canonical lexical string, OR (carrier, input) -> expectError for inputs that must fail loud. Every kanonak-canonical port asserts canonicalScalarLexical(carrier, input) === expected for these. Expected values are authoritative — they define the form.",
+  "vectors": [
+    { "id": "integer-plain", "carrier": "integer", "input": "100", "expected": "100" },
+    { "id": "integer-leading-zeros", "carrier": "integer", "input": "0100", "expected": "100" },
+    { "id": "integer-explicit-plus", "carrier": "integer", "input": "+100", "expected": "100" },
+    { "id": "integer-negative", "carrier": "integer", "input": "-42", "expected": "-42" },
+    { "id": "integer-negative-zero", "carrier": "integer", "input": "-0", "expected": "0" },
+    { "id": "integer-zero", "carrier": "integer", "input": "0", "expected": "0" },
+    { "id": "integer-epoch-nanos-beyond-2^53", "carrier": "integer", "input": "1770000000000000001", "expected": "1770000000000000001" },
+    { "id": "integer-rejects-decimal-point", "carrier": "integer", "input": "1.0", "expectError": true },
+    { "id": "integer-rejects-exponent", "carrier": "integer", "input": "1e3", "expectError": true },
+
+    { "id": "decimal-trailing-zero", "carrier": "decimal", "input": "1.10", "expected": "1.1" },
+    { "id": "decimal-all-fraction-zeros", "carrier": "decimal", "input": "1.00", "expected": "1" },
+    { "id": "decimal-leading-fraction-zero", "carrier": "decimal", "input": "0.10", "expected": "0.1" },
+    { "id": "decimal-integer-valued", "carrier": "decimal", "input": "100", "expected": "100" },
+    { "id": "decimal-integer-dot-zero", "carrier": "decimal", "input": "100.0", "expected": "100" },
+    { "id": "decimal-negative-zero", "carrier": "decimal", "input": "-0.00", "expected": "0" },
+    { "id": "decimal-bare-fraction", "carrier": "decimal", "input": ".5", "expected": "0.5" },
+    { "id": "decimal-negative-trailing", "carrier": "decimal", "input": "-0.250", "expected": "-0.25" },
+    { "id": "decimal-subpenny-exact", "carrier": "decimal", "input": "1.234500", "expected": "1.2345" },
+    { "id": "decimal-tenth-exact", "carrier": "decimal", "input": "0.1", "expected": "0.1" },
+    { "id": "decimal-rejects-exponent", "carrier": "decimal", "input": "1e3", "expectError": true },
+
+    { "id": "double-integer-valued", "carrier": "double", "input": "1000", "expected": "1000" },
+    { "id": "double-exponent-form", "carrier": "double", "input": "1e3", "expected": "1000" },
+    { "id": "double-fraction", "carrier": "double", "input": "1.5", "expected": "1.5" },
+    { "id": "double-negative-zero", "carrier": "double", "input": "-0", "expected": "0" },
+    { "id": "double-nan", "carrier": "double", "input": "NaN", "expected": "NaN" },
+    { "id": "double-inf", "carrier": "double", "input": "INF", "expected": "INF" },
+    { "id": "double-neg-inf", "carrier": "double", "input": "-INF", "expected": "-INF" },
+    { "id": "double-rejects-Infinity-spelling", "carrier": "double", "input": "Infinity", "expectError": true },
+
+    { "id": "float-fraction", "carrier": "float", "input": "1.5", "expected": "1.5" },
+    { "id": "float-nan", "carrier": "float", "input": "NaN", "expected": "NaN" },
+
+    { "id": "boolean-true", "carrier": "boolean", "input": "true", "expected": "true" },
+    { "id": "boolean-one", "carrier": "boolean", "input": "1", "expected": "true" },
+    { "id": "boolean-false", "carrier": "boolean", "input": "false", "expected": "false" },
+    { "id": "boolean-zero", "carrier": "boolean", "input": "0", "expected": "false" },
+    { "id": "boolean-rejects-uppercase", "carrier": "boolean", "input": "TRUE", "expectError": true },
+
+    { "id": "string-ascii-unchanged", "carrier": "string", "input": "hello", "expected": "hello" },
+    { "id": "string-nfd-to-nfc", "carrier": "string", "input": "é", "expected": "é" },
+    { "id": "string-nfc-stable", "carrier": "string", "input": "é", "expected": "é" },
+    { "id": "string-no-whitespace-collapse", "carrier": "string", "input": "a  b\t", "expected": "a  b\t" },
+
+    { "id": "anyURI-nfc", "carrier": "anyURI", "input": "https://example.org/é", "expected": "https://example.org/é" },
+
+    { "id": "hexBinary-lowercase-to-upper", "carrier": "hexBinary", "input": "0fb7", "expected": "0FB7" },
+    { "id": "hexBinary-already-upper", "carrier": "hexBinary", "input": "0FB7", "expected": "0FB7" },
+    { "id": "hexBinary-empty", "carrier": "hexBinary", "input": "", "expected": "" },
+    { "id": "hexBinary-rejects-odd-length", "carrier": "hexBinary", "input": "abc", "expectError": true },
+
+    { "id": "base64-canonical", "carrier": "base64Binary", "input": "aGVsbG8=", "expected": "aGVsbG8=" },
+    { "id": "base64-line-wrap-collapses", "carrier": "base64Binary", "input": "aGVs\nbG8=", "expected": "aGVsbG8=" },
+
+    { "id": "dateTime-offset-to-utc-z", "carrier": "dateTime", "input": "2026-05-31T13:00:00+01:00", "expected": "2026-05-31T12:00:00Z" },
+    { "id": "dateTime-z-stable", "carrier": "dateTime", "input": "2026-05-31T12:00:00Z", "expected": "2026-05-31T12:00:00Z" },
+    { "id": "dateTime-plus-zero-to-z", "carrier": "dateTime", "input": "2026-05-31T12:00:00+00:00", "expected": "2026-05-31T12:00:00Z" },
+    { "id": "dateTime-rolls-back-a-day", "carrier": "dateTime", "input": "2026-05-31T01:00:00+02:00", "expected": "2026-05-30T23:00:00Z" },
+    { "id": "dateTime-rolls-year", "carrier": "dateTime", "input": "2026-12-31T23:00:00-02:00", "expected": "2027-01-01T01:00:00Z" },
+    { "id": "dateTime-floating-no-z", "carrier": "dateTime", "input": "2026-05-31T12:00:00", "expected": "2026-05-31T12:00:00" },
+    { "id": "dateTime-nanos-preserved", "carrier": "dateTime", "input": "2026-01-01T00:00:00.123456789Z", "expected": "2026-01-01T00:00:00.123456789Z" },
+    { "id": "dateTime-frac-trailing-zeros-trimmed", "carrier": "dateTime", "input": "2026-01-01T00:00:00.1200Z", "expected": "2026-01-01T00:00:00.12Z" },
+    { "id": "dateTime-frac-all-zeros-dropped", "carrier": "dateTime", "input": "2026-01-01T00:00:00.000Z", "expected": "2026-01-01T00:00:00Z" },
+    { "id": "dateTime-frac-survives-shift", "carrier": "dateTime", "input": "2026-01-01T00:30:00.500+01:00", "expected": "2025-12-31T23:30:00.5Z" },
+
+    { "id": "date-no-shift", "carrier": "date", "input": "2026-05-31", "expected": "2026-05-31" },
+    { "id": "date-plus-zero-to-z", "carrier": "date", "input": "2026-05-31+00:00", "expected": "2026-05-31Z" },
+    { "id": "date-offset-preserved-not-shifted", "carrier": "date", "input": "2026-05-31-05:00", "expected": "2026-05-31-05:00" },
+
+    { "id": "time-no-shift", "carrier": "time", "input": "13:00:00-05:00", "expected": "13:00:00-05:00" },
+    { "id": "time-frac-trimmed", "carrier": "time", "input": "23:30:00.500Z", "expected": "23:30:00.5Z" },
+    { "id": "time-frac-all-zeros-dropped", "carrier": "time", "input": "00:00:00.000", "expected": "00:00:00" },
+    { "id": "time-24-to-00", "carrier": "time", "input": "24:00:00", "expected": "00:00:00" },
+    { "id": "time-plus-zero-to-z", "carrier": "time", "input": "12:00:00+00:00", "expected": "12:00:00Z" }
+  ]
+}

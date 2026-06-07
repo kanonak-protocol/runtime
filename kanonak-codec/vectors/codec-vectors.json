@@ -1,0 +1,140 @@
+{
+  "description": "Codec conformance vectors: typed nodes + embedded schema -> canonical form + content hash + normalized-JSON serialize. Drives every kanonak-codec port. Generated from the TypeScript reference (@kanonak-protocol/codec); expected values are authoritative.",
+  "canonicalFormVersion": "1",
+  "schema": {
+    "typePredicate": "kanonak.org/core-rdf@1.1.0/type",
+    "labelPredicate": "kanonak.org/core-rdf@1.1.0/label",
+    "packageTypeUri": "kanonak.org/core-kanonak@1.0.0/Package",
+    "classes": {
+      "probe.example.com/schema@1.0.0/Account": {
+        "typeUri": "probe.example.com/schema@1.0.0/Account",
+        "props": {
+          "accountCode": {
+            "predicate": "probe.example.com/schema@1.0.0/accountCode",
+            "kind": "datatype",
+            "datatype": "kanonak.org/core-xsd/string"
+          },
+          "seats": {
+            "predicate": "probe.example.com/schema@1.0.0/seats",
+            "kind": "datatype",
+            "datatype": "kanonak.org/core-xsd/integer"
+          },
+          "rate": {
+            "predicate": "probe.example.com/schema@1.0.0/rate",
+            "kind": "datatype",
+            "datatype": "kanonak.org/core-xsd/decimal"
+          },
+          "active": {
+            "predicate": "probe.example.com/schema@1.0.0/active",
+            "kind": "datatype",
+            "datatype": "kanonak.org/core-xsd/boolean"
+          },
+          "owner": {
+            "predicate": "probe.example.com/schema@1.0.0/owner",
+            "kind": "object"
+          },
+          "tags": {
+            "predicate": "probe.example.com/schema@1.0.0/tags",
+            "kind": "datatype",
+            "datatype": "kanonak.org/core-xsd/string"
+          }
+        }
+      },
+      "probe.example.com/schema@1.0.0/Person": {
+        "typeUri": "probe.example.com/schema@1.0.0/Person",
+        "props": {
+          "name": {
+            "predicate": "probe.example.com/schema@1.0.0/name",
+            "kind": "datatype",
+            "datatype": "kanonak.org/core-xsd/string"
+          }
+        }
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "basic-scalars-ref-list",
+      "pkg": {
+        "publisher": "probe.example.com",
+        "packageName": "data",
+        "version": "1.0.0",
+        "label": "Codec Probe Data"
+      },
+      "nodes": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Person",
+          "$id": "probe.example.com/data@1.0.0/p1",
+          "name": "Alice"
+        },
+        {
+          "$type": "probe.example.com/schema@1.0.0/Account",
+          "$id": "probe.example.com/data@1.0.0/a1",
+          "accountCode": "paul",
+          "seats": 5,
+          "rate": 1.5,
+          "active": true,
+          "owner": {
+            "$ref": "probe.example.com/data@1.0.0/p1"
+          },
+          "tags": [
+            "x",
+            "y"
+          ]
+        }
+      ],
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"probe.example.com/data@1.0.0/a1\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"probe.example.com/schema@1.0.0/Account\"},{\"predicate\":\"probe.example.com/schema@1.0.0/accountCode\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"paul\"},{\"predicate\":\"probe.example.com/schema@1.0.0/active\",\"type\":\"typed\",\"carrier\":\"boolean\",\"value\":\"true\"},{\"predicate\":\"probe.example.com/schema@1.0.0/owner\",\"type\":\"ref\",\"value\":\"probe.example.com/data@1.0.0/p1\"},{\"predicate\":\"probe.example.com/schema@1.0.0/rate\",\"type\":\"typed\",\"carrier\":\"decimal\",\"value\":\"1.5\"},{\"predicate\":\"probe.example.com/schema@1.0.0/seats\",\"type\":\"typed\",\"carrier\":\"integer\",\"value\":\"5\"},{\"predicate\":\"probe.example.com/schema@1.0.0/tags\",\"type\":\"list\",\"items\":[{\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"x\"},{\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"y\"}]}]},{\"uri\":\"probe.example.com/data@1.0.0/data\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/label\",\"type\":\"string\",\"value\":\"Codec Probe Data\"},{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"kanonak.org/core-kanonak@1.0.0/Package\"}]},{\"uri\":\"probe.example.com/data@1.0.0/p1\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"probe.example.com/schema@1.0.0/Person\"},{\"predicate\":\"probe.example.com/schema@1.0.0/name\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"Alice\"}]}]}",
+      "expectedHash": "sha256:6ed4e664dbaf7d3331d71af297f48da23994af34d081a86f555cb34706de2913",
+      "expectedSerialize": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Person",
+          "$id": "probe.example.com/data@1.0.0/p1",
+          "name": "Alice"
+        },
+        {
+          "$type": "probe.example.com/schema@1.0.0/Account",
+          "$id": "probe.example.com/data@1.0.0/a1",
+          "accountCode": "paul",
+          "seats": 5,
+          "rate": 1.5,
+          "active": true,
+          "owner": {
+            "$ref": "probe.example.com/data@1.0.0/p1"
+          },
+          "tags": [
+            "x",
+            "y"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "open-world-extra",
+      "pkg": {
+        "publisher": "probe.example.com",
+        "packageName": "data",
+        "version": "1.0.0"
+      },
+      "nodes": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Account",
+          "$id": "probe.example.com/data@1.0.0/a2",
+          "accountCode": "acme",
+          "$extra": {
+            "sec.example.com/policy@1.0.0/classification": "PII"
+          }
+        }
+      ],
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"probe.example.com/data@1.0.0/a2\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"probe.example.com/schema@1.0.0/Account\"},{\"predicate\":\"probe.example.com/schema@1.0.0/accountCode\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"acme\"},{\"predicate\":\"sec.example.com/policy@1.0.0/classification\",\"type\":\"string\",\"value\":\"PII\"}]},{\"uri\":\"probe.example.com/data@1.0.0/data\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"kanonak.org/core-kanonak@1.0.0/Package\"}]}]}",
+      "expectedHash": "sha256:a33f9f0b1867a2182431a6ebf0a37205cbf5cae4604e6bf92838a3ef78312ea3",
+      "expectedSerialize": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Account",
+          "$id": "probe.example.com/data@1.0.0/a2",
+          "accountCode": "acme",
+          "sec.example.com/policy@1.0.0/classification": "PII"
+        }
+      ]
+    }
+  ]
+}

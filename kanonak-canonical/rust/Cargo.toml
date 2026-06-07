@@ -1,0 +1,16 @@
+[package]
+name = "kanonak-canonical"
+version = "0.1.0"
+edition = "2021"
+description = "Kanonak canonical form + content hash (canonicalFormVersion 1). Conformant port of kanonak.org/canonical-form, verified against the golden vectors."
+license = "Apache-2.0"
+homepage = "https://kanonak.org"
+repository = "https://github.com/kanonak-protocol/runtime"
+
+[dependencies]
+regex = "1"
+unicode-normalization = "0.1"
+sha2 = "0.10"
+
+[dev-dependencies]
+serde_json = "1"
