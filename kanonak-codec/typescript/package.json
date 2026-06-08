@@ -1,33 +1,27 @@
 {
   "name": "@kanonak-protocol/codec",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The generic Kanonak codec runtime: builds the canonical input model from typed nodes + an embedded schema, content-addresses it via @kanonak-protocol/canonical, and serializes/deserializes the normalized-JSON wire form. Referenced by generated typed SDKs; its only dependency is the lightweight canonical-form library.",
   "license": "Apache-2.0",
   "homepage": "https://kanonak.org",
   "author": "Kanonak Maintainers (https://github.com/kanonak-protocol/runtime)",
-  "bugs": { "url": "https://github.com/kanonak-protocol/runtime/issues" },
+  "bugs": {
+    "url": "https://github.com/kanonak-protocol/runtime/issues"
+  },
   "type": "module",
-  "main": "src/index.ts",
-  "types": "src/index.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "files": [
     "dist"
   ],
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.ts"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     }
   },
   "publishConfig": {
-    "access": "public",
-    "main": "dist/index.js",
-    "types": "dist/index.d.ts",
-    "exports": {
-      ".": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
-      }
-    }
+    "access": "public"
   },
   "keywords": [
     "kanonak",
