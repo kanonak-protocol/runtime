@@ -1,0 +1,110 @@
+name: Deprecate Versions
+
+# Break-glass: mark npm versions deprecated (a warning on install). Non-destructive
+# and reversible (deprecate with an empty message un-deprecates). Reuses the
+# NPM_TOKEN already configured in the `production` environment.
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Package to deprecate'
+        required: true
+        type: choice
+        options:
+          - all
+          - '@kanonak-protocol/canonical'
+          - '@kanonak-protocol/codec'
+      min_version:
+        description: 'Deprecate versions >= this (inclusive, e.g. 0.1.0)'
+        required: true
+        type: string
+      max_version:
+        description: 'Deprecate versions <= this (inclusive, e.g. 0.1.0)'
+        required: true
+        type: string
+      message:
+        description: 'Deprecation message shown on npm install (empty string un-deprecates)'
+        required: false
+        type: string
+        default: 'This version is deprecated. Please upgrade to the latest version.'
+      dry_run:
+        description: 'Dry run — list versions without deprecating'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  deprecate:
+    runs-on: ubuntu-latest
+    environment: production   # where NPM_TOKEN lives
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Deprecate versions in range
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          SELECTED: ${{ inputs.package }}
+          MIN_VERSION: ${{ inputs.min_version }}
+          MAX_VERSION: ${{ inputs.max_version }}
+          MESSAGE: ${{ inputs.message }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          for v in "$MIN_VERSION" "$MAX_VERSION"; do
+            if ! echo "$v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::Invalid version format '$v'. Expected X.Y.Z"
+              exit 1
+            fi
+          done
+
+          MIN_MAJOR=$(echo "$MIN_VERSION" | cut -d. -f1); MIN_MINOR=$(echo "$MIN_VERSION" | cut -d. -f2); MIN_PATCH=$(echo "$MIN_VERSION" | cut -d. -f3)
+          MAX_MAJOR=$(echo "$MAX_VERSION" | cut -d. -f1); MAX_MINOR=$(echo "$MAX_VERSION" | cut -d. -f2); MAX_PATCH=$(echo "$MAX_VERSION" | cut -d. -f3)
+
+          version_in_range() {
+            local v="$1" major minor patch
+            major=$(echo "$v" | cut -d. -f1); minor=$(echo "$v" | cut -d. -f2); patch=$(echo "$v" | cut -d. -f3)
+            if [ "$major" -lt "$MIN_MAJOR" ]; then return 1; fi
+            if [ "$major" -eq "$MIN_MAJOR" ] && [ "$minor" -lt "$MIN_MINOR" ]; then return 1; fi
+            if [ "$major" -eq "$MIN_MAJOR" ] && [ "$minor" -eq "$MIN_MINOR" ] && [ "$patch" -lt "$MIN_PATCH" ]; then return 1; fi
+            if [ "$major" -gt "$MAX_MAJOR" ]; then return 1; fi
+            if [ "$major" -eq "$MAX_MAJOR" ] && [ "$minor" -gt "$MAX_MINOR" ]; then return 1; fi
+            if [ "$major" -eq "$MAX_MAJOR" ] && [ "$minor" -eq "$MAX_MINOR" ] && [ "$patch" -gt "$MAX_PATCH" ]; then return 1; fi
+            return 0
+          }
+
+          echo "Range: $MIN_VERSION — $MAX_VERSION (inclusive)"
+          echo "Message: $MESSAGE"
+          echo "Dry run: $DRY_RUN"
+
+          npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
+
+          if [ "$SELECTED" = "all" ]; then
+            PACKAGES=("@kanonak-protocol/canonical" "@kanonak-protocol/codec")
+          else
+            PACKAGES=("$SELECTED")
+          fi
+
+          for pkg in "${PACKAGES[@]}"; do
+            echo ""; echo "Package: $pkg"
+            VERSIONS=$(npm view "$pkg" versions --json --registry=https://registry.npmjs.org 2>/dev/null | tr -d '[]" \n' | tr ',' '\n' || echo "")
+            if [ -z "$VERSIONS" ]; then echo "  No versions found"; continue; fi
+            for ver in $VERSIONS; do
+              if version_in_range "$ver"; then
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "  [DRY RUN] Would deprecate $pkg@$ver"
+                else
+                  echo "  Deprecating $pkg@$ver..."
+                  npm deprecate "$pkg@$ver" "$MESSAGE" --registry=https://registry.npmjs.org || echo "  ⚠ Failed to deprecate $pkg@$ver"
+                fi
+              else
+                echo "  Skipping $pkg@$ver (outside range)"
+              fi
+            done
+          done
+
+          echo ""
+          if [ "$DRY_RUN" = "true" ]; then echo "=== DRY RUN COMPLETE — no changes made ==="; else echo "=== DONE ==="; fi

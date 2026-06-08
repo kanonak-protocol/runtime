@@ -1,0 +1,107 @@
+name: Unpublish Versions (npm)
+
+# Break-glass: remove npm versions entirely. npm only allows unpublish within ~72h
+# of publish, and blocks it if another package depends on the version — so unpublish
+# the dependent (codec) before the dependency (canonical). Prefer `deprecate` when
+# possible; unpublish is destructive and the version number can't be reused.
+# Reuses the NPM_TOKEN already configured in the `production` environment.
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Package to unpublish versions from'
+        required: true
+        type: choice
+        options:
+          - all
+          - '@kanonak-protocol/canonical'
+          - '@kanonak-protocol/codec'
+      min_version:
+        description: 'Unpublish versions >= this (inclusive, e.g. 0.1.0)'
+        required: true
+        type: string
+      max_version:
+        description: 'Unpublish versions <= this (inclusive, e.g. 0.1.0)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Dry run — list versions without unpublishing'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  unpublish:
+    runs-on: ubuntu-latest
+    environment: production   # where NPM_TOKEN lives
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Unpublish versions in range
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          SELECTED: ${{ inputs.package }}
+          MIN_VERSION: ${{ inputs.min_version }}
+          MAX_VERSION: ${{ inputs.max_version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          for v in "$MIN_VERSION" "$MAX_VERSION"; do
+            if ! echo "$v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::Invalid version format '$v'. Expected X.Y.Z"
+              exit 1
+            fi
+          done
+
+          MIN_MAJOR=$(echo "$MIN_VERSION" | cut -d. -f1); MIN_MINOR=$(echo "$MIN_VERSION" | cut -d. -f2); MIN_PATCH=$(echo "$MIN_VERSION" | cut -d. -f3)
+          MAX_MAJOR=$(echo "$MAX_VERSION" | cut -d. -f1); MAX_MINOR=$(echo "$MAX_VERSION" | cut -d. -f2); MAX_PATCH=$(echo "$MAX_VERSION" | cut -d. -f3)
+
+          version_in_range() {
+            local v="$1" major minor patch
+            major=$(echo "$v" | cut -d. -f1); minor=$(echo "$v" | cut -d. -f2); patch=$(echo "$v" | cut -d. -f3)
+            if [ "$major" -lt "$MIN_MAJOR" ]; then return 1; fi
+            if [ "$major" -eq "$MIN_MAJOR" ] && [ "$minor" -lt "$MIN_MINOR" ]; then return 1; fi
+            if [ "$major" -eq "$MIN_MAJOR" ] && [ "$minor" -eq "$MIN_MINOR" ] && [ "$patch" -lt "$MIN_PATCH" ]; then return 1; fi
+            if [ "$major" -gt "$MAX_MAJOR" ]; then return 1; fi
+            if [ "$major" -eq "$MAX_MAJOR" ] && [ "$minor" -gt "$MAX_MINOR" ]; then return 1; fi
+            if [ "$major" -eq "$MAX_MAJOR" ] && [ "$minor" -eq "$MAX_MINOR" ] && [ "$patch" -gt "$MAX_PATCH" ]; then return 1; fi
+            return 0
+          }
+
+          echo "Range: $MIN_VERSION — $MAX_VERSION (inclusive)"
+          echo "Dry run: $DRY_RUN"
+          echo "Note: npm blocks unpublish if a version has dependents or is older than ~72h."
+
+          # Reverse dependency order for 'all': codec (dependent) before canonical (dependency).
+          if [ "$SELECTED" = "all" ]; then
+            PACKAGES=("@kanonak-protocol/codec" "@kanonak-protocol/canonical")
+          else
+            PACKAGES=("$SELECTED")
+          fi
+
+          npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
+
+          for pkg in "${PACKAGES[@]}"; do
+            echo ""; echo "Package: $pkg"
+            VERSIONS=$(npm view "$pkg" versions --json --registry=https://registry.npmjs.org 2>/dev/null | tr -d '[]" \n' | tr ',' '\n' || echo "")
+            if [ -z "$VERSIONS" ]; then echo "  No versions found on npmjs"; continue; fi
+            for ver in $VERSIONS; do
+              if version_in_range "$ver"; then
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "  [DRY RUN] Would unpublish $pkg@$ver"
+                else
+                  echo "  Unpublishing $pkg@$ver..."
+                  npm unpublish "$pkg@$ver" --registry=https://registry.npmjs.org --force 2>&1 || echo "  ⚠ Failed to unpublish $pkg@$ver (dependents, >72h, or last version — try deprecate)"
+                fi
+              else
+                echo "  Keeping $pkg@$ver (outside range)"
+              fi
+            done
+          done
+
+          echo ""
+          if [ "$DRY_RUN" = "true" ]; then echo "=== DRY RUN COMPLETE — no changes made ==="; else echo "=== DONE ==="; fi
