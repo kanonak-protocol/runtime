@@ -162,7 +162,7 @@ jobs:
             local manifest="$1" crate ver
             crate=$(grep -m1 '^name = ' "$manifest" | sed -E 's/.*"(.*)".*/\1/')
             ver=$(grep -m1 '^version = ' "$manifest" | sed -E 's/.*"(.*)".*/\1/')
-            if curl -sf -o /dev/null "https://crates.io/api/v1/crates/$crate/$ver"; then
+            if curl -sf -o /dev/null -A "kanonak-release-ci (https://github.com/kanonak-protocol/runtime)" "https://crates.io/api/v1/crates/$crate/$ver"; then
               echo "$crate@$ver already on crates.io - skipping"
             else
               cargo publish --manifest-path "$manifest"
