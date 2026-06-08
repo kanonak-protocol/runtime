@@ -204,7 +204,52 @@ export function canonicalBase64(raw: string): string {
   if (!/^[A-Za-z0-9+/]*={0,2}$/.test(stripped) || stripped.length % 4 !== 0) {
     throw new Error(`canonicalBase64: '${raw}' is not a valid xsd:base64Binary lexical`);
   }
-  return Buffer.from(stripped, 'base64').toString('base64');
+  // Decode then re-encode (pure JS, no `Buffer`, so this runs in any JS
+  // environment): collapses any padding/line-wrap variant to the one canonical
+  // RFC 4648 encoding and zeroes a final quantum's unused bits — byte-identical
+  // to a native base64 round-trip.
+  return base64Encode(base64Decode(stripped));
+}
+
+// --- base64 (RFC 4648 standard alphabet), pure JS, no `Buffer`. -------------
+
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/** Decode a validated standard-alphabet base64 string to bytes. */
+function base64Decode(s: string): Uint8Array {
+  const clean = s.replace(/=+$/, '');
+  const out = new Uint8Array((clean.length * 6) >> 3);
+  let bits = 0;
+  let nbits = 0;
+  let oi = 0;
+  for (let i = 0; i < clean.length; i++) {
+    bits = (bits << 6) | B64.indexOf(clean[i]);
+    nbits += 6;
+    if (nbits >= 8) {
+      nbits -= 8;
+      out[oi++] = (bits >> nbits) & 0xff;
+    }
+  }
+  return out;
+}
+
+/** Encode bytes to standard-alphabet base64 with canonical `=` padding. */
+function base64Encode(bytes: Uint8Array): string {
+  let out = '';
+  let i = 0;
+  for (; i + 3 <= bytes.length; i += 3) {
+    const n = (bytes[i] << 16) | (bytes[i + 1] << 8) | bytes[i + 2];
+    out += B64[(n >> 18) & 63] + B64[(n >> 12) & 63] + B64[(n >> 6) & 63] + B64[n & 63];
+  }
+  const rem = bytes.length - i;
+  if (rem === 1) {
+    const n = bytes[i] << 16;
+    out += B64[(n >> 18) & 63] + B64[(n >> 12) & 63] + '==';
+  } else if (rem === 2) {
+    const n = (bytes[i] << 16) | (bytes[i + 1] << 8);
+    out += B64[(n >> 18) & 63] + B64[(n >> 12) & 63] + B64[(n >> 6) & 63] + '=';
+  }
+  return out;
 }
 
 // --- Temporal carriers — dateTime / date / time. ----------------------------

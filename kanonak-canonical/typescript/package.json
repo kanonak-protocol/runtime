@@ -1,6 +1,6 @@
 {
   "name": "@kanonak-protocol/canonical",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "The Kanonak canonical form + content hash (canonicalFormVersion \"1\") \u2014 the TypeScript port of kanonak.org/canonical-form, verified byte-for-byte against the shared golden vectors. The identity primitive every generated SDK content-addresses through.",
   "license": "Apache-2.0",
   "homepage": "https://kanonak.org",
@@ -9,6 +9,7 @@
     "url": "https://github.com/kanonak-protocol/runtime/issues"
   },
   "type": "module",
+  "sideEffects": false,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
