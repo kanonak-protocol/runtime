@@ -1,0 +1,48 @@
+{
+  "name": "@kanonak-protocol/expression",
+  "version": "0.1.0",
+  "description": "The Kanonak expression runtime (expressionRuntimeVersion \"1\") — a deterministic tree-walker that folds a kanonak.org/transformations + kanonak.org/math expression to a number, verified against the shared parity vectors. The behavior every generated SDK evaluates through.",
+  "license": "Apache-2.0",
+  "homepage": "https://kanonak.org",
+  "author": "Kanonak Maintainers (https://github.com/kanonak-protocol/runtime)",
+  "bugs": {
+    "url": "https://github.com/kanonak-protocol/runtime/issues"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "kanonak",
+    "expression",
+    "evaluate",
+    "transformations",
+    "deterministic",
+    "sdk"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kanonak-protocol/runtime"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "conformance": "tsx src/conformance.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.2"
+  }
+}
