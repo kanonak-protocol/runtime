@@ -213,7 +213,6 @@ namespace Kanonak.Expression
                 case decimal m: return (double)m;
                 case bool b: return b ? 1.0 : 0.0;
                 case string s: return double.Parse(s, System.Globalization.CultureInfo.InvariantCulture);
-                case System.Text.Json.JsonElement je: return je.GetDouble();
                 default: return Convert.ToDouble(o, System.Globalization.CultureInfo.InvariantCulture);
             }
         }
