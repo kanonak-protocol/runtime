@@ -35,6 +35,14 @@ class Program
         var vectors = doc.RootElement.GetProperty("vectors");
         int total = 0, pass = 0, fail = 0;
 
+        // A determinism gate that loads zero vectors must never report green —
+        // that would silently no-op. Fail loudly before running anything.
+        if (vectors.GetArrayLength() == 0)
+        {
+            Console.Error.WriteLine($"FATAL: 0 vectors loaded from {path} — refusing to report a passing gate");
+            return 1;
+        }
+
         foreach (var v in vectors.EnumerateArray())
         {
             total++;
@@ -146,14 +154,19 @@ class Program
 
     static string FindVectorsDir()
     {
-        var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
-        while (dir != null)
+        // Search up from BOTH the assembly location (robust to the dotnet-run
+        // working directory — the exe lives under .../csharp/test/.../bin/...,
+        // inside the package tree) and the current directory. Used only when no
+        // explicit vectors path is given; CI should still pass one.
+        foreach (var start in new[] { AppContext.BaseDirectory, Directory.GetCurrentDirectory() })
         {
-            string candidate = Path.Combine(dir.FullName, "vectors");
-            if (File.Exists(Path.Combine(candidate, "expression-vectors.json"))) return candidate;
-            candidate = Path.Combine(dir.FullName, "kanonak-expression", "vectors");
-            if (File.Exists(Path.Combine(candidate, "expression-vectors.json"))) return candidate;
-            dir = dir.Parent;
+            for (var dir = new DirectoryInfo(start); dir != null; dir = dir.Parent)
+            {
+                string c1 = Path.Combine(dir.FullName, "vectors");
+                if (File.Exists(Path.Combine(c1, "expression-vectors.json"))) return c1;
+                string c2 = Path.Combine(dir.FullName, "kanonak-expression", "vectors");
+                if (File.Exists(Path.Combine(c2, "expression-vectors.json"))) return c2;
+            }
         }
         return null;
     }
