@@ -3,16 +3,18 @@
 # Every registry connection, account/namespace, auth method, and GitHub Actions
 # secret is listed here so there is one place to review what must be set up.
 #
-# Stack: `canonical` (canonical form + content hash) -> `codec` (depends on it).
-# ALWAYS publish canonical before codec.
+# Stack: `canonical` (canonical form + content hash) -> `codec` (depends on it)
+# -> `expression` (the expression runtime; independent of the other two).
+# ALWAYS publish canonical before codec; expression can publish any time.
 
 meta:
   source_repo: kanonak-protocol/runtime          # public; build + publish happen here
   homepage: https://kanonak.org
   license: Apache-2.0
-  package_version: "0.1.0"                        # both libs; codec deps canonical >= this
+  package_version: "0.1.0"                        # all three libs; codec deps canonical >= this
   canonical_form_version: "1"                     # frozen content-address rules
-  publish_order: [canonical, codec]
+  expression_runtime_version: "1"                 # frozen expression-evaluation rules
+  publish_order: [canonical, codec, expression]   # expression has no cross-dep; order is loose for it
   # GitHub Actions OIDC (no stored token) is preferred where supported. A workflow
   # using OIDC needs:  permissions: { id-token: write, contents: read, attestations: write }
   # All PUBLISH jobs run in the `production` GitHub environment (required by NuGet trusted
@@ -44,6 +46,7 @@ targets:
     publishes:
       canonical: kanonak-canonical
       codec: kanonak-codec
+      expression: kanonak-expression
     account_namespace: "PyPI account/org that owns both projects (reserve the two names)"
     auth: oidc-trusted-publishing
     github_secrets: []                 # none with OIDC
@@ -64,6 +67,7 @@ targets:
     publishes:
       canonical: kanonak-canonical
       codec: kanonak-codec
+      expression: kanonak-expression
     account_namespace: "crates.io account (GitHub-linked) owning both crates"
     auth: oidc-trusted-publishing      # crates.io Trusted Publishing (GA 2025)
     github_secrets: []
@@ -85,6 +89,7 @@ targets:
     publishes:
       canonical: "@kanonak-protocol/canonical"
       codec: "@kanonak-protocol/codec"
+      expression: "@kanonak-protocol/expression"
     account_namespace: "npm org @kanonak-protocol (publisher must be a member with publish rights)"
     auth: oidc-provenance               # --provenance via GitHub OIDC; trusted publishing if enabled
     github_secrets: []                  # OIDC; else NPM_TOKEN
@@ -105,6 +110,7 @@ targets:
     publishes:
       canonical: Kanonak.Canonical
       codec: Kanonak.Codec
+      expression: Kanonak.Expression
     account_namespace: "NuGet.org account/org (kanonak-oss); reserve the 'Kanonak.' package-ID prefix"
     auth: oidc-trusted-publishing
     github_secrets: []
@@ -124,6 +130,7 @@ targets:
     publishes:
       canonical: "org.kanonak:kanonak-canonical"
       codec: "org.kanonak:kanonak-codec"
+      expression: "org.kanonak:kanonak-expression"
     account_namespace: "Sonatype Central account; verify the org.kanonak namespace"
     auth: portal-token + gpg
     github_variables:
@@ -148,13 +155,14 @@ targets:
     publishes:
       canonical: github.com/kanonak-protocol/runtime/kanonak-canonical/go
       codec: github.com/kanonak-protocol/runtime/kanonak-codec/go
+      expression: github.com/kanonak-protocol/runtime/kanonak-expression/go
     account_namespace: "none (proxy auto-fetches on first request)"
     auth: none
     github_secrets: []
     fallback_secret: null
     registry_side_config: {}
     setup:
-      - Release = push subdir semver tags `kanonak-canonical/go/vX.Y.Z` then `kanonak-codec/go/vX.Y.Z`; the proxy fetches on first `go get`.
+      - Release = push subdir semver tags `kanonak-canonical/go/vX.Y.Z`, `kanonak-codec/go/vX.Y.Z`, `kanonak-expression/go/vX.Y.Z`; the proxy fetches on first `go get`.
       - Publish canonical's tag first so codec's require resolves from the proxy.
     gotchas:
       - "GitHub module paths (not a kanonak.org vanity): the monorepo subdir layout is incompatible with vanity import-prefix derivation. codec/go.mod keeps a local replace for monorepo dev; consumers ignore it and resolve canonical v0.1.0 from the proxy."

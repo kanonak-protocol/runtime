@@ -5,8 +5,9 @@
 # vectors). PUBLISH jobs run only on a `v*` tag or a manual dispatch with
 # publish=true, and run in the `production` GitHub Environment so (a) NuGet's
 # trusted-publishing OIDC claim matches, and (b) you can gate releases behind a
-# required-reviewer rule without blocking CI. Publish order is always
-# canonical -> codec.
+# required-reviewer rule without blocking CI. Publish order is canonical -> codec
+# -> expression (expression has no dependency on the other two; it just rides the
+# same pipeline).
 #
 # Trusted publishers (PyPI / crates.io / npm / NuGet) must each be configured
 # with environment = production to match the OIDC claim these jobs present.
@@ -46,6 +47,7 @@ jobs:
       - run: |
           python kanonak-canonical/python/conformance.py
           python kanonak-codec/python/conformance.py
+          python kanonak-expression/python/conformance.py kanonak-expression/vectors
 
   test-rust:
     runs-on: ubuntu-latest
@@ -55,6 +57,7 @@ jobs:
       - run: |
           cargo test --manifest-path kanonak-canonical/rust/Cargo.toml
           cargo test --manifest-path kanonak-codec/rust/Cargo.toml
+          cargo test --manifest-path kanonak-expression/rust/Cargo.toml
 
   test-go:
     runs-on: ubuntu-latest
@@ -67,8 +70,9 @@ jobs:
       - run: |
           (cd kanonak-canonical/go && go test ./...)
           (cd kanonak-codec/go && go test ./...)
+          (cd kanonak-expression/go && go test ./...)
       # Go has no registry/account: "publish" = push subdir tags
-      # kanonak-canonical/go/vX.Y.Z then kanonak-codec/go/vX.Y.Z; the proxy fetches.
+      # kanonak-canonical/go/vX.Y.Z, kanonak-codec/go/vX.Y.Z, kanonak-expression/go/vX.Y.Z; the proxy fetches.
 
   test-typescript:
     runs-on: ubuntu-latest
@@ -84,6 +88,9 @@ jobs:
           npm run build      -w @kanonak-protocol/codec
           npm run typecheck  -w @kanonak-protocol/codec
           npm run conformance -w @kanonak-protocol/codec
+          npm run build      -w @kanonak-protocol/expression
+          npm run typecheck  -w @kanonak-protocol/expression
+          npm run conformance -w @kanonak-protocol/expression
 
   test-csharp:
     runs-on: ubuntu-latest
@@ -94,6 +101,7 @@ jobs:
       - run: |
           dotnet run -c Release --project kanonak-canonical/csharp/test/Kanonak.Canonical.Conformance -- "$PWD/kanonak-canonical/vectors"
           dotnet run -c Release --project kanonak-codec/csharp/test/Kanonak.Codec.Conformance -- "$PWD/kanonak-codec/vectors/codec-vectors.json"
+          dotnet run -c Release --project kanonak-expression/csharp/test/Kanonak.Expression.Conformance -- "$PWD/kanonak-expression/vectors"
 
   test-java:
     runs-on: ubuntu-latest
@@ -108,6 +116,9 @@ jobs:
           cd ../../kanonak-codec/java
           javac -d out ../../kanonak-canonical/java/src/main/java/org/kanonak/canonical/*.java src/main/java/org/kanonak/codec/*.java conformance/Conformance.java
           java -cp out Conformance ../vectors/codec-vectors.json
+          cd ../../kanonak-expression/java
+          javac -d out src/main/java/org/kanonak/expression/*.java conformance/Conformance.java
+          java -cp out Conformance ../vectors
 
   # =============== PUBLISH (only on publish; gated by the production env) ===============
   publish-python:
@@ -120,13 +131,16 @@ jobs:
       - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - run: pip install build
-      - run: python -m build kanonak-canonical/python && python -m build kanonak-codec/python
+      - run: python -m build kanonak-canonical/python && python -m build kanonak-codec/python && python -m build kanonak-expression/python
       - name: publish canonical (PyPI, OIDC trusted publishing)
         uses: pypa/gh-action-pypi-publish@release/v1
         with: { packages-dir: kanonak-canonical/python/dist, skip-existing: true }
       - name: publish codec
         uses: pypa/gh-action-pypi-publish@release/v1
         with: { packages-dir: kanonak-codec/python/dist, skip-existing: true }
+      - name: publish expression
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with: { packages-dir: kanonak-expression/python/dist, skip-existing: true }
 
   publish-rust:
     needs: test-rust
@@ -171,6 +185,7 @@ jobs:
           }
           pub kanonak-canonical/rust/Cargo.toml
           pub kanonak-codec/rust/Cargo.toml
+          pub kanonak-expression/rust/Cargo.toml
 
   publish-typescript:
     needs: test-typescript
@@ -185,11 +200,12 @@ jobs:
       - run: |
           npm run build -w @kanonak-protocol/canonical
           npm run build -w @kanonak-protocol/codec
-      - name: publish canonical then codec (npm, provenance; skip already-published)
+          npm run build -w @kanonak-protocol/expression
+      - name: publish canonical, codec, expression (npm, provenance; skip already-published)
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}   # or npm trusted publishing (drop the token)
         run: |
-          for spec in "@kanonak-protocol/canonical:kanonak-canonical/typescript" "@kanonak-protocol/codec:kanonak-codec/typescript"; do
+          for spec in "@kanonak-protocol/canonical:kanonak-canonical/typescript" "@kanonak-protocol/codec:kanonak-codec/typescript" "@kanonak-protocol/expression:kanonak-expression/typescript"; do
             name="${spec%%:*}"; dir="${spec##*:}"
             ver=$(node -p "require('./$dir/package.json').version")
             if npm view "$name@$ver" version >/dev/null 2>&1; then
@@ -211,6 +227,7 @@ jobs:
       - run: |
           dotnet pack -c Release kanonak-canonical/csharp/src/Kanonak.Canonical/Kanonak.Canonical.csproj
           dotnet pack -c Release kanonak-codec/csharp/src/Kanonak.Codec/Kanonak.Codec.csproj
+          dotnet pack -c Release kanonak-expression/csharp/src/Kanonak.Expression/Kanonak.Expression.csproj
       - name: NuGet trusted-publishing login (OIDC -> temp API key)
         uses: NuGet/login@v1
         id: nuget-login
@@ -218,8 +235,9 @@ jobs:
           user: ${{ vars.NUGET_USER }}   # repo Variable = kanonak-oss (the POLICY CREATOR account, NOT the org/package owner)
       - name: push canonical then codec (NuGet)
         run: |
-          dotnet nuget push "kanonak-canonical/csharp/**/bin/Release/*.nupkg" --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
-          dotnet nuget push "kanonak-codec/csharp/**/bin/Release/*.nupkg"     --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push "kanonak-canonical/csharp/**/bin/Release/*.nupkg"  --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push "kanonak-codec/csharp/**/bin/Release/*.nupkg"      --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push "kanonak-expression/csharp/**/bin/Release/*.nupkg" --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
         # Fallback if not using OIDC: replace the login step with a NUGET_API_KEY secret and
         # `--api-key ${{ secrets.NUGET_API_KEY }}`.
 
@@ -254,5 +272,6 @@ jobs:
               mvn -B -f "$pom" deploy -P release
             fi
           }
-          deploy kanonak-canonical/java/pom.xml kanonak-canonical
+          deploy kanonak-canonical/java/pom.xml  kanonak-canonical
           deploy kanonak-codec/java/pom.xml      kanonak-codec
+          deploy kanonak-expression/java/pom.xml kanonak-expression
