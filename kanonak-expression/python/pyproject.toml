@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kanonak-expression"
+version = "0.1.0"
+readme = "README.md"
+description = "Kanonak expression runtime (expressionRuntimeVersion 1). Conformant port of @kanonak-protocol/expression, a deterministic tx + math tree-walker, verified against the shared parity vectors. Standard-library only."
+requires-python = ">=3.8"
+license = "Apache-2.0"
+authors = [{ name = "Kanonak Maintainers" }]
+
+[project.urls]
+Homepage = "https://kanonak.org"
+Repository = "https://github.com/kanonak-protocol/runtime"
+Issues = "https://github.com/kanonak-protocol/runtime/issues"
+
+[tool.setuptools]
+packages = ["kanonak_expression"]

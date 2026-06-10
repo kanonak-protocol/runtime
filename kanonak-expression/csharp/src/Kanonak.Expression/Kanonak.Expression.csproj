@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>Kanonak.Expression</AssemblyName>
+    <RootNamespace>Kanonak.Expression</RootNamespace>
+    <Nullable>disable</Nullable>
+    <Description>Kanonak expression runtime (expressionRuntimeVersion 1). Conformant port of the kanonak.org/transformations + kanonak.org/math evaluator, verified against the shared parity vectors.</Description>
+    <Version>0.1.0</Version>
+    <Authors>Kanonak Maintainers</Authors>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://kanonak.org</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/kanonak-protocol/runtime</RepositoryUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+</Project>

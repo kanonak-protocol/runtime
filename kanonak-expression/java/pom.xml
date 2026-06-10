@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>org.kanonak</groupId>
+    <artifactId>kanonak-expression</artifactId>
+    <version>0.1.0</version>
+    <packaging>jar</packaging>
+
+    <name>kanonak-expression</name>
+    <description>Kanonak expression runtime (expressionRuntimeVersion 1). Conformant port of the kanonak.org/transformations + kanonak.org/math operator engine, verified against the shared parity vectors. JDK-only, no runtime dependencies.</description>
+
+    <url>https://kanonak.org</url>
+    <licenses>
+        <license>
+            <name>Apache-2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+        </license>
+    </licenses>
+    <scm>
+        <connection>scm:git:https://github.com/kanonak-protocol/runtime.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/kanonak-protocol/runtime.git</developerConnection>
+        <url>https://github.com/kanonak-protocol/runtime</url>
+    </scm>
+    <developers>
+        <developer>
+            <name>Kanonak Maintainers</name>
+            <organization>Kanonak</organization>
+            <organizationUrl>https://kanonak.org</organizationUrl>
+        </developer>
+    </developers>
+    <issueManagement>
+        <system>GitHub Issues</system>
+        <url>https://github.com/kanonak-protocol/runtime/issues</url>
+    </issueManagement>
+
+    <properties>
+        <maven.compiler.release>17</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+    <!-- Conformance: javac -d out src/main/java/org/kanonak/expression/*.java conformance/Conformance.java && java -cp out Conformance ../vectors -->
+
+    <profiles>
+        <!-- mvn -P release deploy  (signs + builds sources/javadoc + publishes to Sonatype Central) -->
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>3.3.1</version>
+                        <executions>
+                            <execution><id>attach-sources</id><goals><goal>jar-no-fork</goal></goals></execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.11.2</version>
+                        <configuration><doclint>none</doclint><failOnError>false</failOnError></configuration>
+                        <executions>
+                            <execution><id>attach-javadocs</id><goals><goal>jar</goal></goals></execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.7</version>
+                        <executions>
+                            <execution><id>sign-artifacts</id><phase>verify</phase><goals><goal>sign</goal></goals></execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.7.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>true</autoPublish>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>
