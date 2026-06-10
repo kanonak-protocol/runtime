@@ -58,6 +58,14 @@ stays on one numeric path.
 A change to any primitive, value rule, or dispatch entry requires a **new**
 `expressionRuntimeVersion`, never an edit in place.
 
+**Always-finite invariant.** Because every domain violation raises rather than
+producing `NaN`/`Inf`, an operand reaching a primitive is always a finite number.
+Primitives therefore need not define behavior on `NaN`/`Inf` — those values are
+unreachable by construction — so a few host-specific edge differences (e.g.
+`Sign(NaN)`, or a type-less node) cannot occur in a valid evaluation. A new
+operator that could yield a non-finite value must guard it explicitly, the same
+way `Divide`/`Ln`/`Sqrt` do.
+
 ## Operators
 
 | Group (dispatch) | Operands | Operators |

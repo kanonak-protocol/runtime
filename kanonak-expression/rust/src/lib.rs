@@ -8,12 +8,12 @@
 //!
 //! Three layers, exactly as the reference establishes:
 //!
-//!   1. DISPATCH — `OPERATOR_ARITY` derives an operator's operand shape from its
+//!   1. DISPATCH — `operator_arity` derives an operator's operand shape from its
 //!      `tx` superclass: UnaryNumericOp -> unary `value`; BinaryArithmetic /
 //!      BinaryComparison -> binary; BooleanLogic -> n-ary `operands`; plus the
 //!      two structural shapes the hierarchy can't imply (`Not`'s `operand`,
 //!      `Clip`'s ternary).
-//!   2. PRIMITIVES — the authored, determinism-bearing folds (`UNARY` / `BINARY`).
+//!   2. PRIMITIVES — the authored, determinism-bearing folds (`unary` / `binary`).
 //!   3. THE FOLD — [`evaluate`]: operators recurse + apply a primitive; literals
 //!      yield their numeric value; EVERYTHING ELSE (a typed VarRef, a domain
 //!      `Step`/`Time`/`Smooth`, any future leaf) is handed to the caller's
@@ -21,14 +21,16 @@
 //!      a domain may resolve.
 //!
 //! Value domain: uniform `f64`. Booleans and comparison results are `1.0`/`0.0`.
+//!
+//! Operator/literal type tags are matched against `&'static str` literals (the
+//! frozen canonical URIs) — no allocation in the evaluation hot path, which
+//! matters for the per-step integrators (e.g. RK4) that re-evaluate an equation
+//! thousands of times.
 
 use serde_json::Value;
 
 /// The frozen expression-runtime version (determinism contract). Not hashed.
 pub const EXPRESSION_RUNTIME_VERSION: &str = "1";
-
-const TX: &str = "kanonak.org/transformations";
-const MATH: &str = "kanonak.org/math";
 
 /// An evaluation error. Determinism traps (Divide/Modulo by zero, Ln/Log10 of
 /// <=0, Sqrt of <0) and structural problems raise this — never `NaN`/`Inf`.
@@ -69,53 +71,46 @@ const COMPARE: Arity = Arity::Binary { left: "compareLeft", right: "compareRight
 const VALUE: Arity = Arity::Unary { operand: "value" };
 
 /// The frozen dispatch table — maps each operator URI to its operand shape.
+/// `Not` is a direct Expression subclass with boolean (not numeric-unary)
+/// semantics, so it is handled explicitly in `evaluate`, not via this table.
 fn operator_arity(typ: &str) -> Option<Arity> {
-    // BinaryArithmetic -> arithLeft/arithRight.
-    if typ == format!("{TX}/Add")
-        || typ == format!("{TX}/Subtract")
-        || typ == format!("{TX}/Multiply")
-        || typ == format!("{TX}/Divide")
-        || typ == format!("{MATH}/Power")
-        || typ == format!("{MATH}/Modulo")
-        || typ == format!("{MATH}/Minimum")
-        || typ == format!("{MATH}/Maximum")
-    {
-        return Some(ARITH);
+    match typ {
+        // BinaryArithmetic -> arithLeft/arithRight.
+        "kanonak.org/transformations/Add"
+        | "kanonak.org/transformations/Subtract"
+        | "kanonak.org/transformations/Multiply"
+        | "kanonak.org/transformations/Divide"
+        | "kanonak.org/math/Power"
+        | "kanonak.org/math/Modulo"
+        | "kanonak.org/math/Minimum"
+        | "kanonak.org/math/Maximum" => Some(ARITH),
+        // UnaryNumericOp -> value.
+        "kanonak.org/transformations/Abs"
+        | "kanonak.org/transformations/Negate"
+        | "kanonak.org/math/Exp"
+        | "kanonak.org/math/Ln"
+        | "kanonak.org/math/Log10"
+        | "kanonak.org/math/Sqrt"
+        | "kanonak.org/math/Floor"
+        | "kanonak.org/math/Ceil"
+        | "kanonak.org/math/Round"
+        | "kanonak.org/math/Sign" => Some(VALUE),
+        // BinaryComparison -> compareLeft/compareRight.
+        "kanonak.org/transformations/Equals"
+        | "kanonak.org/transformations/GreaterThan"
+        | "kanonak.org/transformations/LessThan"
+        | "kanonak.org/transformations/GreaterThanOrEqual"
+        | "kanonak.org/transformations/LessThanOrEqual" => Some(COMPARE),
+        // BooleanLogic -> operands list.
+        "kanonak.org/transformations/And" | "kanonak.org/transformations/Or" => {
+            Some(Arity::Nary { operands: "operands" })
+        }
+        // Clip ternary.
+        "kanonak.org/math/Clip" => {
+            Some(Arity::Ternary { a: "clipValue", b: "clipLower", c: "clipUpper" })
+        }
+        _ => None,
     }
-    // UnaryNumericOp -> value.
-    if typ == format!("{TX}/Abs")
-        || typ == format!("{TX}/Negate")
-        || typ == format!("{MATH}/Exp")
-        || typ == format!("{MATH}/Ln")
-        || typ == format!("{MATH}/Log10")
-        || typ == format!("{MATH}/Sqrt")
-        || typ == format!("{MATH}/Floor")
-        || typ == format!("{MATH}/Ceil")
-        || typ == format!("{MATH}/Round")
-        || typ == format!("{MATH}/Sign")
-    {
-        return Some(VALUE);
-    }
-    // BinaryComparison -> compareLeft/compareRight.
-    if typ == format!("{TX}/Equals")
-        || typ == format!("{TX}/GreaterThan")
-        || typ == format!("{TX}/LessThan")
-        || typ == format!("{TX}/GreaterThanOrEqual")
-        || typ == format!("{TX}/LessThanOrEqual")
-    {
-        return Some(COMPARE);
-    }
-    // BooleanLogic -> operands list.
-    if typ == format!("{TX}/And") || typ == format!("{TX}/Or") {
-        return Some(Arity::Nary { operands: "operands" });
-    }
-    // Clip ternary.
-    if typ == format!("{MATH}/Clip") {
-        return Some(Arity::Ternary { a: "clipValue", b: "clipLower", c: "clipUpper" });
-    }
-    // `Not` is a direct Expression subclass with boolean (not numeric-unary)
-    // semantics — handled explicitly in `evaluate`, not via the tables.
-    None
 }
 
 /// Floored modulo (the host `%` truncates toward zero): Modulo(-7,3) = 2.
@@ -161,93 +156,77 @@ fn boolnum(b: bool) -> f64 {
 /// Unary primitive fold for `typ`, applied to `x`. The authored,
 /// determinism-bearing table — matched per language.
 fn unary(typ: &str, x: f64) -> Result<f64, ExpressionError> {
-    if typ == format!("{TX}/Abs") {
-        Ok(x.abs())
-    } else if typ == format!("{TX}/Negate") {
-        Ok(-x)
-    } else if typ == format!("{MATH}/Exp") {
-        Ok(x.exp())
-    } else if typ == format!("{MATH}/Ln") {
-        if x > 0.0 {
-            Ok(x.ln())
-        } else {
-            err("Ln of a non-positive number")
+    match typ {
+        "kanonak.org/transformations/Abs" => Ok(x.abs()),
+        "kanonak.org/transformations/Negate" => Ok(-x),
+        "kanonak.org/math/Exp" => Ok(x.exp()),
+        "kanonak.org/math/Ln" => {
+            if x > 0.0 {
+                Ok(x.ln())
+            } else {
+                err("Ln of a non-positive number")
+            }
         }
-    } else if typ == format!("{MATH}/Log10") {
-        if x > 0.0 {
-            Ok(x.log10())
-        } else {
-            err("Log10 of a non-positive number")
+        "kanonak.org/math/Log10" => {
+            if x > 0.0 {
+                Ok(x.log10())
+            } else {
+                err("Log10 of a non-positive number")
+            }
         }
-    } else if typ == format!("{MATH}/Sqrt") {
-        if x >= 0.0 {
-            Ok(x.sqrt())
-        } else {
-            err("Sqrt of a negative number")
+        "kanonak.org/math/Sqrt" => {
+            if x >= 0.0 {
+                Ok(x.sqrt())
+            } else {
+                err("Sqrt of a negative number")
+            }
         }
-    } else if typ == format!("{MATH}/Floor") {
-        Ok(x.floor())
-    } else if typ == format!("{MATH}/Ceil") {
-        Ok(x.ceil())
-    } else if typ == format!("{MATH}/Round") {
-        Ok(round_half_away(x))
-    } else if typ == format!("{MATH}/Sign") {
-        Ok(sign(x))
-    } else {
-        err(format!("{typ} has no unary primitive"))
+        "kanonak.org/math/Floor" => Ok(x.floor()),
+        "kanonak.org/math/Ceil" => Ok(x.ceil()),
+        "kanonak.org/math/Round" => Ok(round_half_away(x)),
+        "kanonak.org/math/Sign" => Ok(sign(x)),
+        _ => err(format!("{typ} has no unary primitive")),
     }
 }
 
 /// Binary primitive fold for `typ`, applied to `(a, b)`.
 fn binary(typ: &str, a: f64, b: f64) -> Result<f64, ExpressionError> {
-    if typ == format!("{TX}/Add") {
-        Ok(a + b)
-    } else if typ == format!("{TX}/Subtract") {
-        Ok(a - b)
-    } else if typ == format!("{TX}/Multiply") {
-        Ok(a * b)
-    } else if typ == format!("{TX}/Divide") {
-        if b == 0.0 {
-            err("Divide by zero")
-        } else {
-            Ok(a / b)
+    match typ {
+        "kanonak.org/transformations/Add" => Ok(a + b),
+        "kanonak.org/transformations/Subtract" => Ok(a - b),
+        "kanonak.org/transformations/Multiply" => Ok(a * b),
+        "kanonak.org/transformations/Divide" => {
+            if b == 0.0 {
+                err("Divide by zero")
+            } else {
+                Ok(a / b)
+            }
         }
-    } else if typ == format!("{MATH}/Power") {
-        Ok(a.powf(b))
-    } else if typ == format!("{MATH}/Modulo") {
-        floored_mod(a, b)
-    } else if typ == format!("{MATH}/Minimum") {
-        Ok(a.min(b))
-    } else if typ == format!("{MATH}/Maximum") {
-        Ok(a.max(b))
-    } else if typ == format!("{TX}/Equals") {
-        Ok(boolnum(a == b))
-    } else if typ == format!("{TX}/GreaterThan") {
-        Ok(boolnum(a > b))
-    } else if typ == format!("{TX}/LessThan") {
-        Ok(boolnum(a < b))
-    } else if typ == format!("{TX}/GreaterThanOrEqual") {
-        Ok(boolnum(a >= b))
-    } else if typ == format!("{TX}/LessThanOrEqual") {
-        Ok(boolnum(a <= b))
-    } else {
-        err(format!("{typ} has no binary primitive"))
+        "kanonak.org/math/Power" => Ok(a.powf(b)),
+        "kanonak.org/math/Modulo" => floored_mod(a, b),
+        "kanonak.org/math/Minimum" => Ok(a.min(b)),
+        "kanonak.org/math/Maximum" => Ok(a.max(b)),
+        "kanonak.org/transformations/Equals" => Ok(boolnum(a == b)),
+        "kanonak.org/transformations/GreaterThan" => Ok(boolnum(a > b)),
+        "kanonak.org/transformations/LessThan" => Ok(boolnum(a < b)),
+        "kanonak.org/transformations/GreaterThanOrEqual" => Ok(boolnum(a >= b)),
+        "kanonak.org/transformations/LessThanOrEqual" => Ok(boolnum(a <= b)),
+        _ => err(format!("{typ} has no binary primitive")),
     }
 }
 
 /// Numeric value of a literal node, or `None` if it is not a literal.
 fn literal_value(node: &Value, typ: &str) -> Option<f64> {
-    if typ == format!("{TX}/IntegerLiteral") {
-        node.get("integerLiteral").and_then(as_number)
-    } else if typ == format!("{TX}/DecimalLiteral") {
-        node.get("decimalLiteral").and_then(as_number)
-    } else if typ == format!("{TX}/BooleanLiteral") {
-        let v = node.get("booleanLiteral");
-        let truthy = matches!(v, Some(Value::Bool(true)))
-            || matches!(v, Some(Value::String(s)) if s == "true");
-        Some(boolnum(truthy))
-    } else {
-        None
+    match typ {
+        "kanonak.org/transformations/IntegerLiteral" => node.get("integerLiteral").and_then(as_number),
+        "kanonak.org/transformations/DecimalLiteral" => node.get("decimalLiteral").and_then(as_number),
+        "kanonak.org/transformations/BooleanLiteral" => {
+            let v = node.get("booleanLiteral");
+            let truthy = matches!(v, Some(Value::Bool(true)))
+                || matches!(v, Some(Value::String(s)) if s == "true");
+            Some(boolnum(truthy))
+        }
+        _ => None,
     }
 }
 
@@ -260,9 +239,10 @@ fn as_number(v: &Value) -> Option<f64> {
     }
 }
 
-fn node_type(node: &Value) -> Result<String, ExpressionError> {
+/// The node's `type` tag, borrowed (no allocation).
+fn node_type(node: &Value) -> Result<&str, ExpressionError> {
     match node.get("type").and_then(|t| t.as_str()) {
-        Some(t) => Ok(t.to_string()),
+        Some(t) => Ok(t),
         None => err("node is missing a 'type'"),
     }
 }
@@ -289,23 +269,23 @@ pub fn evaluate<C>(
     ) -> Result<f64, ExpressionError> {
         let typ = node_type(node)?;
 
-        if let Some(arity) = operator_arity(&typ) {
+        if let Some(arity) = operator_arity(typ) {
             return match arity {
                 Arity::Unary { operand: key } => {
-                    let x = go(operand(node, &typ, key)?, ctx, resolve)?;
-                    unary(&typ, x)
+                    let x = go(operand(node, typ, key)?, ctx, resolve)?;
+                    unary(typ, x)
                 }
                 Arity::Binary { left, right } => {
-                    let a = go(operand(node, &typ, left)?, ctx, resolve)?;
-                    let b = go(operand(node, &typ, right)?, ctx, resolve)?;
-                    binary(&typ, a, b)
+                    let a = go(operand(node, typ, left)?, ctx, resolve)?;
+                    let b = go(operand(node, typ, right)?, ctx, resolve)?;
+                    binary(typ, a, b)
                 }
                 Arity::Nary { operands } => {
                     let items = match node.get(operands).and_then(|v| v.as_array()) {
                         Some(arr) => arr,
                         None => return err(format!("{typ} expects an '{operands}' list")),
                     };
-                    let is_and = typ == format!("{TX}/And");
+                    let is_and = typ == "kanonak.org/transformations/And";
                     // Short-circuit; empty And vacuously true, empty Or vacuously false.
                     for item in items {
                         let v = truthy(go(item, ctx, resolve)?);
@@ -320,20 +300,20 @@ pub fn evaluate<C>(
                 }
                 Arity::Ternary { a, b, c } => {
                     // Only Clip today: clamp clipValue into [clipLower, clipUpper].
-                    let v = go(operand(node, &typ, a)?, ctx, resolve)?;
-                    let lo = go(operand(node, &typ, b)?, ctx, resolve)?;
-                    let hi = go(operand(node, &typ, c)?, ctx, resolve)?;
+                    let v = go(operand(node, typ, a)?, ctx, resolve)?;
+                    let lo = go(operand(node, typ, b)?, ctx, resolve)?;
+                    let hi = go(operand(node, typ, c)?, ctx, resolve)?;
                     Ok(v.max(lo).min(hi))
                 }
             };
         }
 
-        if typ == format!("{TX}/Not") {
-            let inner = go(operand(node, &typ, "operand")?, ctx, resolve)?;
+        if typ == "kanonak.org/transformations/Not" {
+            let inner = go(operand(node, typ, "operand")?, ctx, resolve)?;
             return Ok(boolnum(!truthy(inner)));
         }
 
-        if let Some(lit) = literal_value(node, &typ) {
+        if let Some(lit) = literal_value(node, typ) {
             return Ok(lit);
         }
 
