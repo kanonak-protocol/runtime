@@ -73,8 +73,43 @@ see each target's `registry_side_config` in `release-targets.yml`.
   pass before publish — that's what guarantees a byte-identical content address
   across all six languages.
 - **OIDC workflow permissions:**
-  `permissions: { id-token: write, contents: read, attestations: write }`.
+  `permissions: { id-token: write, contents: read, attestations: write }`
+  (the `publish-go` job alone overrides to `contents: write` to push tags).
 - **Versions are immutable;** bump the manifests before a real release.
+
+## The cold-start contract (WE WILL FORGET — the machinery remembers)
+
+The workflow is the ONLY release path. There are **no manual steps**, no
+required context beyond this repo, and **any run is safe at any time** —
+including re-running `publish=true` on an already-released state. Every stage
+is idempotent against its registry's AUTHORITATIVE source, because read-side
+pre-checks provably lag fresh publishes (both bit us on 2026-07-03):
+
+| Registry | Idempotency mechanism |
+|---|---|
+| PyPI | `skip-existing` (server-side) |
+| crates.io | pre-check against crates.io's own API (same system as the write path) |
+| npm | `npm view` pre-check (replica, optimization only) + the registry's E403 "cannot publish over previously published versions" treated as already-published |
+| NuGet | `--skip-duplicate` (server-side) |
+| Maven Central | repo1 pre-check (mirror, optimization only) + on failure the Portal **status API** is queried and a duplicate deployment is treated as already-published |
+| Go | `publish-go` job: tag exists → skip (tags are immutable once proxied) |
+
+**Go has no registry.** A release IS the git tag
+`kanonak-<member>/go/v<version>` (from `meta.go_module_versions` in
+`release-targets.yml`) — pushed by the `publish-go` job, never by hand.
+GitHub Releases are irrelevant; `proxy.golang.org` fetches the tag on first
+`go get` and caches it **forever** (never move/reuse a tag). A missing tag is
+*silent* drift — consumers get unpinned pseudo-versions with no error — which
+is why the audit below hard-fails on it.
+
+**Every publish run ends with `release-audit`:** it derives each member's
+expected versions from the committed manifests (repo state is the only
+memory) and checks all six registries + Go tags. Authoritative sources
+missing = red, with the exact thing to check in the error. Mirror-backed
+reads (npm replicas, NuGet CDN, repo1) may report **PENDING** shortly after a
+fresh publish — that is lag, not failure; re-run later and the audit goes
+all-OK. When something fails mid-release, fix the cause and **re-run the
+whole workflow** — never hand-finish a partial release.
 
 ## One-time setup checklist (per `release-targets.yml`)
 

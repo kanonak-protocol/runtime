@@ -331,3 +331,115 @@ jobs:
           deploy kanonak-codec/java/pom.xml      kanonak-codec
           deploy kanonak-expression/java/pom.xml kanonak-expression
           deploy kanonak-wire/java/pom.xml       kanonak-wire
+
+  # Go has NO registry: A RELEASE IS A GIT TAG (`kanonak-<member>/go/vX.Y.Z`)
+  # that proxy.golang.org fetches on first `go get` and then caches IMMUTABLY,
+  # forever. GitHub "Releases" are irrelevant; plain tags are the whole
+  # mechanism. This job makes tagging part of the machinery — the manual step
+  # was forgotten for expression 0.1.0 (found 2026-07-03), and a missing tag
+  # is SILENT drift (consumers get unpinned pseudo-versions, no error).
+  # Versions come from meta.go_module_versions in release-targets.yml.
+  # Idempotent: an existing tag is NEVER touched or moved (immutability rule);
+  # to release a new Go version, bump go_module_versions and re-run.
+  publish-go:
+    needs: test-go
+    if: ${{ github.event_name == 'push' || inputs.publish }}
+    environment: production
+    permissions:
+      contents: write        # push the module tags with GITHUB_TOKEN
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: tag go modules (skip existing — proxy-cached tags are immutable)
+        run: |
+          python3 -m pip install --quiet pyyaml
+          for m in canonical codec expression wire; do
+            ver=$(python3 -c "import yaml; print(yaml.safe_load(open('release-targets.yml'))['meta']['go_module_versions']['$m'])")
+            tag="kanonak-$m/go/v$ver"
+            if [ ! -f "kanonak-$m/go/go.mod" ]; then
+              echo "::error::kanonak-$m/go/go.mod not found — module layout changed; fix release.yml + release-targets.yml before releasing"
+              exit 1
+            fi
+            if git ls-remote --tags origin "refs/tags/$tag" | grep -q .; then
+              echo "$tag already exists - skipping (immutable once the proxy serves it; bump go_module_versions for a new release)"
+            else
+              git tag "$tag" "$GITHUB_SHA"
+              git push origin "refs/tags/$tag"
+              echo "pushed $tag @ $GITHUB_SHA"
+            fi
+          done
+
+  # RELEASE AUDIT — the cold-start truth check. Reads each member's expected
+  # version from the COMMITTED manifests (repo state is the only memory; no
+  # context carried in heads) and verifies presence on every registry + the Go
+  # tag. Classification is deliberate:
+  #   - AUTHORITATIVE sources (PyPI JSON API, crates.io API, git tags via
+  #     ls-remote): MISSING => hard fail with a pointer to what to check.
+  #   - MIRROR/REPLICA-backed reads (npm replicas, NuGet CDN index,
+  #     repo1.maven.org): these lag a fresh publish by minutes-to-hours, so
+  #     after retries a miss reports PENDING as a loud notice, NOT a failure —
+  #     the publish job in this same run was the authoritative signal. Re-run
+  #     the workflow later (fully idempotent) to see the audit go all-OK.
+  release-audit:
+    needs: [publish-python, publish-rust, publish-typescript, publish-csharp, publish-java, publish-go]
+    if: ${{ always() && (github.event_name == 'push' || inputs.publish) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: audit all members x all registries + go tags
+        run: |
+          python3 -m pip install --quiet pyyaml
+          fail=0; pend=0
+          retry() { local n=$1 s=$2; shift 2; local i
+            for i in $(seq 1 "$n"); do "$@" && return 0; [ "$i" -lt "$n" ] && sleep "$s"; done
+            return 1
+          }
+          for m in canonical codec expression wire; do
+            # Expected versions = the committed manifests (cold-start truth).
+            py_ver=$(grep -m1 '^version' "kanonak-$m/python/pyproject.toml" | sed -E 's/.*"(.*)".*/\1/')
+            rs_ver=$(grep -m1 '^version' "kanonak-$m/rust/Cargo.toml" | sed -E 's/.*"(.*)".*/\1/')
+            ts_ver=$(jq -r .version "kanonak-$m/typescript/package.json")
+            cs_ver=$(grep -m1 -h '<Version>' kanonak-$m/csharp/src/*/*.csproj | sed -E 's/.*<Version>(.*)<\/Version>.*/\1/')
+            jv_ver=$(grep -m1 '<version>' "kanonak-$m/java/pom.xml" | sed -E 's/.*<version>(.*)<\/version>.*/\1/')
+            go_ver=$(python3 -c "import yaml; print(yaml.safe_load(open('release-targets.yml'))['meta']['go_module_versions']['$m'])")
+
+            if retry 3 15 curl -sf -o /dev/null "https://pypi.org/pypi/kanonak-$m/$py_ver/json"; then
+              echo "OK       PyPI          kanonak-$m $py_ver"
+            else
+              echo "::error::MISSING PyPI kanonak-$m $py_ver — check publish-python + the PyPI trusted publisher (MUST be configured with environment=production)"; fail=1
+            fi
+
+            if retry 3 15 curl -sf -o /dev/null -A "kanonak-release-audit (https://github.com/kanonak-protocol/runtime)" "https://crates.io/api/v1/crates/kanonak-$m/$rs_ver"; then
+              echo "OK       crates.io     kanonak-$m $rs_ver"
+            else
+              echo "::error::MISSING crates.io kanonak-$m $rs_ver — check publish-rust (a brand-NEW crate's first publish needs the CARGO_REGISTRY_TOKEN bootstrap)"; fail=1
+            fi
+
+            if retry 3 20 sh -c "curl -sf 'https://registry.npmjs.org/@kanonak-protocol%2f$m' | jq -e '.versions[\"$ts_ver\"]' >/dev/null"; then
+              echo "OK       npm           @kanonak-protocol/$m $ts_ver"
+            else
+              echo "::notice::PENDING npm @kanonak-protocol/$m $ts_ver — replica lag is normal minutes after a fresh publish; re-run this workflow later to confirm"; pend=1
+            fi
+
+            if retry 3 20 sh -c "curl -sf 'https://api.nuget.org/v3-flatcontainer/kanonak.$m/index.json' | jq -e '.versions | index(\"$cs_ver\")' >/dev/null"; then
+              echo "OK       NuGet         Kanonak.$m $cs_ver"
+            else
+              echo "::notice::PENDING NuGet Kanonak.$m $cs_ver — CDN index lag is normal after a fresh publish; re-run later to confirm"; pend=1
+            fi
+
+            if retry 3 20 curl -sf -o /dev/null "https://repo1.maven.org/maven2/org/kanonak/kanonak-$m/$jv_ver/kanonak-$m-$jv_ver.pom"; then
+              echo "OK       MavenCentral  org.kanonak:kanonak-$m $jv_ver"
+            else
+              echo "::notice::PENDING Maven org.kanonak:kanonak-$m $jv_ver — repo1 mirrors the Central Portal minutes-to-hours behind; if publish-java is green the Portal accepted it. Re-run later to confirm"; pend=1
+            fi
+
+            if git ls-remote --tags origin "refs/tags/kanonak-$m/go/v$go_ver" | grep -q .; then
+              echo "OK       Go            kanonak-$m/go v$go_ver (tag present)"
+            else
+              echo "::error::MISSING Go tag kanonak-$m/go/v$go_ver — publish-go should have pushed it; check that job's log"; fail=1
+            fi
+          done
+          if [ "$pend" = "1" ]; then
+            echo "::notice::Some mirror-backed registries report PENDING. The workflow is fully idempotent — re-run it (publish=true is safe) later and the audit should be all-OK."
+          fi
+          exit $fail
