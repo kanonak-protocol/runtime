@@ -108,6 +108,7 @@ targets:
       - Publish canonical THEN codec with `npm publish --provenance --access public` (OIDC).
     gotchas:
       - "npm workspace at the repo root; codec depends on @kanonak-protocol/canonical (^0.1.0) - publish canonical first."
+      - "IDEMPOTENCY: `npm view` reads a replica that lags a fresh publish by minutes - release.yml also treats the registry's E403 'cannot publish over previously published versions' as already-published (proven 2026-07-03)."
 
   - language: csharp
     registry: NuGet.org
@@ -155,6 +156,8 @@ targets:
       - Generate a Central Portal user token -> MAVEN_CENTRAL_USERNAME / _PASSWORD.
     gotchas:
       - "Artifacts must be GPG-signed and pass Central validation before release."
+      - "IDEMPOTENCY: repo1.maven.org mirrors the Portal with minutes-to-hours lag - release.yml's repo1 pre-check is an optimization only; on deploy failure it queries the Portal status API (Bearer base64(user:pass)) and continues if the deployment failed as a duplicate (proven 2026-07-03)."
+      - "PyPI-adjacent reminder: every trusted publisher (PyPI/crates/npm/NuGet) MUST be configured with environment=production or the OIDC claim mismatches and the publish is rejected (bit us on kanonak-wire's first publish)."
 
   - language: go
     registry: Go module proxy

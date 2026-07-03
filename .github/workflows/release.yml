@@ -221,13 +221,27 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}   # or npm trusted publishing (drop the token)
         run: |
+          # IDEMPOTENT RE-RUNS: `npm view` reads a replica that can lag a fresh
+          # publish by minutes (proven 2026-07-03: wire@0.1.0 published in one run
+          # was invisible to `npm view` in the next, and the blind publish died on
+          # E403). So the pre-check is an optimization only; the AUTHORITATIVE
+          # duplicate rejection from the write path is also treated as success.
           for spec in "@kanonak-protocol/canonical:kanonak-canonical/typescript" "@kanonak-protocol/codec:kanonak-codec/typescript" "@kanonak-protocol/expression:kanonak-expression/typescript" "@kanonak-protocol/wire:kanonak-wire/typescript"; do
             name="${spec%%:*}"; dir="${spec##*:}"
             ver=$(node -p "require('./$dir/package.json').version")
             if npm view "$name@$ver" version >/dev/null 2>&1; then
               echo "$name@$ver already published - skipping"
+              continue
+            fi
+            if out=$(npm publish -w "$name" --provenance --access public 2>&1); then
+              echo "$out"
+              continue
+            fi
+            echo "$out"
+            if grep -qiE "cannot publish over the previously published versions|EPUBLISHCONFLICT" <<<"$out"; then
+              echo "$name@$ver already published (registry replica lag beat the pre-check) - continuing"
             else
-              npm publish -w "$name" --provenance --access public
+              exit 1
             fi
           done
 
@@ -281,14 +295,37 @@ jobs:
           MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
         run: |
+          # IDEMPOTENT RE-RUNS: repo1.maven.org is a MIRROR that lags the Central
+          # Portal by minutes-to-hours after a publish (proven 2026-07-03: wire
+          # 0.1.0 published in one run was invisible to repo1 in the next, and the
+          # re-deploy died with "Deployment <id> failed while publishing"). The
+          # repo1 pre-check is an optimization only; on deploy failure we ask the
+          # Portal's AUTHORITATIVE status API whether the failure is a duplicate
+          # ("already published/exists") and continue if so — anything else still
+          # fails loudly with the Portal's errors printed.
           deploy() {
-            local pom="$1" artifact="$2" ver
+            local pom="$1" artifact="$2" ver out dep_id token status
             ver=$(grep -m1 '<version>' "$pom" | sed -E 's/.*<version>(.*)<\/version>.*/\1/')
             if curl -sf -o /dev/null "https://repo1.maven.org/maven2/org/kanonak/$artifact/$ver/$artifact-$ver.pom"; then
               echo "org.kanonak:$artifact:$ver already on Maven Central - skipping"
-            else
-              mvn -B -f "$pom" deploy -P release
+              return 0
             fi
+            if out=$(mvn -B -f "$pom" deploy -P release 2>&1); then
+              echo "$out" | tail -n 15
+              return 0
+            fi
+            echo "$out" | tail -n 60
+            dep_id=$(grep -oE "Deployment [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" <<<"$out" | head -1 | awk '{print $2}')
+            if [ -n "$dep_id" ]; then
+              token=$(printf "%s:%s" "$MAVEN_CENTRAL_USERNAME" "$MAVEN_CENTRAL_PASSWORD" | base64 -w0)
+              status=$(curl -s --request POST --header "Authorization: Bearer $token" "https://central.sonatype.com/api/v1/publisher/status?id=$dep_id")
+              echo "Portal status for deployment $dep_id: $status"
+              if grep -qiE "already (published|exists)" <<<"$status"; then
+                echo "org.kanonak:$artifact:$ver already published (repo1 mirror lag beat the pre-check) - continuing"
+                return 0
+              fi
+            fi
+            return 1
           }
           deploy kanonak-canonical/java/pom.xml  kanonak-canonical
           deploy kanonak-codec/java/pom.xml      kanonak-codec
