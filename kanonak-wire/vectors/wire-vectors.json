@@ -281,8 +281,8 @@
       ]
     },
     {
-      "id": "composite-ley-envelope-terminal-input",
-      "description": "realistic Ley frame: binary kind, terminal channel, [sessionId:16][op:1][stdin bytes] — pins the live wire",
+      "id": "composite-envelope-tagged-message",
+      "description": "realistic multiplexed frame: [kind:u8][channel:u16be] envelope, then a [sessionId:16][op:1][data] sub-protocol — pins a real protocol's exact bytes",
       "bytes": "0200030123456789abcdef0123456789abcdef026c73200a",
       "ops": [
         { "op": "u8", "expected": 2 },
@@ -294,8 +294,8 @@
       ]
     },
     {
-      "id": "composite-ley-credential-json-body",
-      "description": "[reqId:16][op:1][utf8 JSON body] — the credential channel shape",
+      "id": "composite-correlated-json-body",
+      "description": "[reqId:16][op:1][utf8 JSON body] — a correlated request/response shape",
       "bytes": "07070707070707070707070707070707017b226d6574686f64223a22504f5354227d",
       "ops": [
         { "op": "uuid", "expected": "07070707-0707-0707-0707-070707070707" },
@@ -306,7 +306,7 @@
       ]
     },
     {
-      "id": "composite-ley-truncated-inside-uuid",
+      "id": "composite-truncated-inside-uuid",
       "bytes": "0200030011223344556677",
       "ops": [
         { "op": "u8", "expected": 2 },
@@ -401,8 +401,8 @@
       "expectedBytes": "0000"
     },
     {
-      "id": "w-composite-ley-round-trip",
-      "description": "encodes the exact buffer of composite-ley-envelope-terminal-input",
+      "id": "w-composite-envelope-round-trip",
+      "description": "encodes the exact buffer of composite-envelope-tagged-message",
       "ops": [
         { "op": "u8", "value": 2 },
         { "op": "u16be", "value": 3 },
