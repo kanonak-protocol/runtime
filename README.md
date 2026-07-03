@@ -4,8 +4,8 @@ The public, open-source runtime stack that every generated Kanonak SDK depends
 on — so the runtime is referenced from a public registry, **never inlined** into
 each generated SDK.
 
-Two libraries, six languages each, conformance-verified to produce a
-**byte-identical content address** across all of them:
+Four libraries, six languages each, conformance-verified to produce
+**byte-identical results** across all of them:
 
 - **`kanonak-canonical`** — the canonical form + content hash; the reference
   implementation of the open spec [`kanonak.org/canonical-form`](https://kanonak.org/canonical-form)
@@ -14,6 +14,14 @@ Two libraries, six languages each, conformance-verified to produce a
   the canonical input model from typed nodes + an embedded schema,
   content-addresses it via `kanonak-canonical`, and (de)serializes the
   normalized-JSON wire form. **Depends on `kanonak-canonical`.**
+- **`kanonak-expression`** — the deterministic expression runtime
+  (`expressionRuntimeVersion "1"`): a tree-walker that folds a
+  `kanonak.org/transformations` + `kanonak.org/math` expression to a number,
+  identically in every language.
+- **`kanonak-wire`** — the binary wire kernel (`wireFormatVersion "1"`): a
+  minimal, allocation-conscious reader/writer for hot-path wire protocols.
+  Where `expression` is declaration → interpretation, `wire` is what generated
+  protocol codecs call into — the declaration compiles away.
 
 These are infrastructure, in the spirit of `serde` / `pydantic` / `jackson`:
 small, dependency-light, and fully determined by the public spec + the public
@@ -25,6 +33,8 @@ are a separate, commercial concern and are not part of this repo.)
 ```
 kanonak-canonical/{python,rust,go,java,csharp,typescript}/   + vectors/
 kanonak-codec/{python,rust,go,java,csharp,typescript}/ + vectors/
+kanonak-expression/{python,rust,go,java,csharp,typescript}/ + vectors/
+kanonak-wire/{python,rust,go,java,csharp,typescript}/ + vectors/
 ```
 
 Each `vectors/` directory is the shared conformance contract: every language
@@ -33,14 +43,14 @@ hash, serialization)` golden vectors.
 
 ## Published packages
 
-| Language | Registry | `canonical` | `codec` |
-|---|---|---|---|
-| Python | PyPI | `kanonak-canonical` | `kanonak-codec` |
-| Rust | crates.io | `kanonak-canonical` | `kanonak-codec` |
-| TypeScript | npm | `@kanonak-protocol/canonical` | `@kanonak-protocol/codec` |
-| C# | NuGet | `Kanonak.Canonical` | `Kanonak.Codec` |
-| Java | Maven Central | `org.kanonak:kanonak-canonical` | `org.kanonak:kanonak-codec` |
-| Go | proxy | `github.com/kanonak-protocol/runtime/kanonak-canonical/go` | `.../kanonak-codec/go` |
+| Language | Registry | `canonical` | `codec` | `expression` | `wire` |
+|---|---|---|---|---|---|
+| Python | PyPI | `kanonak-canonical` | `kanonak-codec` | `kanonak-expression` | `kanonak-wire` |
+| Rust | crates.io | `kanonak-canonical` | `kanonak-codec` | `kanonak-expression` | `kanonak-wire` |
+| TypeScript | npm | `@kanonak-protocol/canonical` | `@kanonak-protocol/codec` | `@kanonak-protocol/expression` | `@kanonak-protocol/wire` |
+| C# | NuGet | `Kanonak.Canonical` | `Kanonak.Codec` | `Kanonak.Expression` | `Kanonak.Wire` |
+| Java | Maven Central | `org.kanonak:kanonak-canonical` | `org.kanonak:kanonak-codec` | `org.kanonak:kanonak-expression` | `org.kanonak:kanonak-wire` |
+| Go | proxy | `github.com/kanonak-protocol/runtime/kanonak-canonical/go` | `.../kanonak-codec/go` | `.../kanonak-expression/go` | `.../kanonak-wire/go` |
 
 ## Releasing
 

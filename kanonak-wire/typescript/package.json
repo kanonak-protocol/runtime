@@ -1,0 +1,49 @@
+{
+  "name": "@kanonak-protocol/wire",
+  "version": "0.1.0",
+  "description": "The Kanonak wire kernel (wireFormatVersion \"1\") — a minimal, allocation-conscious binary reader/writer for hot-path wire protocols, verified against the shared golden vectors. The kernel every generated protocol codec calls into.",
+  "license": "Apache-2.0",
+  "homepage": "https://kanonak.org",
+  "author": "Kanonak Maintainers (https://github.com/kanonak-protocol/runtime)",
+  "bugs": {
+    "url": "https://github.com/kanonak-protocol/runtime/issues"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "kanonak",
+    "wire",
+    "binary",
+    "protocol",
+    "deterministic",
+    "sdk"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kanonak-protocol/runtime"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "conformance": "tsx src/conformance.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.2"
+  }
+}

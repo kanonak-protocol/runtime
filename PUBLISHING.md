@@ -8,6 +8,10 @@ Kanonak SDK depends on, so the runtime is **never inlined** into each SDK:
 - **`kanonak-codec`** — the generic codec runtime; builds the canonical input
   from typed nodes + an embedded schema, content-addresses via `canonical`, and
   (de)serializes the wire form. **Depends on `canonical`.**
+- **`kanonak-expression`** — the deterministic expression runtime
+  (`expressionRuntimeVersion "1"`). No cross-dependencies.
+- **`kanonak-wire`** — the binary wire kernel for hot-path protocols
+  (`wireFormatVersion "1"`). No cross-dependencies.
 
 The machine-readable source of truth for every registry connection is
 [`release-targets.yml`](./release-targets.yml). This document is the human guide.
@@ -15,16 +19,16 @@ The machine-readable source of truth for every registry connection is
 ## Identity / naming
 
 One identity (**kanonak**, domain **kanonak.org**) rendered per registry idiom +
-the bare lib name (`canonical` / `codec`):
+the bare lib name (`canonical` / `codec` / `expression` / `wire`):
 
-| Language | Registry | `canonical` | `codec` |
-|---|---|---|---|
-| Python | PyPI | `kanonak-canonical` | `kanonak-codec` |
-| Rust | crates.io | `kanonak-canonical` | `kanonak-codec` |
-| TypeScript | npm | `@kanonak-protocol/canonical` | `@kanonak-protocol/codec` |
-| C# | NuGet | `Kanonak.Canonical` | `Kanonak.Codec` |
-| Java | Maven Central | `org.kanonak:kanonak-canonical` | `org.kanonak:kanonak-codec` |
-| Go | module proxy | `github.com/kanonak-protocol/runtime/kanonak-canonical/go` | `.../kanonak-codec/go` |
+| Language | Registry | `canonical` | `codec` | `expression` | `wire` |
+|---|---|---|---|---|---|
+| Python | PyPI | `kanonak-canonical` | `kanonak-codec` | `kanonak-expression` | `kanonak-wire` |
+| Rust | crates.io | `kanonak-canonical` | `kanonak-codec` | `kanonak-expression` | `kanonak-wire` |
+| TypeScript | npm | `@kanonak-protocol/canonical` | `@kanonak-protocol/codec` | `@kanonak-protocol/expression` | `@kanonak-protocol/wire` |
+| C# | NuGet | `Kanonak.Canonical` | `Kanonak.Codec` | `Kanonak.Expression` | `Kanonak.Wire` |
+| Java | Maven Central | `org.kanonak:kanonak-canonical` | `org.kanonak:kanonak-codec` | `org.kanonak:kanonak-expression` | `org.kanonak:kanonak-wire` |
+| Go | module proxy | `github.com/kanonak-protocol/runtime/kanonak-canonical/go` | `.../kanonak-codec/go` | `.../kanonak-expression/go` | `.../kanonak-wire/go` |
 
 Every package: `homepage` = `https://kanonak.org`, `repository` =
 `https://github.com/kanonak-protocol/runtime`, license **Apache-2.0**.
@@ -63,6 +67,8 @@ see each target's `registry_side_config` in `release-targets.yml`.
 - **Trigger:** tag `v<semver>` (or manual dispatch); default a **dry run**, set
   `publish=true` to push.
 - **Order (always):** `canonical` → wait for the index → `codec`, per language.
+  `expression` and `wire` have no cross-dependencies and ride the same pipeline
+  in any order.
 - **Gating:** the per-language **conformance tests against `*/vectors/`** must
   pass before publish — that's what guarantees a byte-identical content address
   across all six languages.
@@ -72,9 +78,11 @@ see each target's `registry_side_config` in `release-targets.yml`.
 
 ## One-time setup checklist (per `release-targets.yml`)
 
-1. Reserve names: PyPI (`kanonak-canonical`/`kanonak-codec`), crates.io (same),
-   NuGet `Kanonak.*` prefix, npm org `@kanonak-protocol`, Sonatype `org.kanonak`.
+1. Reserve names: PyPI (`kanonak-canonical`/`kanonak-codec`/`kanonak-expression`/`kanonak-wire`),
+   crates.io (same), NuGet `Kanonak.*` prefix, npm org `@kanonak-protocol`, Sonatype `org.kanonak`.
 2. Configure trusted publishers (PyPI, crates.io, npm, NuGet) → repo + `release.yml` + environment `production`.
 3. Create a **`production` GitHub environment** (Settings → Environments; optionally add required reviewers to gate publishing).
 4. Create the Maven secrets (`MAVEN_CENTRAL_*`, `MAVEN_GPG_*`). PyPI/crates/npm/NuGet are keyless via OIDC.
-5. Go: push subdir tags `kanonak-canonical/go/vX.Y.Z` then `kanonak-codec/go/vX.Y.Z` (no infra; canonical first).
+5. Go: push subdir tags `kanonak-canonical/go/vX.Y.Z` then `kanonak-codec/go/vX.Y.Z`
+   (no infra; canonical first); `kanonak-expression/go/vX.Y.Z` and
+   `kanonak-wire/go/vX.Y.Z` any time.

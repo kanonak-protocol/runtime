@@ -1,0 +1,492 @@
+{
+  "wireFormatVersion": "1",
+  "description": "Golden conformance vectors for the kanonak-wire kernel (kanonak.org/wire-form, wireFormatVersion 1). Byte buffers are lowercase hex strings. readVectors run an op-script against a buffer: each op either asserts an expected value or a required error {kind, offset} (offset = absolute byte offset where the failing read started). writeVectors run writer ops and assert the exact output bytes, or a required error {kind}. Ops whose trap is unrepresentable in a language's type system carry a 'requires' capability: 'wide-numeric-params' (writer numeric params can exceed the wire type's range; TS/Python/Java — Rust/Go/C# use exact-width param types where the type IS the validation), 'dynamic-numeric' (non-integer numeric values; TS/Python), or 'utf16-strings' (strings that can hold unpaired surrogates; TS/Java/C#/Python). Drivers skip cases requiring a capability the language lacks and MUST report the skip count.",
+  "readVectors": [
+    {
+      "id": "u8-values",
+      "bytes": "007fff",
+      "ops": [
+        { "op": "u8", "expected": 0 },
+        { "op": "u8", "expected": 127 },
+        { "op": "u8", "expected": 255 },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "u16be-values",
+      "bytes": "000000011234ffff",
+      "ops": [
+        { "op": "u16be", "expected": 0 },
+        { "op": "u16be", "expected": 1 },
+        { "op": "u16be", "expected": 4660 },
+        { "op": "u16be", "expected": 65535 },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "u32be-values",
+      "description": "0xDEADBEEF and 0xFFFFFFFF exceed int32 — catches signed-integer handling bugs",
+      "bytes": "0000000000000001deadbeefffffffff",
+      "ops": [
+        { "op": "u32be", "expected": 0 },
+        { "op": "u32be", "expected": 1 },
+        { "op": "u32be", "expected": 3735928559 },
+        { "op": "u32be", "expected": 4294967295 },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "bytes-zero-length-on-empty-buffer",
+      "bytes": "",
+      "ops": [
+        { "op": "bytes", "n": 0, "expected": "" },
+        { "op": "rest", "expected": "" },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "bytes-exact-fit",
+      "bytes": "010203",
+      "ops": [
+        { "op": "bytes", "n": 3, "expected": "010203" },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "bytes-mid-buffer",
+      "bytes": "aabbccdd",
+      "ops": [
+        { "op": "u8", "expected": 170 },
+        { "op": "bytes", "n": 2, "expected": "bbcc" },
+        { "op": "u8", "expected": 221 },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "uuid-all-zeros",
+      "bytes": "00000000000000000000000000000000",
+      "ops": [
+        { "op": "uuid", "expected": "00000000-0000-0000-0000-000000000000" },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "uuid-canonical-lowercase-output",
+      "bytes": "0123456789abcdef0123456789abcdef",
+      "ops": [
+        { "op": "uuid", "expected": "01234567-89ab-cdef-0123-456789abcdef" },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "uuid-hex-letters",
+      "bytes": "deadbeefdeadbeefdeadbeefdeadbeef",
+      "ops": [
+        { "op": "uuid", "expected": "deadbeef-dead-beef-dead-beefdeadbeef" },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "utf8-ascii",
+      "bytes": "68656c6c6f",
+      "ops": [
+        { "op": "utf8", "n": 5, "expected": "hello" },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "utf8-multibyte-2-3-4",
+      "description": "2-byte é, 3-byte 中, 4-byte 🎉 — one script, three widths",
+      "bytes": "c3a9e4b8adf09f8e89",
+      "ops": [
+        { "op": "utf8", "n": 2, "expected": "é" },
+        { "op": "utf8", "n": 3, "expected": "中" },
+        { "op": "utf8", "n": 4, "expected": "🎉" },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "utf8-zero-length",
+      "bytes": "41",
+      "ops": [
+        { "op": "utf8", "n": 0, "expected": "" },
+        { "op": "u8", "expected": 65 },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "len-prefixed-empty",
+      "bytes": "0000",
+      "ops": [
+        { "op": "lenPrefixedBytes16", "expected": "" },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "len-prefixed-exact",
+      "bytes": "0003aabbcc",
+      "ops": [
+        { "op": "lenPrefixedBytes16", "expected": "aabbcc" },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "len-prefixed-with-following-data",
+      "bytes": "0002aabbcc",
+      "ops": [
+        { "op": "lenPrefixedBytes16", "expected": "aabb" },
+        { "op": "u8", "expected": 204 },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "rest-nonempty",
+      "bytes": "0102ff",
+      "ops": [
+        { "op": "u8", "expected": 1 },
+        { "op": "rest", "expected": "02ff" },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "rest-empty",
+      "bytes": "01",
+      "ops": [
+        { "op": "u8", "expected": 1 },
+        { "op": "rest", "expected": "" },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "remaining-tracks-position",
+      "bytes": "010203",
+      "ops": [
+        { "op": "remaining", "expected": 3 },
+        { "op": "u8", "expected": 1 },
+        { "op": "remaining", "expected": 2 },
+        { "op": "bytes", "n": 2, "expected": "0203" },
+        { "op": "remaining", "expected": 0 },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "err-u8-empty-buffer",
+      "bytes": "",
+      "ops": [
+        { "op": "u8", "expectError": { "kind": "Truncated", "offset": 0 } }
+      ]
+    },
+    {
+      "id": "err-u16be-one-byte",
+      "bytes": "ff",
+      "ops": [
+        { "op": "u16be", "expectError": { "kind": "Truncated", "offset": 0 } }
+      ]
+    },
+    {
+      "id": "err-u32be-three-bytes",
+      "bytes": "010203",
+      "ops": [
+        { "op": "u32be", "expectError": { "kind": "Truncated", "offset": 0 } }
+      ]
+    },
+    {
+      "id": "err-uuid-fifteen-bytes",
+      "bytes": "000102030405060708090a0b0c0d0e",
+      "ops": [
+        { "op": "uuid", "expectError": { "kind": "Truncated", "offset": 0 } }
+      ]
+    },
+    {
+      "id": "err-bytes-short",
+      "bytes": "01020304",
+      "ops": [
+        { "op": "bytes", "n": 5, "expectError": { "kind": "Truncated", "offset": 0 } }
+      ]
+    },
+    {
+      "id": "err-truncation-offset-mid-buffer",
+      "description": "error offset is where the FAILING read started, not 0",
+      "bytes": "01ff",
+      "ops": [
+        { "op": "u8", "expected": 1 },
+        { "op": "u16be", "expectError": { "kind": "Truncated", "offset": 1 } }
+      ]
+    },
+    {
+      "id": "err-len-prefixed-overrun",
+      "description": "declared length exceeds remaining — LengthOverrun, NOT Truncated (the length field is suspect)",
+      "bytes": "0005aabb",
+      "ops": [
+        { "op": "lenPrefixedBytes16", "expectError": { "kind": "LengthOverrun", "offset": 0 } }
+      ]
+    },
+    {
+      "id": "err-len-prefixed-length-itself-truncated",
+      "bytes": "01",
+      "ops": [
+        { "op": "lenPrefixedBytes16", "expectError": { "kind": "Truncated", "offset": 0 } }
+      ]
+    },
+    {
+      "id": "err-trailing-bytes",
+      "bytes": "0102",
+      "ops": [
+        { "op": "u8", "expected": 1 },
+        { "op": "expectEnd", "expectError": { "kind": "TrailingBytes", "offset": 1 } }
+      ]
+    },
+    {
+      "id": "err-utf8-lone-continuation",
+      "bytes": "80",
+      "ops": [
+        { "op": "utf8", "n": 1, "expectError": { "kind": "InvalidUtf8", "offset": 0 } }
+      ]
+    },
+    {
+      "id": "err-utf8-truncated-multibyte-within-read",
+      "description": "buffer holds a valid é but the read takes only its first byte — the kernel must not peek past n",
+      "bytes": "c3a9",
+      "ops": [
+        { "op": "utf8", "n": 1, "expectError": { "kind": "InvalidUtf8", "offset": 0 } }
+      ]
+    },
+    {
+      "id": "err-utf8-overlong-encoding",
+      "bytes": "c0af",
+      "ops": [
+        { "op": "utf8", "n": 2, "expectError": { "kind": "InvalidUtf8", "offset": 0 } }
+      ]
+    },
+    {
+      "id": "err-utf8-surrogate-range-encoding",
+      "bytes": "eda080",
+      "ops": [
+        { "op": "utf8", "n": 3, "expectError": { "kind": "InvalidUtf8", "offset": 0 } }
+      ]
+    },
+    {
+      "id": "err-utf8-ff-byte",
+      "bytes": "ff",
+      "ops": [
+        { "op": "utf8", "n": 1, "expectError": { "kind": "InvalidUtf8", "offset": 0 } }
+      ]
+    },
+    {
+      "id": "err-utf8-bounds-before-validity",
+      "description": "n beyond remaining is Truncated (bounds are checked before validity)",
+      "bytes": "41",
+      "ops": [
+        { "op": "utf8", "n": 2, "expectError": { "kind": "Truncated", "offset": 0 } }
+      ]
+    },
+    {
+      "id": "composite-ley-envelope-terminal-input",
+      "description": "realistic Ley frame: binary kind, terminal channel, [sessionId:16][op:1][stdin bytes] — pins the live wire",
+      "bytes": "0200030123456789abcdef0123456789abcdef026c73200a",
+      "ops": [
+        { "op": "u8", "expected": 2 },
+        { "op": "u16be", "expected": 3 },
+        { "op": "uuid", "expected": "01234567-89ab-cdef-0123-456789abcdef" },
+        { "op": "u8", "expected": 2 },
+        { "op": "rest", "expected": "6c73200a" },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "composite-ley-credential-json-body",
+      "description": "[reqId:16][op:1][utf8 JSON body] — the credential channel shape",
+      "bytes": "07070707070707070707070707070707017b226d6574686f64223a22504f5354227d",
+      "ops": [
+        { "op": "uuid", "expected": "07070707-0707-0707-0707-070707070707" },
+        { "op": "u8", "expected": 1 },
+        { "op": "remaining", "expected": 17 },
+        { "op": "utf8", "n": 17, "expected": "{\"method\":\"POST\"}" },
+        { "op": "expectEnd" }
+      ]
+    },
+    {
+      "id": "composite-ley-truncated-inside-uuid",
+      "bytes": "0200030011223344556677",
+      "ops": [
+        { "op": "u8", "expected": 2 },
+        { "op": "u16be", "expected": 3 },
+        { "op": "uuid", "expectError": { "kind": "Truncated", "offset": 3 } }
+      ]
+    }
+  ],
+  "writeVectors": [
+    {
+      "id": "w-u8-values",
+      "ops": [
+        { "op": "u8", "value": 0 },
+        { "op": "u8", "value": 127 },
+        { "op": "u8", "value": 255 }
+      ],
+      "expectedBytes": "007fff"
+    },
+    {
+      "id": "w-u16be-values",
+      "ops": [
+        { "op": "u16be", "value": 0 },
+        { "op": "u16be", "value": 1 },
+        { "op": "u16be", "value": 4660 },
+        { "op": "u16be", "value": 65535 }
+      ],
+      "expectedBytes": "000000011234ffff"
+    },
+    {
+      "id": "w-u32be-values",
+      "ops": [
+        { "op": "u32be", "value": 0 },
+        { "op": "u32be", "value": 3735928559 },
+        { "op": "u32be", "value": 4294967295 }
+      ],
+      "expectedBytes": "00000000deadbeefffffffff"
+    },
+    {
+      "id": "w-bytes",
+      "ops": [
+        { "op": "bytes", "hex": "aabbcc" }
+      ],
+      "expectedBytes": "aabbcc"
+    },
+    {
+      "id": "w-bytes-empty",
+      "ops": [
+        { "op": "bytes", "hex": "" }
+      ],
+      "expectedBytes": ""
+    },
+    {
+      "id": "w-uuid-lowercase",
+      "ops": [
+        { "op": "uuid", "value": "01234567-89ab-cdef-0123-456789abcdef" }
+      ],
+      "expectedBytes": "0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "w-uuid-uppercase-input-accepted",
+      "ops": [
+        { "op": "uuid", "value": "DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF" }
+      ],
+      "expectedBytes": "deadbeefdeadbeefdeadbeefdeadbeef"
+    },
+    {
+      "id": "w-utf8-ascii",
+      "ops": [
+        { "op": "utf8", "value": "hello" }
+      ],
+      "expectedBytes": "68656c6c6f"
+    },
+    {
+      "id": "w-utf8-multibyte",
+      "ops": [
+        { "op": "utf8", "value": "é中🎉" }
+      ],
+      "expectedBytes": "c3a9e4b8adf09f8e89"
+    },
+    {
+      "id": "w-len-prefixed",
+      "ops": [
+        { "op": "lenPrefixedBytes16", "hex": "aabbcc" }
+      ],
+      "expectedBytes": "0003aabbcc"
+    },
+    {
+      "id": "w-len-prefixed-empty",
+      "ops": [
+        { "op": "lenPrefixedBytes16", "hex": "" }
+      ],
+      "expectedBytes": "0000"
+    },
+    {
+      "id": "w-composite-ley-round-trip",
+      "description": "encodes the exact buffer of composite-ley-envelope-terminal-input",
+      "ops": [
+        { "op": "u8", "value": 2 },
+        { "op": "u16be", "value": 3 },
+        { "op": "uuid", "value": "01234567-89ab-cdef-0123-456789abcdef" },
+        { "op": "u8", "value": 2 },
+        { "op": "bytes", "hex": "6c73200a" }
+      ],
+      "expectedBytes": "0200030123456789abcdef0123456789abcdef026c73200a"
+    },
+    {
+      "id": "w-err-u8-overflow",
+      "requires": "wide-numeric-params",
+      "ops": [
+        { "op": "u8", "value": 256, "expectError": { "kind": "ValueOutOfRange" } }
+      ]
+    },
+    {
+      "id": "w-err-u8-negative",
+      "requires": "wide-numeric-params",
+      "ops": [
+        { "op": "u8", "value": -1, "expectError": { "kind": "ValueOutOfRange" } }
+      ]
+    },
+    {
+      "id": "w-err-u16be-overflow",
+      "requires": "wide-numeric-params",
+      "ops": [
+        { "op": "u16be", "value": 65536, "expectError": { "kind": "ValueOutOfRange" } }
+      ]
+    },
+    {
+      "id": "w-err-u32be-overflow",
+      "requires": "wide-numeric-params",
+      "ops": [
+        { "op": "u32be", "value": 4294967296, "expectError": { "kind": "ValueOutOfRange" } }
+      ]
+    },
+    {
+      "id": "w-err-u8-non-integer",
+      "description": "only expressible where numbers are dynamic; writing 2.5 as u8 must error, never truncate",
+      "requires": "dynamic-numeric",
+      "ops": [
+        { "op": "u8", "value": 2.5, "expectError": { "kind": "ValueOutOfRange" } }
+      ]
+    },
+    {
+      "id": "w-err-utf8-lone-surrogate",
+      "description": "THE TextEncoder trap: languages whose strings can hold an unpaired surrogate (U+D800) must reject it, never emit U+FFFD",
+      "requires": "utf16-strings",
+      "ops": [
+        { "op": "utf8", "utf16CodeUnits": [55296], "expectError": { "kind": "InvalidUtf8" } }
+      ]
+    },
+    {
+      "id": "w-err-uuid-not-a-uuid",
+      "ops": [
+        { "op": "uuid", "value": "not-a-uuid", "expectError": { "kind": "InvalidUuid" } }
+      ]
+    },
+    {
+      "id": "w-err-uuid-unhyphenated",
+      "description": "32 hex chars without hyphens is rejected — only the canonical 8-4-4-4-12 shape is accepted",
+      "ops": [
+        { "op": "uuid", "value": "0123456789abcdef0123456789abcdef", "expectError": { "kind": "InvalidUuid" } }
+      ]
+    },
+    {
+      "id": "w-err-uuid-wrong-length",
+      "ops": [
+        { "op": "uuid", "value": "01234567-89ab-cdef-0123-456789abcde", "expectError": { "kind": "InvalidUuid" } }
+      ]
+    },
+    {
+      "id": "w-err-uuid-bad-hex-digit",
+      "ops": [
+        { "op": "uuid", "value": "0123456g-89ab-cdef-0123-456789abcdef", "expectError": { "kind": "InvalidUuid" } }
+      ]
+    },
+    {
+      "id": "w-err-uuid-stray-fifth-hyphen",
+      "description": "36 chars with the four checked hyphens in place PLUS a stray trailing hyphen — must be InvalidUuid, never a panic or a silently short parse",
+      "ops": [
+        { "op": "uuid", "value": "01234567-89ab-cdef-0123-456789abcde-", "expectError": { "kind": "InvalidUuid" } }
+      ]
+    }
+  ]
+}
