@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from kanonak_canonical import (
+    Embedded,
     KList,
     Package,
     RawScalar,
@@ -29,7 +30,9 @@ from kanonak_canonical import (
     carrier_of,
 )
 
-ENVELOPE_KEYS = {"$type", "$id", "$contentHash", "$version", "$extra"}
+# The reserved ``$``-envelope keys, which never become statements/predicates.
+# ``$name`` (0.2.0) carries an embedded value's authored dict-key — hash-relevant.
+ENVELOPE_KEYS = {"$type", "$id", "$name", "$contentHash", "$version", "$extra"}
 
 
 def _lexical(value: Any) -> str:
@@ -41,18 +44,84 @@ def _lexical(value: Any) -> str:
     return str(value)
 
 
-def _value(prop: Dict[str, Any], raw: Any):
+def _value(prop: Dict[str, Any], raw: Any, schema: Dict[str, Any]):
     if prop["kind"] == "object":
-        if isinstance(raw, dict) and "$ref" in raw:
-            return Reference(raw["$ref"])
+        # A node: a reference (``{"$ref"}``) or an embedded resource.
+        if isinstance(raw, dict):
+            if "$ref" in raw:
+                return Reference(raw["$ref"])
+            return _embedded_value(prop, raw, schema)
         raise ValueError(
-            "Embedded object values are not yet supported by the codec runtime; "
-            "pass a reference ({'$ref': ...})."
+            f"Object property {prop['predicate']} expects a reference "
+            "({'$ref': ...}) or an embedded node (a dict), got "
+            f"{type(raw).__name__}"
         )
     carrier = carrier_of(prop["datatype"])
     if carrier is None:
         return RawScalar(_lexical(raw))
     return TypedScalar(carrier, _lexical(raw))
+
+
+def _embedded_value(prop: Dict[str, Any], mapping: Dict[str, Any], schema: Dict[str, Any]) -> Embedded:
+    """Canonicalize an embedded value (0.2.0): a dict with no ``$id``, an optional
+    ``$name`` (the authored dict-key — hash-relevant), an optional ``$type``, and
+    schema-mapped fields. An explicit ``$type`` emits a type statement inside the
+    embedded (hash-relevant even when it equals the range-derived type); without
+    it, fields map via the containing property's ``range`` and NO type statement
+    is emitted — range-derived typing is inference only."""
+    if "$id" in mapping:
+        raise ValueError(
+            f"An embedded value under {prop['predicate']} must not carry $id — "
+            "to point at a named resource, pass a reference ({'$ref': ...})."
+        )
+    explicit_type = mapping.get("$type") if isinstance(mapping.get("$type"), str) else None
+    cls_uri = explicit_type if explicit_type is not None else prop.get("range")
+    if cls_uri is None:
+        raise ValueError(
+            f"Cannot map embedded value under {prop['predicate']}: it carries "
+            "no $type and the property declares no range."
+        )
+    cls = schema["classes"].get(cls_uri)
+    if cls is None:
+        raise ValueError(f"no schema for embedded type {cls_uri}")
+
+    statements = _field_statements(mapping, cls, schema)
+    if explicit_type is not None:
+        statements.append(Statement(schema["typePredicate"], Reference(explicit_type)))
+    name = mapping.get("$name")
+    name = name if isinstance(name, str) and name else None
+    return Embedded(name, statements)
+
+
+def _field_statements(source: Dict[str, Any], cls: Dict[str, Any], schema: Dict[str, Any]) -> List[Statement]:
+    """The statements for one node-or-embedded's modeled fields + its ``$extra`` —
+    everything except the type triple (subjects always carry one; embeddeds only
+    when explicitly typed)."""
+    statements: List[Statement] = []
+    for key, raw in source.items():
+        if key in ENVELOPE_KEYS or raw is None:
+            continue
+        prop = cls["props"].get(key)
+        if prop is None:
+            statements.append(Statement(key, RawScalar(_lexical(raw))))
+            continue
+        if isinstance(raw, list):
+            # An empty list contributes NO statement — absent and empty are
+            # identical at the canonical layer (the wire serialize still
+            # preserves the empty list).
+            if not raw:
+                continue
+            statements.append(Statement(prop["predicate"], KList([_value(prop, x, schema) for x in raw])))
+        else:
+            statements.append(Statement(prop["predicate"], _value(prop, raw, schema)))
+
+    extra = source.get("$extra")
+    if extra:
+        for predicate, raw in extra.items():
+            if raw is None:
+                continue
+            statements.append(Statement(predicate, RawScalar(_lexical(raw))))
+    return statements
 
 
 def _statements(node: Dict[str, Any], schema: Dict[str, Any]) -> List[Statement]:
@@ -63,25 +132,9 @@ def _statements(node: Dict[str, Any], schema: Dict[str, Any]) -> List[Statement]
     if cls is None:
         raise ValueError(f"no schema for type {type_uri}")
 
+    # The rdf:type triple every subject carries, then its fields.
     statements: List[Statement] = [Statement(schema["typePredicate"], Reference(type_uri))]
-    for key, raw in node.items():
-        if key in ENVELOPE_KEYS or raw is None:
-            continue
-        prop = cls["props"].get(key)
-        if prop is None:
-            statements.append(Statement(key, RawScalar(_lexical(raw))))
-            continue
-        if isinstance(raw, list):
-            statements.append(Statement(prop["predicate"], KList([_value(prop, x) for x in raw])))
-        else:
-            statements.append(Statement(prop["predicate"], _value(prop, raw)))
-
-    extra = node.get("$extra")
-    if extra:
-        for predicate, raw in extra.items():
-            if raw is None:
-                continue
-            statements.append(Statement(predicate, RawScalar(_lexical(raw))))
+    statements.extend(_field_statements(node, cls, schema))
     return statements
 
 
