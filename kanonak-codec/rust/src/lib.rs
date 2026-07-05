@@ -19,8 +19,16 @@ use kanonak_canonical::{
 };
 use serde_json::{Map, Value as Json};
 
-/// The five `$`-envelope keys, which never become statements/predicates.
-const ENVELOPE_KEYS: [&str; 5] = ["$type", "$id", "$contentHash", "$version", "$extra"];
+/// The reserved `$`-envelope keys, which never become statements/predicates.
+/// `$name` (0.2.0) carries an embedded value's authored dict-key — hash-relevant.
+const ENVELOPE_KEYS: [&str; 6] = [
+    "$type",
+    "$id",
+    "$name",
+    "$contentHash",
+    "$version",
+    "$extra",
+];
 
 /// A node is a JSON object.
 pub type Node = Map<String, Json>;
@@ -76,19 +84,24 @@ fn lexical(value: &Json) -> String {
 
 /// Build a single canonical `Value` for one (non-list) field datum, per its
 /// schema prop.
-fn build_value(prop: &Json, raw: &Json) -> Result<Value, CodecError> {
+fn build_value(prop: &Json, raw: &Json, schema: &Json) -> Result<Value, CodecError> {
     let kind = prop
         .get("kind")
         .and_then(|k| k.as_str())
         .ok_or_else(|| CodecError::Malformed("schema prop is missing 'kind'".into()))?;
     if kind == "object" {
+        // A node: a reference (`{"$ref"}`) or an embedded resource.
         if let Some(reference) = raw.get("$ref").and_then(|r| r.as_str()) {
             return Ok(Value::Reference(reference.to_string()));
         }
-        return err(
-            "Embedded object values are not yet supported by the codec runtime; \
-             pass a reference ({\"$ref\": ...}).",
-        );
+        if let Some(map) = raw.as_object() {
+            return embedded_value(prop, map, schema);
+        }
+        return err(format!(
+            "Object property expects a reference ({{\"$ref\": ...}}) or an embedded \
+             node (a map), got {}",
+            raw
+        ));
     }
     let datatype = prop
         .get("datatype")
@@ -103,8 +116,128 @@ fn build_value(prop: &Json, raw: &Json) -> Result<Value, CodecError> {
     }
 }
 
-/// The statements for one node: the rdf:type triple, then each modeled/raw field
-/// (lists collapse to a `Value::List`), then each `$extra` entry.
+/// Canonicalize an embedded value (0.2.0): a map with no `$id`, an optional
+/// `$name` (the authored dict-key — hash-relevant), an optional `$type`, and
+/// schema-mapped fields. An explicit `$type` emits a type statement inside the
+/// embedded (hash-relevant even when it equals the range-derived type); without
+/// it, fields map via the containing property's `range` and NO type statement is
+/// emitted — range-derived typing is inference only.
+fn embedded_value(
+    prop: &Json,
+    map: &Map<String, Json>,
+    schema: &Json,
+) -> Result<Value, CodecError> {
+    if map.contains_key("$id") {
+        return err(
+            "An embedded value must not carry $id — to point at a named resource, \
+             pass a reference ({\"$ref\": ...}).",
+        );
+    }
+    let explicit_type = map.get("$type").and_then(|t| t.as_str());
+    let cls_uri = match explicit_type.or_else(|| prop.get("range").and_then(|r| r.as_str())) {
+        Some(uri) => uri,
+        None => {
+            return err(
+                "Cannot map embedded value: it carries no $type and the property \
+                 declares no range.",
+            )
+        }
+    };
+    let cls = schema
+        .get("classes")
+        .and_then(|c| c.get(cls_uri))
+        .ok_or_else(|| CodecError::Malformed(format!("no schema for embedded type {}", cls_uri)))?;
+    let props = cls
+        .get("props")
+        .ok_or_else(|| CodecError::Malformed(format!("class {} is missing 'props'", cls_uri)))?;
+
+    let mut statements = field_statements(map, props, schema)?;
+    if let Some(type_uri) = explicit_type {
+        let type_predicate = schema
+            .get("typePredicate")
+            .and_then(|p| p.as_str())
+            .ok_or_else(|| CodecError::Malformed("schema is missing 'typePredicate'".into()))?;
+        statements.push(Statement {
+            predicate: type_predicate.to_string(),
+            value: Value::Reference(type_uri.to_string()),
+        });
+    }
+    let name = map
+        .get("$name")
+        .and_then(|n| n.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    Ok(Value::Embedded { name, statements })
+}
+
+/// The statements for one node-or-embedded's modeled fields + its `$extra` —
+/// everything except the type triple (subjects always carry one; embeddeds only
+/// when explicitly typed).
+fn field_statements(
+    source: &Map<String, Json>,
+    props: &Json,
+    schema: &Json,
+) -> Result<Vec<Statement>, CodecError> {
+    let mut out: Vec<Statement> = Vec::new();
+
+    for (key, raw) in source.iter() {
+        if ENVELOPE_KEYS.contains(&key.as_str()) || raw.is_null() {
+            continue;
+        }
+        match props.get(key) {
+            None => out.push(Statement {
+                predicate: key.clone(),
+                value: Value::Raw(lexical(raw)),
+            }),
+            Some(prop) => {
+                let predicate =
+                    prop.get("predicate")
+                        .and_then(|p| p.as_str())
+                        .ok_or_else(|| {
+                            CodecError::Malformed(format!("prop {} is missing 'predicate'", key))
+                        })?;
+                let value = match raw.as_array() {
+                    Some(items) => {
+                        // An empty list contributes NO statement — absent and empty
+                        // are identical at the canonical layer (the wire serialize
+                        // still preserves the empty list).
+                        if items.is_empty() {
+                            continue;
+                        }
+                        let mut list = Vec::with_capacity(items.len());
+                        for item in items {
+                            list.push(build_value(prop, item, schema)?);
+                        }
+                        Value::List(list)
+                    }
+                    None => build_value(prop, raw, schema)?,
+                };
+                out.push(Statement {
+                    predicate: predicate.to_string(),
+                    value,
+                });
+            }
+        }
+    }
+
+    if let Some(extra) = source.get("$extra") {
+        let extra = extra
+            .as_object()
+            .ok_or_else(|| CodecError::Malformed("$extra must be an object".into()))?;
+        for (predicate, raw) in extra.iter() {
+            if raw.is_null() {
+                continue;
+            }
+            out.push(Statement {
+                predicate: predicate.clone(),
+                value: Value::Raw(lexical(raw)),
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// The statements for one subject node: the rdf:type triple, then its fields.
 fn statements(node: &Node, schema: &Json) -> Result<Vec<Statement>, CodecError> {
     let type_uri = node
         .get("$type")
@@ -131,55 +264,7 @@ fn statements(node: &Node, schema: &Json) -> Result<Vec<Statement>, CodecError> 
         predicate: type_predicate.to_string(),
         value: Value::Reference(type_uri.to_string()),
     }];
-
-    for (key, raw) in node.iter() {
-        if ENVELOPE_KEYS.contains(&key.as_str()) || raw.is_null() {
-            continue;
-        }
-        match props.get(key) {
-            None => out.push(Statement {
-                predicate: key.clone(),
-                value: Value::Raw(lexical(raw)),
-            }),
-            Some(prop) => {
-                let predicate = prop
-                    .get("predicate")
-                    .and_then(|p| p.as_str())
-                    .ok_or_else(|| {
-                        CodecError::Malformed(format!("prop {} is missing 'predicate'", key))
-                    })?;
-                let value = match raw.as_array() {
-                    Some(items) => {
-                        let mut list = Vec::with_capacity(items.len());
-                        for item in items {
-                            list.push(build_value(prop, item)?);
-                        }
-                        Value::List(list)
-                    }
-                    None => build_value(prop, raw)?,
-                };
-                out.push(Statement {
-                    predicate: predicate.to_string(),
-                    value,
-                });
-            }
-        }
-    }
-
-    if let Some(extra) = node.get("$extra") {
-        let extra = extra.as_object().ok_or_else(|| {
-            CodecError::Malformed("$extra must be an object".into())
-        })?;
-        for (predicate, raw) in extra.iter() {
-            if raw.is_null() {
-                continue;
-            }
-            out.push(Statement {
-                predicate: predicate.clone(),
-                value: Value::Raw(lexical(raw)),
-            });
-        }
-    }
+    out.extend(field_statements(node, props, schema)?);
     Ok(out)
 }
 
@@ -299,7 +384,10 @@ pub fn deserialize(json_obj: &Node, schema: &Json) -> Result<Node, CodecError> {
         .get("classes")
         .ok_or_else(|| CodecError::Malformed("schema is missing 'classes'".into()))?;
     let cls = classes.get(type_uri).ok_or_else(|| {
-        CodecError::Malformed(format!("Cannot deserialize: no schema for type {}", type_uri))
+        CodecError::Malformed(format!(
+            "Cannot deserialize: no schema for type {}",
+            type_uri
+        ))
     })?;
     let props = cls
         .get("props")
