@@ -24,7 +24,7 @@ meta:
   # and re-run the workflow; existing tags are never touched or moved.
   go_module_versions:
     canonical: "0.1.0"
-    codec: "0.1.0"
+    codec: "0.2.0"
     expression: "0.1.0"
     wire: "0.1.0"
   # GitHub Actions OIDC (no stored token) is preferred where supported. A workflow

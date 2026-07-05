@@ -107,7 +107,8 @@ jobs:
         with: { dotnet-version: "8.0.x" }
       - run: |
           dotnet run -c Release --project kanonak-canonical/csharp/test/Kanonak.Canonical.Conformance -- "$PWD/kanonak-canonical/vectors"
-          dotnet run -c Release --project kanonak-codec/csharp/test/Kanonak.Codec.Conformance -- "$PWD/kanonak-codec/vectors/codec-vectors.json"
+          # arg-less: the codec runner defaults to BOTH vector files (codec-vectors.json + codec-vectors-embedded.json)
+          dotnet run -c Release --project kanonak-codec/csharp/test/Kanonak.Codec.Conformance
           dotnet run -c Release --project kanonak-expression/csharp/test/Kanonak.Expression.Conformance -- "$PWD/kanonak-expression/vectors"
           dotnet run -c Release --project kanonak-wire/csharp/test/Kanonak.Wire.Conformance -- "$PWD/kanonak-wire/vectors"
 
@@ -123,7 +124,8 @@ jobs:
           java -cp out Conformance ../vectors
           cd ../../kanonak-codec/java
           javac -d out ../../kanonak-canonical/java/src/main/java/org/kanonak/canonical/*.java src/main/java/org/kanonak/codec/*.java conformance/Conformance.java
-          java -cp out Conformance ../vectors/codec-vectors.json
+          # arg-less: the codec runner defaults to BOTH vector files (codec-vectors.json + codec-vectors-embedded.json)
+          java -cp out Conformance
           cd ../../kanonak-expression/java
           javac -d out src/main/java/org/kanonak/expression/*.java conformance/Conformance.java
           java -cp out Conformance ../vectors
