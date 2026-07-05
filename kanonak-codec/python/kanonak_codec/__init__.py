@@ -10,11 +10,22 @@ runtime ontology resolution.
 
 A node is a plain ``dict`` (the ``$``-envelope plus alias-collapsed local-name
 fields); a generated Pydantic model serializes to one via ``model_dump``.
+
+The typed SDK-facing surface (0.3.0) — ``to_node``, ``ref``, ``embed`` — binds
+a generated model to that same node contract, duck-typed so the runtime stays
+stdlib-only: anything with ``model_dump`` (a Pydantic model) or any mapping
+dumps to its normalized-JSON wire form and maps onto the node contract through
+the SAME split ``deserialize`` defines. An object property's value is EXACTLY
+ONE of a reference to a named resource (``ref``) or an embedded node
+(``embed``); the choice between the arms is authorial and HASH-RELEVANT, so it
+is explicit here, never inferred. An embedded value's authored dict-key rides
+``$name`` and is likewise hash-relevant.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from collections.abc import Mapping
+from typing import Any, Dict, List, Optional
 
 from kanonak_canonical import (
     Embedded,
@@ -207,3 +218,62 @@ def deserialize(json_obj: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, A
     if extra:
         node["$extra"] = extra
     return node
+
+
+def _wire_dict(typed: Any) -> Dict[str, Any]:
+    """The normalized-JSON wire dict of a typed value: a generated Pydantic
+    model dumps via ``model_dump(by_alias=True, exclude_none=True)`` (aliases
+    are the wire names; absence is the data model's optionality — nulls never
+    ride the wire), and any mapping passes through as a plain ``dict``."""
+    dump = getattr(typed, "model_dump", None)
+    if callable(dump):
+        return dump(by_alias=True, exclude_none=True)
+    if isinstance(typed, Mapping):
+        return dict(typed)
+    raise TypeError(
+        "Expected a typed model (with model_dump) or a mapping, got "
+        f"{type(typed).__name__}"
+    )
+
+
+def to_node(typed: Any, schema: Dict[str, Any]) -> Dict[str, Any]:
+    """A typed instance's codec node (the dictionary contract). The bridge is
+    native serde, not reflection: the instance dumps to its normalized-JSON
+    wire form (envelope-as-data + ``ref``/``embed`` values), and the wire form
+    maps onto the node contract through the SAME split ``deserialize`` defines
+    — the typed path and the dictionary path are one contract, not two."""
+    return deserialize(_wire_dict(typed), schema)
+
+
+def ref(target: Any) -> Dict[str, Any]:
+    """The reference arm of an object property: ``{"$ref": uri}`` — a
+    reference to a named resource by its canonical URI (a ``str``) or by the
+    instance itself (resolved through its ``$id``). The target must already
+    carry its identity; an embedded (id-less) value cannot be referenced."""
+    if isinstance(target, str):
+        if not target:
+            raise ValueError("A reference needs a canonical URI.")
+        return {"$ref": target}
+    target_id = _wire_dict(target).get("$id")
+    if not isinstance(target_id, str) or not target_id:
+        raise ValueError(
+            "ref(target) requires a resource with a non-empty $id — "
+            "to carry the value inline instead, use embed(...)."
+        )
+    return {"$ref": target_id}
+
+
+def embed(value: Any, name: Optional[str] = None) -> Dict[str, Any]:
+    """The embedded arm of an object property: the value itself, carried
+    inline (derived identity, no ``$id``). ``name`` is the authored dict-key
+    and rides ``$name`` — HASH-RELEVANT. An explicit ``$type`` on the value
+    also rides through (it emits a type statement inside the embedded)."""
+    wire = _wire_dict(value)
+    if "$id" in wire:
+        raise ValueError(
+            "An embedded value must not carry $id — to point at the named "
+            "resource instead, use ref(...)."
+        )
+    if name is not None:
+        wire["$name"] = name
+    return wire

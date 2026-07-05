@@ -81,6 +81,81 @@ export interface CodecNode {
   $extra?: Record<string, unknown>;
 }
 
+// -- The typed surface (0.3.0) ----------------------------------------------
+//
+// TypeScript typed models ARE wire-form objects (structural typing), so the
+// typed surface is types + arm constructors — no binding layer needed: a
+// KanonakNode-shaped object passes to the codec entry points directly.
+
+/**
+ * The full `$`-envelope as data — what a generated typed model's root carries.
+ * `$name` is an embedded value's authored dict-key and is HASH-RELEVANT
+ * (serialized into the canonical form); null/absent for subjects.
+ */
+export interface KanonakNode extends CodecNode {
+  $name?: string;
+  $contentHash?: string;
+  $version?: string;
+}
+
+/**
+ * An object property's value: EXACTLY ONE of a reference to a named resource
+ * (`{ $ref: uri }`) or an embedded node (the value inline — derived identity,
+ * no `$id`). The choice between the arms is authorial and hash-relevant, so
+ * generated models carry it in the type, never infer it.
+ */
+export type Ref<T> = { $ref: string } | (T & { $type?: string });
+
+/** Type guard: the reference arm of a {@link Ref}. */
+export function isRef<T>(value: Ref<T>): value is { $ref: string } {
+  return typeof value === 'object' && value !== null && '$ref' in value;
+}
+
+/** A reference to a named resource by its canonical URI. */
+export function ref(uri: string): { $ref: string } {
+  if (!uri) throw new Error('A reference needs a canonical URI.');
+  return { $ref: uri };
+}
+
+/**
+ * A reference to a named resource by the instance itself — resolved through
+ * the target's `$id`. The target must already carry its identity; an embedded
+ * (id-less) value cannot be referenced.
+ */
+export function refTo(target: KanonakNode): { $ref: string } {
+  if (!target.$id) {
+    throw new Error(
+      'refTo(target) requires a node with a non-empty $id — ' +
+        'to carry the value inline instead, use embed(value).'
+    );
+  }
+  return { $ref: target.$id };
+}
+
+/**
+ * An embedded value, carried inline (derived identity — it must not have a
+ * `$id`), optionally with its authored dict-key name (hash-relevant).
+ */
+export function embed<T extends KanonakNode>(value: T, name?: string): T {
+  if (value.$id) {
+    throw new Error(
+      'An embedded value must not carry $id — to point at a named resource, use ref/refTo.'
+    );
+  }
+  if (name !== undefined) value.$name = name;
+  return value;
+}
+
+/**
+ * A typed instance's codec node. Provided for cross-port parity — in
+ * TypeScript the typed object already IS the node (the round through
+ * {@link serialize} + {@link deserialize} normalizes `$extra` placement and
+ * drops undefined, which the codec entry points tolerate anyway).
+ */
+export function toNode(typed: KanonakNode, schema: CodecSchema): CodecNode {
+  return deserialize(serialize(typed), schema);
+}
+
 /**
  * The identity of the (data) package being content-addressed — the consumer's
  * package the nodes are assembled into. Used to synthesize the package-wrapper

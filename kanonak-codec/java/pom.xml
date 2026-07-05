@@ -6,7 +6,7 @@
 
     <groupId>org.kanonak</groupId>
     <artifactId>kanonak-codec</artifactId>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
     <packaging>jar</packaging>
 
     <name>kanonak-codec</name>
@@ -51,15 +51,17 @@
 
     <!--
       Conformance (JDK-only, mirrors the kanonak-canonical port — compile the
-      canonical sources, the codec sources, and the conformance driver together
-      on one javac classpath, then run):
+      canonical sources, the codec sources, and BOTH conformance drivers
+      together on one javac classpath, then run both):
 
       javac -d out \
         ../../kanonak-canonical/java/src/main/java/org/kanonak/canonical/*.java \
         src/main/java/org/kanonak/codec/*.java \
-        conformance/Conformance.java
-      java -cp out Conformance   # runs ../vectors/codec-vectors.json AND
-                                 # ../vectors/codec-vectors-embedded.json
+        conformance/Conformance.java conformance/TypedConformance.java
+      java -cp out Conformance        # runs ../vectors/codec-vectors.json AND
+                                      # ../vectors/codec-vectors-embedded.json
+      java -cp out TypedConformance   # the typed surface (KanonakNode / Ref /
+                                      # TypedNodes) against the same vectors
     -->
 
     <profiles>
