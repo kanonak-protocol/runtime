@@ -125,9 +125,11 @@ jobs:
           javac -d out src/main/java/org/kanonak/canonical/*.java conformance/Conformance.java
           java -cp out Conformance ../vectors
           cd ../../kanonak-codec/java
-          javac -d out ../../kanonak-canonical/java/src/main/java/org/kanonak/canonical/*.java src/main/java/org/kanonak/codec/*.java conformance/Conformance.java
+          javac -d out ../../kanonak-canonical/java/src/main/java/org/kanonak/canonical/*.java src/main/java/org/kanonak/codec/*.java conformance/Conformance.java conformance/TypedConformance.java
           # arg-less: the codec runner defaults to BOTH vector files (codec-vectors.json + codec-vectors-embedded.json)
           java -cp out Conformance
+          # the typed surface (KanonakNode/Ref<T>/TypedNodes) against the same golden vectors
+          java -cp out TypedConformance
           cd ../../kanonak-expression/java
           javac -d out src/main/java/org/kanonak/expression/*.java conformance/Conformance.java
           java -cp out Conformance ../vectors
