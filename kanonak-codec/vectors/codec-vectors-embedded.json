@@ -1,0 +1,397 @@
+{
+  "description": "Codec conformance vectors for EMBEDDED VALUES in the node contract — gates kanonak-codec 0.2.0 (see kanonak-protocol/runtime#1). Ports implementing the 0.1.0 contract do not run this file. Wire shape: an embedded value is a map with no $id, an optional $name (the authored dict-key; hash-relevant), an optional $type (emits a type statement when present), and schema-mapped fields; field mapping without $type uses the containing object property's `range` (the 0.2.0 schema addition). Expected values are authoritative; canonical serialization of embedded values is additionally pinned by the ref-and-embedded case in kanonak-canonical/vectors.",
+  "canonicalFormVersion": "1",
+  "schema": {
+    "typePredicate": "kanonak.org/core-rdf@1.1.0/type",
+    "labelPredicate": "kanonak.org/core-rdf@1.1.0/label",
+    "packageTypeUri": "kanonak.org/core-kanonak@1.0.0/Package",
+    "classes": {
+      "probe.example.com/schema@1.0.0/Order": {
+        "typeUri": "probe.example.com/schema@1.0.0/Order",
+        "props": {
+          "note": {
+            "predicate": "probe.example.com/schema@1.0.0/note",
+            "kind": "datatype",
+            "datatype": "kanonak.org/core-xsd/string"
+          },
+          "items": {
+            "predicate": "probe.example.com/schema@1.0.0/items",
+            "kind": "object",
+            "range": "probe.example.com/schema@1.0.0/LineItem"
+          },
+          "customer": {
+            "predicate": "probe.example.com/schema@1.0.0/customer",
+            "kind": "object",
+            "range": "probe.example.com/schema@1.0.0/Customer"
+          }
+        }
+      },
+      "probe.example.com/schema@1.0.0/LineItem": {
+        "typeUri": "probe.example.com/schema@1.0.0/LineItem",
+        "props": {
+          "sku": {
+            "predicate": "probe.example.com/schema@1.0.0/sku",
+            "kind": "datatype",
+            "datatype": "kanonak.org/core-xsd/string"
+          },
+          "qty": {
+            "predicate": "probe.example.com/schema@1.0.0/qty",
+            "kind": "datatype",
+            "datatype": "kanonak.org/core-xsd/integer"
+          }
+        }
+      },
+      "probe.example.com/schema@1.0.0/Customer": {
+        "typeUri": "probe.example.com/schema@1.0.0/Customer",
+        "props": {
+          "name": {
+            "predicate": "probe.example.com/schema@1.0.0/name",
+            "kind": "datatype",
+            "datatype": "kanonak.org/core-xsd/string"
+          },
+          "address": {
+            "predicate": "probe.example.com/schema@1.0.0/address",
+            "kind": "object",
+            "range": "probe.example.com/schema@1.0.0/Address"
+          }
+        }
+      },
+      "probe.example.com/schema@1.0.0/Address": {
+        "typeUri": "probe.example.com/schema@1.0.0/Address",
+        "props": {
+          "city": {
+            "predicate": "probe.example.com/schema@1.0.0/city",
+            "kind": "datatype",
+            "datatype": "kanonak.org/core-xsd/string"
+          }
+        }
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "embedded-named-in-list",
+      "description": "A named embedded value ($name = the authored dict-key) inside a list-valued object property. The embedded carries NO type statement — its type is inferred from the property's range and is not materialized in canonical form.",
+      "pkg": {
+        "publisher": "probe.example.com",
+        "packageName": "data",
+        "version": "1.0.0",
+        "label": "Embedded Probe Data"
+      },
+      "nodes": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Order",
+          "$id": "probe.example.com/data@1.0.0/o1",
+          "note": "A",
+          "items": [
+            {
+              "$name": "first",
+              "sku": "X",
+              "qty": 1
+            }
+          ]
+        }
+      ],
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"probe.example.com/data@1.0.0/data\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/label\",\"type\":\"string\",\"value\":\"Embedded Probe Data\"},{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"kanonak.org/core-kanonak@1.0.0/Package\"}]},{\"uri\":\"probe.example.com/data@1.0.0/o1\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"probe.example.com/schema@1.0.0/Order\"},{\"predicate\":\"probe.example.com/schema@1.0.0/items\",\"type\":\"list\",\"items\":[{\"type\":\"embedded\",\"name\":\"first\",\"statements\":[{\"predicate\":\"probe.example.com/schema@1.0.0/qty\",\"type\":\"typed\",\"carrier\":\"integer\",\"value\":\"1\"},{\"predicate\":\"probe.example.com/schema@1.0.0/sku\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"X\"}]}]},{\"predicate\":\"probe.example.com/schema@1.0.0/note\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"A\"}]}]}",
+      "expectedHash": "sha256:911547a76ba4ca86cd056a2173b06efb03578bae5ce0fef824c723285a043c1b",
+      "expectedSerialize": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Order",
+          "$id": "probe.example.com/data@1.0.0/o1",
+          "note": "A",
+          "items": [
+            {
+              "$name": "first",
+              "sku": "X",
+              "qty": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "embedded-unnamed-positional",
+      "description": "The same embedded content with NO $name (a positional list item). The name participates in content identity, so this case hashes differently from embedded-named-in-list.",
+      "pkg": {
+        "publisher": "probe.example.com",
+        "packageName": "data",
+        "version": "1.0.0",
+        "label": "Embedded Probe Data"
+      },
+      "nodes": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Order",
+          "$id": "probe.example.com/data@1.0.0/o1",
+          "note": "A",
+          "items": [
+            {
+              "sku": "X",
+              "qty": 1
+            }
+          ]
+        }
+      ],
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"probe.example.com/data@1.0.0/data\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/label\",\"type\":\"string\",\"value\":\"Embedded Probe Data\"},{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"kanonak.org/core-kanonak@1.0.0/Package\"}]},{\"uri\":\"probe.example.com/data@1.0.0/o1\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"probe.example.com/schema@1.0.0/Order\"},{\"predicate\":\"probe.example.com/schema@1.0.0/items\",\"type\":\"list\",\"items\":[{\"type\":\"embedded\",\"statements\":[{\"predicate\":\"probe.example.com/schema@1.0.0/qty\",\"type\":\"typed\",\"carrier\":\"integer\",\"value\":\"1\"},{\"predicate\":\"probe.example.com/schema@1.0.0/sku\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"X\"}]}]},{\"predicate\":\"probe.example.com/schema@1.0.0/note\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"A\"}]}]}",
+      "expectedHash": "sha256:bd4d4a2d155df3deed7bdb620ed107306eb0c1808b479f34f4bf8ca9839d922e",
+      "expectedSerialize": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Order",
+          "$id": "probe.example.com/data@1.0.0/o1",
+          "note": "A",
+          "items": [
+            {
+              "sku": "X",
+              "qty": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "embedded-explicit-type",
+      "description": "An embedded value carrying an explicit $type emits a type statement inside the embedded — hash-relevant even when it equals the range-derived type (mirrors the reference implementation, which warns that the declaration is redundant but still canonicalizes it).",
+      "pkg": {
+        "publisher": "probe.example.com",
+        "packageName": "data",
+        "version": "1.0.0",
+        "label": "Embedded Probe Data"
+      },
+      "nodes": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Order",
+          "$id": "probe.example.com/data@1.0.0/o1",
+          "note": "A",
+          "items": [
+            {
+              "$name": "first",
+              "$type": "probe.example.com/schema@1.0.0/LineItem",
+              "sku": "X",
+              "qty": 1
+            }
+          ]
+        }
+      ],
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"probe.example.com/data@1.0.0/data\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/label\",\"type\":\"string\",\"value\":\"Embedded Probe Data\"},{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"kanonak.org/core-kanonak@1.0.0/Package\"}]},{\"uri\":\"probe.example.com/data@1.0.0/o1\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"probe.example.com/schema@1.0.0/Order\"},{\"predicate\":\"probe.example.com/schema@1.0.0/items\",\"type\":\"list\",\"items\":[{\"type\":\"embedded\",\"name\":\"first\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"probe.example.com/schema@1.0.0/LineItem\"},{\"predicate\":\"probe.example.com/schema@1.0.0/qty\",\"type\":\"typed\",\"carrier\":\"integer\",\"value\":\"1\"},{\"predicate\":\"probe.example.com/schema@1.0.0/sku\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"X\"}]}]},{\"predicate\":\"probe.example.com/schema@1.0.0/note\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"A\"}]}]}",
+      "expectedHash": "sha256:770860d49c012856fe51243959884fbd2c50c3033285bbe6da9b2edb4d054078",
+      "expectedSerialize": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Order",
+          "$id": "probe.example.com/data@1.0.0/o1",
+          "note": "A",
+          "items": [
+            {
+              "$name": "first",
+              "$type": "probe.example.com/schema@1.0.0/LineItem",
+              "sku": "X",
+              "qty": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "embedded-list-order",
+      "description": "Two named embeddeds in source order [a, b]. List order is fully semantic and hashed.",
+      "pkg": {
+        "publisher": "probe.example.com",
+        "packageName": "data",
+        "version": "1.0.0",
+        "label": "Embedded Probe Data"
+      },
+      "nodes": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Order",
+          "$id": "probe.example.com/data@1.0.0/o1",
+          "items": [
+            {
+              "$name": "a",
+              "sku": "X",
+              "qty": 1
+            },
+            {
+              "$name": "b",
+              "sku": "Y",
+              "qty": 2
+            }
+          ]
+        }
+      ],
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"probe.example.com/data@1.0.0/data\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/label\",\"type\":\"string\",\"value\":\"Embedded Probe Data\"},{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"kanonak.org/core-kanonak@1.0.0/Package\"}]},{\"uri\":\"probe.example.com/data@1.0.0/o1\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"probe.example.com/schema@1.0.0/Order\"},{\"predicate\":\"probe.example.com/schema@1.0.0/items\",\"type\":\"list\",\"items\":[{\"type\":\"embedded\",\"name\":\"a\",\"statements\":[{\"predicate\":\"probe.example.com/schema@1.0.0/qty\",\"type\":\"typed\",\"carrier\":\"integer\",\"value\":\"1\"},{\"predicate\":\"probe.example.com/schema@1.0.0/sku\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"X\"}]},{\"type\":\"embedded\",\"name\":\"b\",\"statements\":[{\"predicate\":\"probe.example.com/schema@1.0.0/qty\",\"type\":\"typed\",\"carrier\":\"integer\",\"value\":\"2\"},{\"predicate\":\"probe.example.com/schema@1.0.0/sku\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"Y\"}]}]}]}]}",
+      "expectedHash": "sha256:1af37fc5034d80fbe039172d4d56b9e4557f1d5d2ca7f136ffce038e30a6b378",
+      "expectedSerialize": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Order",
+          "$id": "probe.example.com/data@1.0.0/o1",
+          "items": [
+            {
+              "$name": "a",
+              "sku": "X",
+              "qty": 1
+            },
+            {
+              "$name": "b",
+              "sku": "Y",
+              "qty": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "embedded-list-order-swapped",
+      "description": "The SAME two embeddeds in swapped order [b, a] — a deliberately different expected canonical form and hash from embedded-list-order. A port that normalizes, sorts, or randomizes embedded collection order (e.g. by representing the dict-keyed group as a map) fails this pair.",
+      "pkg": {
+        "publisher": "probe.example.com",
+        "packageName": "data",
+        "version": "1.0.0",
+        "label": "Embedded Probe Data"
+      },
+      "nodes": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Order",
+          "$id": "probe.example.com/data@1.0.0/o1",
+          "items": [
+            {
+              "$name": "b",
+              "sku": "Y",
+              "qty": 2
+            },
+            {
+              "$name": "a",
+              "sku": "X",
+              "qty": 1
+            }
+          ]
+        }
+      ],
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"probe.example.com/data@1.0.0/data\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/label\",\"type\":\"string\",\"value\":\"Embedded Probe Data\"},{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"kanonak.org/core-kanonak@1.0.0/Package\"}]},{\"uri\":\"probe.example.com/data@1.0.0/o1\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"probe.example.com/schema@1.0.0/Order\"},{\"predicate\":\"probe.example.com/schema@1.0.0/items\",\"type\":\"list\",\"items\":[{\"type\":\"embedded\",\"name\":\"b\",\"statements\":[{\"predicate\":\"probe.example.com/schema@1.0.0/qty\",\"type\":\"typed\",\"carrier\":\"integer\",\"value\":\"2\"},{\"predicate\":\"probe.example.com/schema@1.0.0/sku\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"Y\"}]},{\"type\":\"embedded\",\"name\":\"a\",\"statements\":[{\"predicate\":\"probe.example.com/schema@1.0.0/qty\",\"type\":\"typed\",\"carrier\":\"integer\",\"value\":\"1\"},{\"predicate\":\"probe.example.com/schema@1.0.0/sku\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"X\"}]}]}]}]}",
+      "expectedHash": "sha256:a30a007c9b11d8ad6f6ae4aa1bfe22a9573b24ad23faba683b143157867cea9b",
+      "expectedSerialize": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Order",
+          "$id": "probe.example.com/data@1.0.0/o1",
+          "items": [
+            {
+              "$name": "b",
+              "sku": "Y",
+              "qty": 2
+            },
+            {
+              "$name": "a",
+              "sku": "X",
+              "qty": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "embedded-nested",
+      "description": "An embedded inside an embedded (customer -> address), each level named. Field mapping at every depth uses the containing property's range class.",
+      "pkg": {
+        "publisher": "probe.example.com",
+        "packageName": "data",
+        "version": "1.0.0",
+        "label": "Embedded Probe Data"
+      },
+      "nodes": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Order",
+          "$id": "probe.example.com/data@1.0.0/o1",
+          "customer": [
+            {
+              "$name": "cust",
+              "name": "Ada",
+              "address": [
+                {
+                  "$name": "home",
+                  "city": "Austin"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"probe.example.com/data@1.0.0/data\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/label\",\"type\":\"string\",\"value\":\"Embedded Probe Data\"},{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"kanonak.org/core-kanonak@1.0.0/Package\"}]},{\"uri\":\"probe.example.com/data@1.0.0/o1\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"probe.example.com/schema@1.0.0/Order\"},{\"predicate\":\"probe.example.com/schema@1.0.0/customer\",\"type\":\"list\",\"items\":[{\"type\":\"embedded\",\"name\":\"cust\",\"statements\":[{\"predicate\":\"probe.example.com/schema@1.0.0/address\",\"type\":\"list\",\"items\":[{\"type\":\"embedded\",\"name\":\"home\",\"statements\":[{\"predicate\":\"probe.example.com/schema@1.0.0/city\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"Austin\"}]}]},{\"predicate\":\"probe.example.com/schema@1.0.0/name\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"Ada\"}]}]}]}]}",
+      "expectedHash": "sha256:b1c27407eca51475f7fcf202af4f2fca94b42229364f663618704dd0ac558782",
+      "expectedSerialize": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Order",
+          "$id": "probe.example.com/data@1.0.0/o1",
+          "customer": [
+            {
+              "$name": "cust",
+              "name": "Ada",
+              "address": [
+                {
+                  "$name": "home",
+                  "city": "Austin"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "single-embedded-bare",
+      "description": "A bare map (no $ref, not in a list) under an object property is a single embedded value — canonicalized as a bare embedded, not a one-element list. Wire list-ness is explicit: the authored dict-keyed YAML form always arrives from the parser as a list; a node built programmatically may carry a bare embedded.",
+      "pkg": {
+        "publisher": "probe.example.com",
+        "packageName": "data",
+        "version": "1.0.0",
+        "label": "Embedded Probe Data"
+      },
+      "nodes": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Order",
+          "$id": "probe.example.com/data@1.0.0/o1",
+          "customer": {
+            "$name": "cust",
+            "name": "Ada"
+          }
+        }
+      ],
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"probe.example.com/data@1.0.0/data\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/label\",\"type\":\"string\",\"value\":\"Embedded Probe Data\"},{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"kanonak.org/core-kanonak@1.0.0/Package\"}]},{\"uri\":\"probe.example.com/data@1.0.0/o1\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"probe.example.com/schema@1.0.0/Order\"},{\"predicate\":\"probe.example.com/schema@1.0.0/customer\",\"type\":\"embedded\",\"name\":\"cust\",\"statements\":[{\"predicate\":\"probe.example.com/schema@1.0.0/name\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"Ada\"}]}]}]}",
+      "expectedHash": "sha256:9fba83a8366b8d8df05a2c891352032b466032283f880de1389f6ec3cde7d6de",
+      "expectedSerialize": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Order",
+          "$id": "probe.example.com/data@1.0.0/o1",
+          "customer": {
+            "$name": "cust",
+            "name": "Ada"
+          }
+        }
+      ]
+    },
+    {
+      "id": "empty-list-emits-nothing",
+      "description": "An empty list under any property contributes NO statement to the canonical form (absent and empty are identical at the canonical layer). The wire serialize preserves the empty list.",
+      "pkg": {
+        "publisher": "probe.example.com",
+        "packageName": "data",
+        "version": "1.0.0",
+        "label": "Embedded Probe Data"
+      },
+      "nodes": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Order",
+          "$id": "probe.example.com/data@1.0.0/o1",
+          "note": "A",
+          "items": []
+        }
+      ],
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"probe.example.com/data@1.0.0/data\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/label\",\"type\":\"string\",\"value\":\"Embedded Probe Data\"},{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"kanonak.org/core-kanonak@1.0.0/Package\"}]},{\"uri\":\"probe.example.com/data@1.0.0/o1\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"probe.example.com/schema@1.0.0/Order\"},{\"predicate\":\"probe.example.com/schema@1.0.0/note\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"A\"}]}]}",
+      "expectedHash": "sha256:34c5d1bb832581fe79127001d1bd7b27d9606ec92a3c9d0e821da2b775573cca",
+      "expectedSerialize": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Order",
+          "$id": "probe.example.com/data@1.0.0/o1",
+          "note": "A",
+          "items": []
+        }
+      ]
+    }
+  ]
+}
