@@ -19,6 +19,9 @@ use kanonak_canonical::{
 };
 use serde_json::{Map, Value as Json};
 
+mod typed;
+pub use typed::{to_node, KanonakNode, KanonakResource, Ref};
+
 /// The reserved `$`-envelope keys, which never become statements/predicates.
 /// `$name` (0.2.0) carries an embedded value's authored dict-key — hash-relevant.
 const ENVELOPE_KEYS: [&str; 6] = [
