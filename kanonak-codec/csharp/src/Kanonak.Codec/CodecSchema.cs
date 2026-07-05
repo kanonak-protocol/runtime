@@ -14,6 +14,13 @@ namespace Kanonak.Codec
 
         /// <summary>The datatype's canonical URI (carrier source) — present for datatype props.</summary>
         public string Datatype;
+
+        /// <summary>
+        /// The range class's canonical URI — present for object props (0.2.0). Maps an
+        /// embedded value's fields when the embedded carries no explicit <c>$type</c>
+        /// (range-derived typing: inference only, never materialized as a statement).
+        /// </summary>
+        public string Range;
     }
 
     /// <summary>A class's canonicalization schema: its durable URI + its (flattened) props.</summary>
@@ -74,6 +81,7 @@ namespace Kanonak.Codec
                         Kind = p.Value.GetProperty("kind").GetString(),
                     };
                     if (p.Value.TryGetProperty("datatype", out var dt)) prop.Datatype = dt.GetString();
+                    if (p.Value.TryGetProperty("range", out var rg)) prop.Range = rg.GetString();
                     cc.Props[p.Name] = prop;
                 }
                 schema.Classes[cls.Name] = cc;

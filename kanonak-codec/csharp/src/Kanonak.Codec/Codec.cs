@@ -16,15 +16,17 @@ namespace Kanonak.Codec
     ///
     /// A node is a plain map (the <c>$</c>-envelope plus alias-collapsed local-name
     /// fields). Field values are CLR primitives (<see cref="string"/>, <see cref="bool"/>,
-    /// numeric), an <see cref="IReadOnlyList{T}"/> of those, or a reference map
-    /// (<c>{ "$ref": uri }</c>). <c>$extra</c> is a map keyed by predicate URI.
+    /// numeric), an <see cref="IReadOnlyList{T}"/> of those, a reference map
+    /// (<c>{ "$ref": uri }</c>), or an embedded node (a map without <c>$ref</c>/<c>$id</c>).
+    /// <c>$extra</c> is a map keyed by predicate URI.
     /// </summary>
     public static class Codec
     {
-        /// <summary>Reserved <c>$</c>-envelope keys — never emitted as ontology statements.</summary>
+        /// <summary>Reserved <c>$</c>-envelope keys — never emitted as ontology statements.
+        /// <c>$name</c> (0.2.0) carries an embedded value's authored dict-key — hash-relevant.</summary>
         private static readonly HashSet<string> EnvelopeKeys = new HashSet<string>
         {
-            "$type", "$id", "$contentHash", "$version", "$extra",
+            "$type", "$id", "$name", "$contentHash", "$version", "$extra",
         };
 
         // -- Hashing / canonical form -------------------------------------------
@@ -83,8 +85,21 @@ namespace Kanonak.Codec
                 // The rdf:type triple every resource carries.
                 new Statement(schema.TypePredicate, new Reference(typeUri)),
             };
+            statements.AddRange(FieldStatements(node, cls, schema));
+            return statements;
+        }
 
-            foreach (var kv in node)
+        /// <summary>
+        /// The statements for one node-or-embedded's modeled fields + its <c>$extra</c> —
+        /// everything except the type triple (subjects always carry one; embeddeds only
+        /// when explicitly typed).
+        /// </summary>
+        private static List<Statement> FieldStatements(
+            IReadOnlyDictionary<string, object> source, CodecClass cls, CodecSchema schema)
+        {
+            var statements = new List<Statement>();
+
+            foreach (var kv in source)
             {
                 string key = kv.Key;
                 object raw = kv.Value;
@@ -100,17 +115,20 @@ namespace Kanonak.Codec
                 if (IsList(raw, out var items))
                 {
                     var values = new List<CanonicalValue>();
-                    foreach (var item in items) values.Add(Value(prop, item));
+                    foreach (var item in items) values.Add(Value(prop, item, schema));
+                    // An empty list contributes NO statement — absent and empty are identical
+                    // at the canonical layer (the wire Serialize still preserves the empty list).
+                    if (values.Count == 0) continue;
                     statements.Add(new Statement(prop.Predicate, new KList(values)));
                 }
                 else
                 {
-                    statements.Add(new Statement(prop.Predicate, Value(prop, raw)));
+                    statements.Add(new Statement(prop.Predicate, Value(prop, raw, schema)));
                 }
             }
 
             // Open-world extras outside the type-model, keyed by their own predicate URI.
-            if (node.TryGetValue("$extra", out var extraObj) && extraObj is IReadOnlyDictionary<string, object> extra)
+            if (source.TryGetValue("$extra", out var extraObj) && extraObj is IReadOnlyDictionary<string, object> extra)
             {
                 foreach (var kv in extra)
                 {
@@ -122,20 +140,60 @@ namespace Kanonak.Codec
             return statements;
         }
 
-        private static CanonicalValue Value(CodecProp prop, object raw)
+        private static CanonicalValue Value(CodecProp prop, object raw, CodecSchema schema)
         {
             if (prop.Kind == "object")
             {
-                if (raw is IReadOnlyDictionary<string, object> map && map.TryGetValue("$ref", out var refUri))
-                    return new Reference(Convert.ToString(refUri, CultureInfo.InvariantCulture));
+                // A node: a reference ({ "$ref": … }) or an embedded resource.
+                if (raw is IReadOnlyDictionary<string, object> map)
+                {
+                    if (map.TryGetValue("$ref", out var refUri))
+                        return new Reference(Convert.ToString(refUri, CultureInfo.InvariantCulture));
+                    return EmbeddedValue(prop, map, schema);
+                }
                 throw new ArgumentException(
-                    "Embedded object values are not yet supported by the codec runtime; " +
-                    "pass a reference ({\"$ref\": ...}).");
+                    "Object property " + prop.Predicate + " expects a reference " +
+                    "({\"$ref\": ...}) or an embedded node (a map), got " +
+                    (raw == null ? "null" : raw.GetType().Name));
             }
 
             Carrier? carrier = CarrierMap.CarrierOf(EntityUri.Parse(prop.Datatype));
             if (carrier == null) return new RawScalar(Lexical(raw));
             return new TypedScalar(carrier.Value, Lexical(raw));
+        }
+
+        /// <summary>
+        /// Canonicalize an embedded value (0.2.0): a map with no <c>$id</c>, an optional
+        /// <c>$name</c> (the authored dict-key — hash-relevant), an optional <c>$type</c>,
+        /// and schema-mapped fields. An explicit <c>$type</c> emits a type statement inside
+        /// the embedded (hash-relevant even when it equals the range-derived type); without
+        /// it, fields map via the containing property's range and NO type statement is
+        /// emitted — range-derived typing is inference only.
+        /// </summary>
+        private static CanonicalValue EmbeddedValue(
+            CodecProp prop, IReadOnlyDictionary<string, object> map, CodecSchema schema)
+        {
+            if (map.ContainsKey("$id"))
+                throw new ArgumentException(
+                    "An embedded value under " + prop.Predicate + " must not carry $id — " +
+                    "to point at a named resource, pass a reference ({\"$ref\": ...}).");
+
+            string explicitType = GetString(map, "$type");
+            string clsUri = explicitType ?? prop.Range;
+            if (clsUri == null)
+                throw new ArgumentException(
+                    "Cannot map embedded value under " + prop.Predicate + ": it carries " +
+                    "no $type and the property declares no range.");
+            if (!schema.Classes.TryGetValue(clsUri, out var cls))
+                throw new ArgumentException("no schema for embedded type " + clsUri);
+
+            var statements = FieldStatements(map, cls, schema);
+            if (explicitType != null)
+                statements.Add(new Statement(schema.TypePredicate, new Reference(explicitType)));
+
+            string name = GetString(map, "$name");
+            if (string.IsNullOrEmpty(name)) name = null;
+            return new Embedded(name, statements);
         }
 
         /// <summary>The raw lexical token of a scalar — the input the canonical form normalizes.</summary>
