@@ -6,7 +6,7 @@
 
     <groupId>org.kanonak</groupId>
     <artifactId>kanonak-codec</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
     <packaging>jar</packaging>
 
     <name>kanonak-codec</name>
@@ -58,7 +58,8 @@
         ../../kanonak-canonical/java/src/main/java/org/kanonak/canonical/*.java \
         src/main/java/org/kanonak/codec/*.java \
         conformance/Conformance.java
-      java -cp out Conformance ../vectors/codec-vectors.json
+      java -cp out Conformance   # runs ../vectors/codec-vectors.json AND
+                                 # ../vectors/codec-vectors-embedded.json
     -->
 
     <profiles>

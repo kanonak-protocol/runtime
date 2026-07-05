@@ -35,9 +35,12 @@ import org.kanonak.codec.CodecSchema.CodecProp;
 public final class Codec {
     private Codec() {}
 
-    /** Reserved {@code $}-envelope keys — never emitted as ontology statements. */
+    /**
+     * Reserved {@code $}-envelope keys — never emitted as ontology statements.
+     * {@code $name} (0.2.0) carries an embedded value's authored dict-key — hash-relevant.
+     */
     private static final Set<String> ENVELOPE_KEYS =
-        Set.of("$type", "$id", "$contentHash", "$version", "$extra");
+        Set.of("$type", "$id", "$name", "$contentHash", "$version", "$extra");
 
     /**
      * The raw lexical token of a scalar — the input the canonical form normalizes.
@@ -70,14 +73,20 @@ public final class Codec {
     }
 
     @SuppressWarnings("unchecked")
-    private static Value valueOf(CodecProp prop, Object raw) {
+    private static Value valueOf(CodecProp prop, Object raw, CodecSchema schema) {
         if ("object".equals(prop.kind())) {
-            if (raw instanceof Map<?, ?> m && m.containsKey("$ref")) {
-                return new Value.Ref(String.valueOf(((Map<String, Object>) m).get("$ref")));
+            // A node: a reference ({"$ref": ...}) or an embedded resource.
+            if (raw instanceof Map<?, ?> m) {
+                Map<String, Object> map = (Map<String, Object>) m;
+                if (map.containsKey("$ref")) {
+                    return new Value.Ref(String.valueOf(map.get("$ref")));
+                }
+                return embeddedValue(prop, map, schema);
             }
             throw new IllegalArgumentException(
-                "Embedded object values are not yet supported by the codec runtime; "
-                    + "pass a reference ({\"$ref\": ...}).");
+                "Object property " + prop.predicate() + " expects a reference ({\"$ref\": ...}) "
+                    + "or an embedded node (a map), got "
+                    + (raw == null ? "null" : raw.getClass().getSimpleName()));
         }
         Carrier carrier = Carrier.of(prop.datatype());
         if (carrier == null) {
@@ -86,7 +95,91 @@ public final class Codec {
         return new Value.Typed(carrier, lexical(raw));
     }
 
+    /**
+     * Canonicalize an embedded value (0.2.0): a map with no {@code $id}, an
+     * optional {@code $name} (the authored dict-key — hash-relevant), an optional
+     * {@code $type}, and schema-mapped fields. An explicit {@code $type} emits a
+     * type statement inside the embedded (hash-relevant even when it equals the
+     * range-derived type); without it, fields map via the containing property's
+     * {@code range} and NO type statement is emitted — range-derived typing is
+     * inference only.
+     */
+    private static Value embeddedValue(CodecProp prop, Map<String, Object> map, CodecSchema schema) {
+        if (map.containsKey("$id")) {
+            throw new IllegalArgumentException(
+                "An embedded value under " + prop.predicate() + " must not carry $id — "
+                    + "to point at a named resource, pass a reference ({\"$ref\": ...}).");
+        }
+        String explicitType = map.get("$type") instanceof String t ? t : null;
+        String clsUri = explicitType != null ? explicitType : prop.range();
+        if (clsUri == null) {
+            throw new IllegalArgumentException(
+                "Cannot map embedded value under " + prop.predicate() + ": it carries no $type "
+                    + "and the property declares no range.");
+        }
+        CodecClass cls = schema.classes().get(clsUri);
+        if (cls == null) {
+            throw new IllegalArgumentException("no schema for embedded type " + clsUri);
+        }
+
+        List<Statement> statements = fieldStatements(map, cls, schema);
+        if (explicitType != null) {
+            statements.add(new Statement(schema.typePredicate(), new Value.Ref(explicitType)));
+        }
+        String name = map.get("$name") instanceof String n && !n.isEmpty() ? n : null;
+        return new Value.Embed(name, statements);
+    }
+
+    /**
+     * The statements for one node-or-embedded's modeled fields plus its
+     * {@code $extra} — everything except the type triple (subjects always carry
+     * one; embeddeds only when explicitly typed).
+     */
     @SuppressWarnings("unchecked")
+    private static List<Statement> fieldStatements(Map<String, Object> source, CodecClass cls, CodecSchema schema) {
+        List<Statement> statements = new ArrayList<>();
+
+        for (Map.Entry<String, Object> entry : source.entrySet()) {
+            String key = entry.getKey();
+            Object raw = entry.getValue();
+            if (ENVELOPE_KEYS.contains(key) || raw == null) {
+                continue;
+            }
+            CodecProp prop = cls.props().get(key);
+            if (prop == null) {
+                // Not in the type-model — an open-world assertion. Preserved as a raw token.
+                statements.add(new Statement(key, new Value.Raw(lexical(raw))));
+                continue;
+            }
+            if (raw instanceof List<?> list) {
+                // An empty list contributes NO statement — absent and empty are
+                // identical at the canonical layer (the wire serialize still
+                // preserves the empty list).
+                if (list.isEmpty()) {
+                    continue;
+                }
+                List<Value> items = new ArrayList<>(list.size());
+                for (Object item : list) {
+                    items.add(valueOf(prop, item, schema));
+                }
+                statements.add(new Statement(prop.predicate(), new Value.KList(items)));
+            } else {
+                statements.add(new Statement(prop.predicate(), valueOf(prop, raw, schema)));
+            }
+        }
+
+        Object extra = source.get("$extra");
+        if (extra instanceof Map<?, ?> extraMap) {
+            for (Map.Entry<String, Object> e : ((Map<String, Object>) extraMap).entrySet()) {
+                if (e.getValue() == null) {
+                    continue;
+                }
+                statements.add(new Statement(e.getKey(), new Value.Raw(lexical(e.getValue()))));
+            }
+        }
+        return statements;
+    }
+
     private static List<Statement> statementsFor(Map<String, Object> node, CodecSchema schema) {
         Object typeUri = node.get("$type");
         if (!(typeUri instanceof String) || ((String) typeUri).isEmpty()) {
@@ -100,39 +193,7 @@ public final class Codec {
         List<Statement> statements = new ArrayList<>();
         // The rdf:type triple every resource carries.
         statements.add(new Statement(schema.typePredicate(), new Value.Ref((String) typeUri)));
-
-        for (Map.Entry<String, Object> entry : node.entrySet()) {
-            String key = entry.getKey();
-            Object raw = entry.getValue();
-            if (ENVELOPE_KEYS.contains(key) || raw == null) {
-                continue;
-            }
-            CodecProp prop = cls.props().get(key);
-            if (prop == null) {
-                // Not in the type-model — an open-world assertion. Preserved as a raw token.
-                statements.add(new Statement(key, new Value.Raw(lexical(raw))));
-                continue;
-            }
-            if (raw instanceof List<?> list) {
-                List<Value> items = new ArrayList<>(list.size());
-                for (Object item : list) {
-                    items.add(valueOf(prop, item));
-                }
-                statements.add(new Statement(prop.predicate(), new Value.KList(items)));
-            } else {
-                statements.add(new Statement(prop.predicate(), valueOf(prop, raw)));
-            }
-        }
-
-        Object extra = node.get("$extra");
-        if (extra instanceof Map<?, ?> extraMap) {
-            for (Map.Entry<String, Object> e : ((Map<String, Object>) extraMap).entrySet()) {
-                if (e.getValue() == null) {
-                    continue;
-                }
-                statements.add(new Statement(e.getKey(), new Value.Raw(lexical(e.getValue()))));
-            }
-        }
+        statements.addAll(fieldStatements(node, cls, schema));
         return statements;
     }
 
