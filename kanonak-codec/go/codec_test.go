@@ -47,7 +47,18 @@ type codecVectors struct {
 }
 
 func TestCodecVectors(t *testing.T) {
-	data, err := os.ReadFile("../vectors/codec-vectors.json")
+	runVectorFile(t, "../vectors/codec-vectors.json")
+}
+
+func TestCodecVectorsEmbedded(t *testing.T) {
+	runVectorFile(t, "../vectors/codec-vectors-embedded.json")
+}
+
+// runVectorFile asserts every case in one golden-vector file: canonical form,
+// content hash, and wire serialization.
+func runVectorFile(t *testing.T, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read vectors: %v", err)
 	}
