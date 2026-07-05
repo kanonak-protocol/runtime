@@ -52,7 +52,8 @@ public record CodecSchema(
                         props.put(pe.getKey(), new CodecProp(
                             (String) p.get("predicate"),
                             (String) p.get("kind"),
-                            (String) p.get("datatype")));
+                            (String) p.get("datatype"),
+                            (String) p.get("range")));
                     }
                 }
                 classes.put(e.getKey(), new CodecClass((String) c.get("typeUri"), props));
@@ -175,7 +176,16 @@ public record CodecSchema(
      *   <li>{@code predicate} — the predicate's durable canonical URI (resolved version).</li>
      *   <li>{@code kind} — {@code "datatype"} (typed scalar) vs {@code "object"} (reference/embedded).</li>
      *   <li>{@code datatype} — the datatype's canonical URI (carrier source); present for datatype props.</li>
+     *   <li>{@code range} — the range class's canonical URI (0.2.0); optionally present for object
+     *       props. Maps an embedded value's fields when the embedded carries no explicit
+     *       {@code $type} (range-derived typing: inference only, never materialized as a
+     *       statement); may be {@code null}.</li>
      * </ul>
      */
-    public record CodecProp(String predicate, String kind, String datatype) {}
+    public record CodecProp(String predicate, String kind, String datatype, String range) {
+        /** Convenience constructor for a prop without a range. */
+        public CodecProp(String predicate, String kind, String datatype) {
+            this(predicate, kind, datatype, null);
+        }
+    }
 }

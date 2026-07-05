@@ -4,28 +4,65 @@ using System.IO;
 using System.Text.Json;
 using Kanonak.Codec;
 
-// Conformance runner: drives the shared codec vectors through the C# kanonak-codec
-// port and asserts the canonical form, content hash, and normalized-JSON serialize
-// all match the authoritative (TypeScript-generated) expected values. Serialize is
-// compared structurally (semantically), not by JSON text or key order.
-//   dotnet run -- <path-to-codec-vectors.json>
+// Conformance runner: drives the shared codec vector files (the 0.1.0 base vectors
+// plus the 0.2.0 embedded-value vectors) through the C# kanonak-codec port and
+// asserts the canonical form, content hash, and normalized-JSON serialize all match
+// the authoritative (TypeScript-generated) expected values. Serialize is compared
+// structurally (semantically), not by JSON text or key order.
+//   dotnet run -- <path-to-codec-vectors.json> [<more-vector-files>...]
 
 class Program
 {
+    /// <summary>The shared vector files every conformant port must pass.</summary>
+    static readonly string[] VectorFiles = { "codec-vectors.json", "codec-vectors-embedded.json" };
+
     static int Main(string[] args)
     {
-        string vectorsPath = args.Length > 0 ? args[0] : FindVectors();
-        if (vectorsPath == null || !File.Exists(vectorsPath))
+        var vectorsPaths = new List<string>();
+        if (args.Length > 0)
         {
-            Console.Error.WriteLine("codec-vectors.json not found; pass it as the first argument");
-            return 2;
+            vectorsPaths.AddRange(args);
+        }
+        else
+        {
+            foreach (var name in VectorFiles)
+            {
+                string found = FindVectors(name);
+                if (found == null)
+                {
+                    Console.Error.WriteLine(name + " not found; pass the vector files as arguments");
+                    return 2;
+                }
+                vectorsPaths.Add(found);
+            }
         }
 
+        int passed = 0, failed = 0;
+        foreach (var vectorsPath in vectorsPaths)
+        {
+            if (!File.Exists(vectorsPath))
+            {
+                Console.Error.WriteLine(vectorsPath + " not found");
+                return 2;
+            }
+            int filePassed, fileFailed;
+            RunFile(vectorsPath, out filePassed, out fileFailed);
+            Console.WriteLine($"{Path.GetFileName(vectorsPath)}: {filePassed} passed, {fileFailed} failed");
+            passed += filePassed;
+            failed += fileFailed;
+        }
+
+        Console.WriteLine($"\n{passed} passed, {failed} failed");
+        return failed == 0 ? 0 : 1;
+    }
+
+    static void RunFile(string vectorsPath, out int passed, out int failed)
+    {
         using var doc = JsonDocument.Parse(File.ReadAllText(vectorsPath));
         var root = doc.RootElement;
         CodecSchema schema = DecodeSchema(root.GetProperty("schema"));
 
-        int passed = 0, failed = 0;
+        passed = 0; failed = 0;
         foreach (var c in root.GetProperty("cases").EnumerateArray())
         {
             string id = c.GetProperty("id").GetString();
@@ -62,8 +99,6 @@ class Program
             }
         }
 
-        Console.WriteLine($"\n{passed} passed, {failed} failed");
-        return failed == 0 ? 0 : 1;
     }
 
     // -- Vector decoders -------------------------------------------------------
@@ -87,6 +122,7 @@ class Program
                     Kind = p.Value.GetProperty("kind").GetString(),
                 };
                 if (p.Value.TryGetProperty("datatype", out var dt)) prop.Datatype = dt.GetString();
+                if (p.Value.TryGetProperty("range", out var rg)) prop.Range = rg.GetString();
                 cc.Props[p.Name] = prop;
             }
             schema.Classes[cls.Name] = cc;
@@ -172,14 +208,14 @@ class Program
 
     static string Show(object o) => JsonSerializer.Serialize(o);
 
-    static string FindVectors()
+    static string FindVectors(string fileName)
     {
         var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
         while (dir != null)
         {
-            string candidate = Path.Combine(dir.FullName, "vectors", "codec-vectors.json");
+            string candidate = Path.Combine(dir.FullName, "vectors", fileName);
             if (File.Exists(candidate)) return candidate;
-            candidate = Path.Combine(dir.FullName, "kanonak-codec", "vectors", "codec-vectors.json");
+            candidate = Path.Combine(dir.FullName, "kanonak-codec", "vectors", fileName);
             if (File.Exists(candidate)) return candidate;
             dir = dir.Parent;
         }

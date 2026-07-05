@@ -13,11 +13,14 @@ sys.path.insert(0, os.path.join(_HERE, "..", "..", "kanonak-canonical", "python"
 
 from kanonak_codec import canonical_form, content_hash, serialize, deserialize  # noqa: E402
 
-VECTORS = os.path.join(_HERE, "..", "vectors", "codec-vectors.json")
+VECTOR_FILES = [
+    os.path.join(_HERE, "..", "vectors", "codec-vectors.json"),
+    os.path.join(_HERE, "..", "vectors", "codec-vectors-embedded.json"),
+]
 
 
-def main() -> int:
-    with io.open(VECTORS, encoding="utf-8") as fh:
+def run_file(vectors: str) -> "tuple[int, int]":
+    with io.open(vectors, encoding="utf-8") as fh:
         data = json.load(fh)
     schema = data["schema"]
     passed = 0
@@ -57,6 +60,17 @@ def main() -> int:
                 print(f"FAIL [{cid}] deserialize[{i}] $type")
             else:
                 passed += 1
+
+    return passed, failed
+
+
+def main() -> int:
+    passed = 0
+    failed = 0
+    for vectors in VECTOR_FILES:
+        p, f = run_file(vectors)
+        passed += p
+        failed += f
 
     print(f"\n{passed} passed, {failed} failed")
     return 1 if failed else 0

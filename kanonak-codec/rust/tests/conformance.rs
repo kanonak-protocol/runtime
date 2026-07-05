@@ -5,17 +5,17 @@ use serde_json::Value as J;
 use std::fs;
 use std::path::PathBuf;
 
-fn vectors_path() -> PathBuf {
+fn vectors_path(file: &str) -> PathBuf {
     // tests run from the crate root (rust/); vectors are at ../vectors.
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     p.push("..");
     p.push("vectors");
-    p.push("codec-vectors.json");
+    p.push(file);
     p
 }
 
-fn read_doc() -> J {
-    serde_json::from_str(&fs::read_to_string(vectors_path()).unwrap()).unwrap()
+fn read_doc(file: &str) -> J {
+    serde_json::from_str(&fs::read_to_string(vectors_path(file)).unwrap()).unwrap()
 }
 
 fn as_node(v: &J) -> Node {
@@ -24,14 +24,28 @@ fn as_node(v: &J) -> Node {
 
 #[test]
 fn codec_vectors() {
-    let doc = read_doc();
+    run_file("codec-vectors.json");
+}
+
+#[test]
+fn codec_vectors_embedded() {
+    run_file("codec-vectors-embedded.json");
+}
+
+fn run_file(file: &str) {
+    let doc = read_doc(file);
     let schema = doc["schema"].clone();
     let mut fails = 0;
 
     for case in doc["cases"].as_array().unwrap() {
         let id = case["id"].as_str().unwrap();
         let pkg = case["pkg"].clone();
-        let nodes: Vec<Node> = case["nodes"].as_array().unwrap().iter().map(as_node).collect();
+        let nodes: Vec<Node> = case["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(as_node)
+            .collect();
 
         let form = canonical_form(&nodes, &schema, &pkg).unwrap();
         let exp_form = case["expectedCanonicalForm"].as_str().unwrap();
@@ -64,5 +78,5 @@ fn codec_vectors() {
         }
     }
 
-    assert_eq!(fails, 0, "{} codec vector check(s) failed", fails);
+    assert_eq!(fails, 0, "{}: {} codec vector check(s) failed", file, fails);
 }

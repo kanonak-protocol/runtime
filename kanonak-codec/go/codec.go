@@ -18,15 +18,20 @@ import (
 )
 
 // envelopeKeys are the $-envelope keys excluded from statement/field emission.
+// $name (0.2.0) carries an embedded value's authored dict-key — hash-relevant.
 var envelopeKeys = map[string]bool{
-	"$type": true, "$id": true, "$contentHash": true, "$version": true, "$extra": true,
+	"$type": true, "$id": true, "$name": true, "$contentHash": true, "$version": true, "$extra": true,
 }
 
-// Prop describes a single modeled property of a class.
+// Prop describes a single modeled property of a class. Range (0.2.0) is the
+// range class's URI — present for object props; maps an embedded value's fields
+// when the embedded carries no explicit $type (inference only, never
+// materialized as a statement).
 type Prop struct {
 	Predicate string `json:"predicate"`
 	Kind      string `json:"kind"` // "datatype" | "object"
 	Datatype  string `json:"datatype,omitempty"`
+	Range     string `json:"range,omitempty"`
 }
 
 // Class describes a modeled type: its URI and its properties keyed by local name.
@@ -71,21 +76,23 @@ func lexical(value interface{}) (string, error) {
 }
 
 // value builds a canonical Value for a single (non-list) raw field value.
-func value(prop Prop, raw interface{}) (canonical.Value, error) {
+func value(prop Prop, raw interface{}, schema CodecSchema) (canonical.Value, error) {
 	if prop.Kind == "object" {
+		// A node: a reference ({"$ref"}) or an embedded resource.
 		m, ok := raw.(map[string]interface{})
-		if ok {
-			if ref, has := m["$ref"]; has {
-				uri, isStr := ref.(string)
-				if !isStr {
-					return nil, fmt.Errorf("codec: object $ref must be a string, got %T", ref)
-				}
-				return canonical.Ref{URI: uri}, nil
-			}
+		if !ok {
+			return nil, fmt.Errorf(
+				"codec: object property %s expects a reference ({\"$ref\": ...}) or an "+
+					"embedded node (a map), got %T", prop.Predicate, raw)
 		}
-		return nil, fmt.Errorf(
-			"codec: embedded object values are not yet supported by the codec runtime; " +
-				"pass a reference ({\"$ref\": ...})")
+		if ref, has := m["$ref"]; has {
+			uri, isStr := ref.(string)
+			if !isStr {
+				return nil, fmt.Errorf("codec: object $ref must be a string, got %T", ref)
+			}
+			return canonical.Ref{URI: uri}, nil
+		}
+		return embeddedValue(prop, m, schema)
 	}
 	lex, err := lexical(raw)
 	if err != nil {
@@ -98,22 +105,57 @@ func value(prop Prop, raw interface{}) (canonical.Value, error) {
 	return canonical.Typed{Carrier: carrier, Lexical: lex}, nil
 }
 
-// statements builds the canonical statements for one node.
-func statements(node map[string]interface{}, schema CodecSchema) ([]canonical.Statement, error) {
-	typeURI, _ := node["$type"].(string)
-	if typeURI == "" {
-		return nil, fmt.Errorf("codec: node is missing $type")
+// embeddedValue canonicalizes an embedded value (0.2.0): a map with no $id, an
+// optional $name (the authored dict-key — hash-relevant), an optional $type,
+// and schema-mapped fields. An explicit $type emits a type statement inside the
+// embedded (hash-relevant even when it equals the range-derived type); without
+// it, fields map via the containing property's Range and NO type statement is
+// emitted — range-derived typing is inference only.
+func embeddedValue(prop Prop, m map[string]interface{}, schema CodecSchema) (canonical.Value, error) {
+	if _, has := m["$id"]; has {
+		return nil, fmt.Errorf(
+			"codec: an embedded value under %s must not carry $id — to point at a "+
+				"named resource, pass a reference ({\"$ref\": ...})", prop.Predicate)
 	}
-	cls, ok := schema.Classes[typeURI]
+	explicitType, _ := m["$type"].(string)
+	clsURI := explicitType
+	if clsURI == "" {
+		clsURI = prop.Range
+	}
+	if clsURI == "" {
+		return nil, fmt.Errorf(
+			"codec: cannot map embedded value under %s: it carries no $type and the "+
+				"property declares no range", prop.Predicate)
+	}
+	cls, ok := schema.Classes[clsURI]
 	if !ok {
-		return nil, fmt.Errorf("codec: no schema for type %s", typeURI)
+		return nil, fmt.Errorf("codec: no schema for embedded type %s", clsURI)
 	}
 
-	out := []canonical.Statement{
-		{Predicate: schema.TypePredicate, Value: canonical.Ref{URI: typeURI}},
+	stmts, err := fieldStatements(m, cls, schema)
+	if err != nil {
+		return nil, err
 	}
+	if explicitType != "" {
+		stmts = append(stmts, canonical.Statement{
+			Predicate: schema.TypePredicate,
+			Value:     canonical.Ref{URI: explicitType},
+		})
+	}
+	var name *string
+	if n, isStr := m["$name"].(string); isStr && n != "" {
+		name = &n
+	}
+	return canonical.Embedded{Name: name, Statements: stmts}, nil
+}
 
-	for key, raw := range node {
+// fieldStatements builds the canonical statements for one node-or-embedded's
+// modeled fields plus its $extra — everything except the type triple (subjects
+// always carry one; embeddeds only when explicitly typed).
+func fieldStatements(source map[string]interface{}, cls Class, schema CodecSchema) ([]canonical.Statement, error) {
+	var out []canonical.Statement
+
+	for key, raw := range source {
 		if envelopeKeys[key] || raw == nil {
 			continue
 		}
@@ -127,9 +169,15 @@ func statements(node map[string]interface{}, schema CodecSchema) ([]canonical.St
 			continue
 		}
 		if list, isList := raw.([]interface{}); isList {
+			// An empty list contributes NO statement — absent and empty are
+			// identical at the canonical layer (the wire serialize still
+			// preserves the empty list).
+			if len(list) == 0 {
+				continue
+			}
 			items := make([]canonical.Value, 0, len(list))
 			for _, x := range list {
-				v, err := value(prop, x)
+				v, err := value(prop, x, schema)
 				if err != nil {
 					return nil, err
 				}
@@ -137,7 +185,7 @@ func statements(node map[string]interface{}, schema CodecSchema) ([]canonical.St
 			}
 			out = append(out, canonical.Statement{Predicate: prop.Predicate, Value: canonical.List{Items: items}})
 		} else {
-			v, err := value(prop, raw)
+			v, err := value(prop, raw, schema)
 			if err != nil {
 				return nil, err
 			}
@@ -145,7 +193,7 @@ func statements(node map[string]interface{}, schema CodecSchema) ([]canonical.St
 		}
 	}
 
-	if extra, ok := node["$extra"].(map[string]interface{}); ok {
+	if extra, ok := source["$extra"].(map[string]interface{}); ok {
 		for predicate, raw := range extra {
 			if raw == nil {
 				continue
@@ -158,6 +206,28 @@ func statements(node map[string]interface{}, schema CodecSchema) ([]canonical.St
 		}
 	}
 	return out, nil
+}
+
+// statements builds the canonical statements for one subject node: the rdf:type
+// triple, then its fields.
+func statements(node map[string]interface{}, schema CodecSchema) ([]canonical.Statement, error) {
+	typeURI, _ := node["$type"].(string)
+	if typeURI == "" {
+		return nil, fmt.Errorf("codec: node is missing $type")
+	}
+	cls, ok := schema.Classes[typeURI]
+	if !ok {
+		return nil, fmt.Errorf("codec: no schema for type %s", typeURI)
+	}
+
+	out := []canonical.Statement{
+		{Predicate: schema.TypePredicate, Value: canonical.Ref{URI: typeURI}},
+	}
+	fields, err := fieldStatements(node, cls, schema)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, fields...), nil
 }
 
 // BuildPackage builds the canonical input model: a subject per node plus the

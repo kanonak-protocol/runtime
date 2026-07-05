@@ -38,8 +38,11 @@ Numeric scalars may be supplied as a plain `Number` or as a `JsonNumber` (which
 retains the exact source token, so the lexical form has no locale or
 trailing-zero/scientific artifacts).
 
-Embedded object values (a node inline rather than `{"$ref": ...}`) are not yet
-supported and throw loudly.
+An object property's value is either a reference (`{"$ref": uri}`) or an
+embedded value (0.2.0): a map with no `$id`, an optional `$name` (the authored
+dict-key — hash-relevant), an optional `$type` (emits a type statement when
+present), and schema-mapped fields. Without `$type`, fields map via the
+containing property's `range` (inference only — no type statement is emitted).
 
 ## Conformance
 
@@ -52,7 +55,8 @@ javac -d out \
   ../../kanonak-canonical/java/src/main/java/org/kanonak/canonical/*.java \
   src/main/java/org/kanonak/codec/*.java \
   conformance/Conformance.java
-java -cp out Conformance ../vectors/codec-vectors.json
+java -cp out Conformance   # runs ../vectors/codec-vectors.json AND
+                           # ../vectors/codec-vectors-embedded.json
 ```
 
 Expected basic-case hash:

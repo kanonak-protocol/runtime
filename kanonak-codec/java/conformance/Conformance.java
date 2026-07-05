@@ -23,10 +23,24 @@ import org.kanonak.codec.PackageContext;
  */
 public final class Conformance {
     public static void main(String[] args) throws Exception {
-        String vectors = args.length > 0
-            ? args[0]
-            : "../vectors/codec-vectors.json";
+        String[] vectorFiles = args.length > 0
+            ? args
+            : new String[] {"../vectors/codec-vectors.json", "../vectors/codec-vectors-embedded.json"};
 
+        int passed = 0;
+        int failed = 0;
+        for (String vectors : vectorFiles) {
+            int[] counts = runFile(vectors);
+            passed += counts[0];
+            failed += counts[1];
+            System.out.println(vectors + ": " + counts[0] + " passed, " + counts[1] + " failed");
+        }
+
+        System.out.println("\n" + passed + " passed, " + failed + " failed");
+        System.exit(failed == 0 ? 0 : 1);
+    }
+
+    static int[] runFile(String vectors) throws Exception {
         @SuppressWarnings("unchecked")
         Map<String, Object> data = (Map<String, Object>) Json.parse(
             Files.readString(Paths.get(vectors), StandardCharsets.UTF_8));
@@ -84,8 +98,7 @@ public final class Conformance {
             }
         }
 
-        System.out.println("\n" + passed + " passed, " + failed + " failed");
-        System.exit(failed == 0 ? 0 : 1);
+        return new int[] {passed, failed};
     }
 
     // -- Schema / package parsing -------------------------------------------------
@@ -100,7 +113,8 @@ public final class Conformance {
                 props.put(pe.getKey(), new CodecProp(
                     (String) p.get("predicate"),
                     (String) p.get("kind"),
-                    (String) p.get("datatype")));
+                    (String) p.get("datatype"),
+                    (String) p.get("range")));
             }
             classes.put(e.getKey(), new CodecClass((String) c.get("typeUri"), props));
         }
