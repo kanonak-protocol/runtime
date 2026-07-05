@@ -17,14 +17,14 @@ meta:
   expression_runtime_version: "1"                 # frozen expression-evaluation rules
   wire_format_version: "1"                        # frozen wire-kernel rules
   publish_order: [canonical, codec, expression, wire]   # expression + wire have no cross-dep; order is loose for them
-  # Go module versions — the Go "registry" is git tags (`kanonak-<member>/go/v<ver>`)
+  # Go module versions â€” the Go "registry" is git tags (`kanonak-<member>/go/v<ver>`)
   # pushed BY the release workflow's publish-go job (NEVER manually; the manual step
-  # was forgotten for expression 0.1.0 — found 2026-07-03). The module proxy caches a
+  # was forgotten for expression 0.1.0 â€” found 2026-07-03). The module proxy caches a
   # tag IMMUTABLY on first fetch: to release a new Go version, bump the member HERE
   # and re-run the workflow; existing tags are never touched or moved.
   go_module_versions:
     canonical: "0.1.0"
-    codec: "0.2.0"
+    codec: "0.3.0"
     expression: "0.1.0"
     wire: "0.1.0"
   # GitHub Actions OIDC (no stored token) is preferred where supported. A workflow
@@ -187,5 +187,5 @@ targets:
       - Publish canonical's tag first so codec's require resolves from the proxy (the job tags in publish_order).
     gotchas:
       - "GitHub module paths (not a kanonak.org vanity): the monorepo subdir layout is incompatible with vanity import-prefix derivation. codec/go.mod keeps a local replace for monorepo dev; consumers ignore it and resolve canonical v0.1.0 from the proxy."
-      - "Go has NO registry uploads and NO GitHub-Release requirement — a plain git tag is the release. proxy.golang.org caches a served version FOREVER: never move or reuse a tag; bump meta.go_module_versions instead."
-      - "Without a tag, `go get @latest` still resolves — to an unpinned pseudo-version (v0.0.0-<date>-<commit>). A missing tag is therefore SILENT drift; the release-audit job hard-fails on it."
+      - "Go has NO registry uploads and NO GitHub-Release requirement â€” a plain git tag is the release. proxy.golang.org caches a served version FOREVER: never move or reuse a tag; bump meta.go_module_versions instead."
+      - "Without a tag, `go get @latest` still resolves â€” to an unpinned pseudo-version (v0.0.0-<date>-<commit>). A missing tag is therefore SILENT drift; the release-audit job hard-fails on it."
