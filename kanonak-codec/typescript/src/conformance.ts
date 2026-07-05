@@ -6,12 +6,18 @@
  */
 import { readFileSync } from 'node:fs';
 import {
+  embed,
   packageCanonicalForm,
   packageContentHash,
+  ref,
+  refTo,
   serialize,
+  toNode,
   type CodecSchema,
   type CodecNode,
+  type KanonakNode,
   type PackageContext,
+  type Ref,
 } from './index.js';
 
 let totalFails = 0;
@@ -49,6 +55,112 @@ function runFile(relative: string): void {
 
 runFile('codec-vectors.json');
 runFile('codec-vectors-embedded.json');
+
+// -- Typed-surface conformance: generated-style typed objects (KanonakNode +
+//    Ref<T> arm constructors) reproduce the SAME golden vectors. Also the
+//    executable spec for the TS SDK generator's target shape.
+
+interface Order extends KanonakNode {
+  note?: string;
+  items?: Ref<LineItem>[];
+  customer?: Ref<Customer>[] | Ref<Customer>; // list in most cases; bare in single-embedded-bare
+}
+interface LineItem extends KanonakNode { sku?: string; qty?: number }
+interface Customer extends KanonakNode { name?: string; address?: Ref<Address>[] }
+interface Address extends KanonakNode { city?: string }
+interface Person extends KanonakNode { name?: string }
+interface Account extends KanonakNode {
+  accountCode?: string; seats?: number; rate?: number; active?: boolean;
+  owner?: Ref<Person>; tags?: string[];
+}
+
+const SCHEMA_NS = 'probe.example.com/schema@1.0.0';
+const DATA = 'probe.example.com/data@1.0.0';
+
+function loadDoc(relative: string): any {
+  return JSON.parse(readFileSync(new URL(`../../vectors/${relative}`, import.meta.url), 'utf8'));
+}
+
+function checkTyped(doc: any, caseId: string, typed: KanonakNode[]): void {
+  const c = doc.cases.find((x: any) => x.id === caseId);
+  if (!c) { totalFails++; console.error(`typed ${caseId}: vector case not found`); return; }
+  const schema: CodecSchema = doc.schema;
+  const nodes = typed.map((t) => toNode(t, schema));
+  const form = packageCanonicalForm(nodes, schema, c.pkg);
+  const hash = packageContentHash(nodes, schema, c.pkg);
+  if (form !== c.expectedCanonicalForm) {
+    totalFails++;
+    console.error(`typed ${caseId}: canonical form mismatch\n  expected ${c.expectedCanonicalForm}\n  got      ${form}`);
+  } else if (hash !== c.expectedHash) {
+    totalFails++;
+    console.error(`typed ${caseId}: hash expected ${c.expectedHash} got ${hash}`);
+  } else {
+    typedPass++;
+  }
+}
+
+let typedPass = 0;
+const emb = loadDoc('codec-vectors-embedded.json');
+const bas = loadDoc('codec-vectors.json');
+
+const namedInList: Order = {
+  $id: `${DATA}/o1`, $type: `${SCHEMA_NS}/Order`, note: 'A',
+  items: [embed<LineItem>({ sku: 'X', qty: 1 }, 'first')],
+};
+checkTyped(emb, 'embedded-named-in-list', [namedInList]);
+
+const unnamedPositional: Order = {
+  $id: `${DATA}/o1`, $type: `${SCHEMA_NS}/Order`, note: 'A',
+  items: [embed<LineItem>({ sku: 'X', qty: 1 })],
+};
+checkTyped(emb, 'embedded-unnamed-positional', [unnamedPositional]);
+
+const explicitType: Order = {
+  $id: `${DATA}/o1`, $type: `${SCHEMA_NS}/Order`, note: 'A',
+  items: [embed<LineItem>({ $type: `${SCHEMA_NS}/LineItem`, sku: 'X', qty: 1 }, 'first')],
+};
+checkTyped(emb, 'embedded-explicit-type', [explicitType]);
+
+const listOrder: Order = {
+  $id: `${DATA}/o1`, $type: `${SCHEMA_NS}/Order`,
+  items: [
+    embed<LineItem>({ sku: 'X', qty: 1 }, 'a'),
+    embed<LineItem>({ sku: 'Y', qty: 2 }, 'b'),
+  ],
+};
+checkTyped(emb, 'embedded-list-order', [listOrder]);
+
+const nested: Order = {
+  $id: `${DATA}/o1`, $type: `${SCHEMA_NS}/Order`,
+  customer: [embed<Customer>({
+    name: 'Ada',
+    address: [embed<Address>({ city: 'Austin' }, 'home')],
+  }, 'cust')],
+};
+checkTyped(emb, 'embedded-nested', [nested]);
+
+const bareCustomer: Order = {
+  $id: `${DATA}/o1`, $type: `${SCHEMA_NS}/Order`,
+  customer: embed<Customer>({ name: 'Ada' }, 'cust'),
+};
+checkTyped(emb, 'single-embedded-bare', [bareCustomer]);
+
+const emptyList: Order = {
+  $id: `${DATA}/o1`, $type: `${SCHEMA_NS}/Order`, note: 'A', items: [],
+};
+checkTyped(emb, 'empty-list-emits-nothing', [emptyList]);
+
+const alice: Person = { $id: `${DATA}/p1`, $type: `${SCHEMA_NS}/Person`, name: 'Alice' };
+for (const owner of [ref(`${DATA}/p1`), refTo(alice)]) {
+  const account: Account = {
+    $id: `${DATA}/a1`, $type: `${SCHEMA_NS}/Account`,
+    accountCode: 'paul', seats: 5, rate: 1.5, active: true,
+    owner, tags: ['x', 'y'],
+  };
+  checkTyped(bas, 'basic-scalars-ref-list', [alice, account]);
+}
+
+console.log(`typed surface: ${typedPass}/9 pass`);
 
 if (totalFails > 0) { console.error(`\n${totalFails} FAILURES`); process.exit(1); }
 console.log('\nALL VECTORS PASS');
