@@ -48,4 +48,16 @@ const hash = packageContentHash(nodes, Schema, {
 `canonicalFormVersion: "1"` — the content-address rules are frozen and evolve
 only by minting a new version (via the underlying canonical-form spec).
 
+## Embedded values (0.2.0)
+
+An object property's value is a **reference** (`{ $ref: uri }`) or an
+**embedded node**: a map with no `$id`, an optional `$name` (the authored
+dict-key — hash-relevant), an optional `$type`, and schema-mapped fields.
+An explicit `$type` emits a type statement inside the embedded (hash-relevant
+even when it equals the range-derived type); without one, fields are mapped via
+the containing property's `range` and no type statement is emitted. Embedded
+collections are ordered lists — list order is semantic and hashed. An empty
+list contributes no statement (absent and empty are identical at the canonical
+layer). Gated by `vectors/codec-vectors-embedded.json`.
+
 Source & issues: https://github.com/kanonak-protocol/runtime

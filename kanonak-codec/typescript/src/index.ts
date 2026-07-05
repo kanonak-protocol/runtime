@@ -23,7 +23,7 @@ import { canonicalForm, canonicalHash } from '@kanonak-protocol/canonical';
 import type { CanonicalInput, CanonicalInputStatement, CanonicalInputValue } from '@kanonak-protocol/canonical';
 
 /** Reserved `$`-envelope keys — never emitted as ontology statements. */
-const ENVELOPE_KEYS = new Set(['$type', '$id', '$contentHash', '$version', '$extra']);
+const ENVELOPE_KEYS = new Set(['$type', '$id', '$name', '$contentHash', '$version', '$extra']);
 
 /** One property's canonicalization metadata, as embedded by the generator. */
 export interface CodecProp {
@@ -33,6 +33,12 @@ export interface CodecProp {
   kind: 'datatype' | 'object';
   /** The datatype's canonical URI (carrier source) — present for datatype props. */
   datatype?: string;
+  /**
+   * The range class's canonical URI — present for object props (0.2.0). Maps an
+   * embedded value's fields when the embedded carries no explicit `$type`
+   * (range-derived typing: inference only, never materialized as a statement).
+   */
+  range?: string;
 }
 
 /** A class's canonicalization schema: its durable URI + its (flattened) props. */
@@ -94,34 +100,74 @@ function lexical(value: unknown): string {
 }
 
 /** Build the `CanonicalInputValue` for one (already array-unwrapped) field value. */
-function valueOf(prop: CodecProp, raw: unknown): CanonicalInputValue {
+function valueOf(prop: CodecProp, raw: unknown, schema: CodecSchema): CanonicalInputValue {
   if (prop.kind === 'object') {
     // A node: a reference (`{ $ref }`) or an embedded resource.
-    if (raw && typeof raw === 'object' && '$ref' in (raw as Record<string, unknown>)) {
-      return { ref: String((raw as { $ref: unknown }).$ref) };
+    if (raw && typeof raw === 'object') {
+      const map = raw as Record<string, unknown>;
+      if ('$ref' in map) return { ref: String(map.$ref) };
+      return embeddedValue(prop, map, schema);
     }
     throw new Error(
-      'Embedded object values are not yet supported by the codec runtime; ' +
-        'pass a reference ({ $ref }) for now.'
+      `Object property ${prop.predicate} expects a reference ({ $ref }) or an ` +
+        `embedded node (a map), got ${typeof raw}`
     );
   }
   // Datatype property — a typed scalar carrying its datatype URI.
   return { lit: lexical(raw), datatype: prop.datatype! };
 }
 
-/** Build the statements for one node's modeled fields + its `$extra`. */
-function statementsFor(node: CodecNode, schema: CodecSchema): CanonicalInputStatement[] {
-  const typeUri = node.$type;
-  if (!typeUri) throw new Error(`Node ${node.$id ?? '(no $id)'} is missing $type`);
-  const cls = schema.classes[typeUri];
-  if (!cls) throw new Error(`No schema for type ${typeUri}`);
+/**
+ * Canonicalize an embedded value: a map with no `$id`, an optional `$name` (the
+ * authored dict-key — hash-relevant), an optional `$type`, and schema-mapped
+ * fields. An explicit `$type` emits a type statement inside the embedded (and is
+ * therefore hash-relevant even when it equals the range-derived type); without
+ * it, fields are mapped via the containing property's `range` and NO type
+ * statement is emitted — range-derived typing is inference only.
+ */
+function embeddedValue(
+  prop: CodecProp,
+  map: Record<string, unknown>,
+  schema: CodecSchema
+): CanonicalInputValue {
+  if ('$id' in map) {
+    throw new Error(
+      `An embedded value under ${prop.predicate} must not carry $id — ` +
+        'to point at a named resource, pass a reference ({ $ref }).'
+    );
+  }
+  const explicitType = typeof map.$type === 'string' ? map.$type : undefined;
+  const clsUri = explicitType ?? prop.range;
+  if (!clsUri) {
+    throw new Error(
+      `Cannot map embedded value under ${prop.predicate}: it carries no $type ` +
+        'and the property declares no range.'
+    );
+  }
+  const cls = schema.classes[clsUri];
+  if (!cls) throw new Error(`No schema for embedded type ${clsUri}`);
 
-  const statements: CanonicalInputStatement[] = [
-    // The rdf:type triple every resource carries.
-    { predicate: schema.typePredicate, value: { ref: typeUri } },
-  ];
+  const statements = fieldStatements(map, cls, schema);
+  if (explicitType) {
+    statements.push({ predicate: schema.typePredicate, value: { ref: explicitType } });
+  }
+  const name = typeof map.$name === 'string' && map.$name.length > 0 ? map.$name : undefined;
+  return name !== undefined ? { embed: { name, statements } } : { embed: { statements } };
+}
 
-  for (const [key, raw] of Object.entries(node)) {
+/**
+ * The statements for one node-or-embedded's modeled fields + its `$extra`
+ * (everything except the type triple, which subjects always carry and embeddeds
+ * carry only when explicitly typed).
+ */
+function fieldStatements(
+  source: Record<string, unknown>,
+  cls: CodecClass,
+  schema: CodecSchema
+): CanonicalInputStatement[] {
+  const statements: CanonicalInputStatement[] = [];
+
+  for (const [key, raw] of Object.entries(source)) {
     if (ENVELOPE_KEYS.has(key)) continue;
     if (raw === undefined || raw === null) continue;
     const prop = cls.props[key];
@@ -131,24 +177,42 @@ function statementsFor(node: CodecNode, schema: CodecSchema): CanonicalInputStat
       continue;
     }
     if (Array.isArray(raw)) {
+      // An empty list contributes NO statement — absent and empty are identical
+      // at the canonical layer (the wire serialize still preserves the empty list).
+      if (raw.length === 0) continue;
       statements.push({
         predicate: prop.predicate,
-        value: { list: raw.map((item) => valueOf(prop, item)) },
+        value: { list: raw.map((item) => valueOf(prop, item, schema)) },
       });
     } else {
-      statements.push({ predicate: prop.predicate, value: valueOf(prop, raw) });
+      statements.push({ predicate: prop.predicate, value: valueOf(prop, raw, schema) });
     }
   }
 
   // Open-world extras outside the type-model, keyed by their own predicate URI.
-  if (node.$extra) {
-    for (const [pred, raw] of Object.entries(node.$extra)) {
+  const extra = source.$extra;
+  if (extra && typeof extra === 'object') {
+    for (const [pred, raw] of Object.entries(extra as Record<string, unknown>)) {
       if (raw === undefined || raw === null) continue;
       statements.push({ predicate: pred, value: { raw: lexical(raw) } });
     }
   }
 
   return statements;
+}
+
+/** Build the statements for one subject node: the type triple + its fields. */
+function statementsFor(node: CodecNode, schema: CodecSchema): CanonicalInputStatement[] {
+  const typeUri = node.$type;
+  if (!typeUri) throw new Error(`Node ${node.$id ?? '(no $id)'} is missing $type`);
+  const cls = schema.classes[typeUri];
+  if (!cls) throw new Error(`No schema for type ${typeUri}`);
+
+  return [
+    // The rdf:type triple every resource carries.
+    { predicate: schema.typePredicate, value: { ref: typeUri } },
+    ...fieldStatements(node as unknown as Record<string, unknown>, cls, schema),
+  ];
 }
 
 /**
