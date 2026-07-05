@@ -44,19 +44,42 @@ dict-key — hash-relevant), an optional `$type` (emits a type statement when
 present), and schema-mapped fields. Without `$type`, fields map via the
 containing property's `range` (inference only — no type statement is emitted).
 
+## Typed surface (0.3.0)
+
+The SDK-facing typed surface a generator emits against: classes extend
+`KanonakNode` (the `$`-envelope as data — `id`, `typeUri`, `name`,
+`packageContentHash`, `packageVersion`, plus `extra` for open-world
+assertions keyed by predicate URI), annotate every property field with
+`@WireName("localName")`, and type object properties as `Ref<T>` /
+`List<Ref<T>>` — EXACTLY ONE of a reference (`Ref.to(uri)` / `Ref.to(node)`,
+resolved through the target's id) or an embedded value (`Ref.embed(value)` /
+`Ref.embed(value, name)` — the name rides `$name` and is hash-relevant). The
+reference-vs-embedded choice is authorial and hash-relevant, never inferred;
+range-derived typing of an untyped embedded is inference only.
+
+```java
+TypedNodes.toNode(typed, schema);  // typed instance -> node (the Map contract)
+```
+
+`toNode` projects the instance to its wire map reflectively (JDK-only — no
+JSON library) and splits it back through `Codec.deserialize`, so the typed
+path and the dictionary path are one contract, not two.
+
 ## Conformance
 
 JDK-only — mirrors the `kanonak-canonical` port: compile the canonical sources,
-the codec sources, and the conformance driver together on one `javac` classpath,
-then run against the shared vectors.
+the codec sources, and both conformance drivers together on one `javac`
+classpath, then run both against the shared vectors.
 
 ```bash
 javac -d out \
   ../../kanonak-canonical/java/src/main/java/org/kanonak/canonical/*.java \
   src/main/java/org/kanonak/codec/*.java \
-  conformance/Conformance.java
-java -cp out Conformance   # runs ../vectors/codec-vectors.json AND
-                           # ../vectors/codec-vectors-embedded.json
+  conformance/Conformance.java conformance/TypedConformance.java
+java -cp out Conformance        # runs ../vectors/codec-vectors.json AND
+                                # ../vectors/codec-vectors-embedded.json
+java -cp out TypedConformance   # the typed surface (KanonakNode / Ref /
+                                # TypedNodes) against the same vectors
 ```
 
 Expected basic-case hash:
