@@ -1,6 +1,6 @@
 [package]
 name = "kanonak-codec"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 authors = ["Kanonak Maintainers (https://github.com/kanonak-protocol/runtime)"]
 description = "Kanonak codec runtime (Rust port). Builds the canonical input model from typed nodes + an embedded CodecSchema and content-addresses it via kanonak-canonical."
@@ -10,6 +10,6 @@ homepage = "https://kanonak.org"
 repository = "https://github.com/kanonak-protocol/runtime"
 
 [dependencies]
-kanonak-canonical = { version = "0.1.0", path = "../../kanonak-canonical/rust" }
+kanonak-canonical = { version = "0.1.1", path = "../../kanonak-canonical/rust" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

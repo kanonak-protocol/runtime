@@ -7,7 +7,7 @@
     <RootNamespace>Kanonak.Canonical</RootNamespace>
     <Nullable>disable</Nullable>
     <Description>Kanonak canonical form + content hash (canonicalFormVersion 1). Conformant port of kanonak.org/canonical-form, verified against the golden vectors.</Description>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <Authors>Kanonak Maintainers</Authors>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageProjectUrl>https://kanonak.org</PackageProjectUrl>

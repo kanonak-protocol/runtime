@@ -12,7 +12,9 @@ meta:
   source_repo: kanonak-protocol/runtime          # public; build + publish happen here
   homepage: https://kanonak.org
   license: Apache-2.0
-  package_version: "0.1.0"                        # all libs; codec deps canonical >= this
+  # Per-member versions live in each member's committed manifests (the
+  # release-audit source of truth) and diverge per registry as patches ship;
+  # go_module_versions below tracks the Go tags per member.
   canonical_form_version: "1"                     # frozen content-address rules
   expression_runtime_version: "1"                 # frozen expression-evaluation rules
   wire_format_version: "1"                        # frozen wire-kernel rules
@@ -23,8 +25,8 @@ meta:
   # tag IMMUTABLY on first fetch: to release a new Go version, bump the member HERE
   # and re-run the workflow; existing tags are never touched or moved.
   go_module_versions:
-    canonical: "0.1.0"
-    codec: "0.3.0"
+    canonical: "0.1.1"
+    codec: "0.4.0"
     expression: "0.1.0"
     wire: "0.1.0"
   # GitHub Actions OIDC (no stored token) is preferred where supported. A workflow
@@ -117,7 +119,7 @@ targets:
       - Ensure the @kanonak-protocol npm org exists and the release identity can publish.
       - Publish canonical THEN codec with `npm publish --provenance --access public` (OIDC).
     gotchas:
-      - "npm workspace at the repo root; codec depends on @kanonak-protocol/canonical (^0.1.0) - publish canonical first."
+      - "npm workspace at the repo root; codec depends on @kanonak-protocol/canonical (see codec/typescript/package.json for the floor) - publish canonical first."
       - "IDEMPOTENCY: `npm view` reads a replica that lags a fresh publish by minutes - release.yml also treats the registry's E403 'cannot publish over previously published versions' as already-published (proven 2026-07-03)."
 
   - language: csharp
