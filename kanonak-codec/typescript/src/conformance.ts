@@ -1,11 +1,13 @@
 /**
  * Drives the shared codec vectors through this port: typed nodes + the embedded
  * schema -> canonical form + content hash + normalized-JSON serialize. Runs the
- * 0.1.0 contract file (codec-vectors.json) and the 0.2.0 embedded-values file
- * (codec-vectors-embedded.json). Run: `npm run conformance`.
+ * 0.1.0 contract file (codec-vectors.json), the 0.2.0 embedded-values file
+ * (codec-vectors-embedded.json), and the 0.4.0 multi-typed-subjects file
+ * (codec-vectors-types.json, runtime#10). Run: `npm run conformance`.
  */
 import { readFileSync } from 'node:fs';
 import {
+  deserialize,
   embed,
   packageCanonicalForm,
   packageContentHash,
@@ -53,8 +55,74 @@ function runFile(relative: string): void {
   totalFails += fails;
 }
 
+/**
+ * The 0.4.0 multi-typed-subjects file (runtime#10). Beyond the standard
+ * form/hash/serialize checks it exercises the $types contract:
+ *  - expectError cases must be rejected on ALL THREE surfaces — serialize (the
+ *    producer fails at emit time), deserialize (the reader rejects, never
+ *    repairs), and canonicalization;
+ *  - positive cases must round-trip: deserialize(serialize(x)) preserves
+ *    $types exactly and re-canonicalizes to the same hash.
+ */
+function runTypesFile(relative: string): void {
+  const vfile = new URL(`../../vectors/${relative}`, import.meta.url);
+  const d: any = JSON.parse(readFileSync(vfile, 'utf8'));
+  const schema: CodecSchema = d.schema;
+
+  let fails = 0;
+  let pass = 0;
+  for (const c of d.cases) {
+    const nodes: CodecNode[] = c.nodes;
+    const pkg: PackageContext = c.pkg;
+
+    if (c.expectError) {
+      const surfaces: Array<[string, () => unknown]> = [
+        ['canonicalize', () => packageCanonicalForm(nodes, schema, pkg)],
+        ['serialize', () => nodes.map((n) => serialize(n))],
+        ['deserialize', () => nodes.map((n) => deserialize(n as Record<string, unknown>, schema))],
+      ];
+      let ok = true;
+      for (const [what, run] of surfaces) {
+        let threw = false;
+        try { run(); } catch { threw = true; }
+        if (!threw) {
+          ok = false;
+          console.error(`${c.id}: expected ${what} to reject, it did not`);
+        }
+      }
+      ok ? pass++ : fails++;
+      continue;
+    }
+
+    const form = packageCanonicalForm(nodes, schema, pkg);
+    const hash = packageContentHash(nodes, schema, pkg);
+    const ser = nodes.map((n) => serialize(n));
+    const roundTripped = nodes.map((n) => deserialize(serialize(n), schema));
+    const rtSer = roundTripped.map((n) => serialize(n));
+    const rtHash = packageContentHash(roundTripped, schema, pkg);
+
+    const formOk = form === c.expectedCanonicalForm;
+    const hashOk = hash === c.expectedHash;
+    const serOk = JSON.stringify(ser) === JSON.stringify(c.expectedSerialize);
+    const rtOk = JSON.stringify(rtSer) === JSON.stringify(c.expectedSerialize) && rtHash === c.expectedHash;
+
+    if (formOk && hashOk && serOk && rtOk) {
+      pass++;
+    } else {
+      fails++;
+      if (!formOk) console.error(`${c.id}: canonical form mismatch\n  expected ${c.expectedCanonicalForm}\n  got      ${form}`);
+      if (!hashOk) console.error(`${c.id}: hash expected ${c.expectedHash} got ${hash}`);
+      if (!serOk) console.error(`${c.id}: serialize mismatch\n  expected ${JSON.stringify(c.expectedSerialize)}\n  got      ${JSON.stringify(ser)}`);
+      if (!rtOk) console.error(`${c.id}: round-trip mismatch\n  expected ${JSON.stringify(c.expectedSerialize)} @ ${c.expectedHash}\n  got      ${JSON.stringify(rtSer)} @ ${rtHash}`);
+    }
+  }
+  console.log(`${relative}: ${pass}/${d.cases.length} pass`);
+  totalFails += fails;
+}
+
 runFile('codec-vectors.json');
 runFile('codec-vectors-embedded.json');
+runTypesFile('codec-vectors-types.json');
 
 // -- Typed-surface conformance: generated-style typed objects (KanonakNode +
 //    Ref<T> arm constructors) reproduce the SAME golden vectors. Also the
@@ -82,6 +150,7 @@ function loadDoc(relative: string): any {
 }
 
 function checkTyped(doc: any, caseId: string, typed: KanonakNode[]): void {
+  typedTotal++;
   const c = doc.cases.find((x: any) => x.id === caseId);
   if (!c) { totalFails++; console.error(`typed ${caseId}: vector case not found`); return; }
   const schema: CodecSchema = doc.schema;
@@ -100,8 +169,10 @@ function checkTyped(doc: any, caseId: string, typed: KanonakNode[]): void {
 }
 
 let typedPass = 0;
+let typedTotal = 0;
 const emb = loadDoc('codec-vectors-embedded.json');
 const bas = loadDoc('codec-vectors.json');
+const typ = loadDoc('codec-vectors-types.json');
 
 const namedInList: Order = {
   $id: `${DATA}/o1`, $type: `${SCHEMA_NS}/Order`, note: 'A',
@@ -160,7 +231,45 @@ for (const owner of [ref(`${DATA}/p1`), refTo(alice)]) {
   checkTyped(bas, 'basic-scalars-ref-list', [alice, account]);
 }
 
-console.log(`typed surface: ${typedPass}/9 pass`);
+// -- Typed-surface $types cases (0.4.0, runtime#10): the multi-typed set rides
+//    the generated model as $types only (no unprefixed accessor) and reproduces
+//    the same golden vectors through toNode.
+
+interface DefResource extends KanonakNode { note?: string }
+interface Bundle extends KanonakNode { parts?: Ref<PartDef>[] | Ref<PartDef> }
+interface PartDef extends KanonakNode { size?: number }
+
+const coveredSet: DefResource = {
+  $id: `${DATA}/w1`, $type: `${SCHEMA_NS}/ClassDef`,
+  $types: [`${SCHEMA_NS}/AnnotatedDef`, `${SCHEMA_NS}/ClassDef`],
+  note: 'A',
+};
+checkTyped(typ, 'covered-redundant-set', [coveredSet]);
+
+const multiTypedEmbedded: Bundle = {
+  $id: `${DATA}/b1`, $type: `${SCHEMA_NS}/Bundle`,
+  parts: embed<PartDef>({
+    $type: `${SCHEMA_NS}/PartDef`,
+    $types: [`${SCHEMA_NS}/PartDef`, `${SCHEMA_NS}/SealedDef`],
+    size: 2,
+  }, 'first'),
+};
+checkTyped(typ, 'embedded-multi-typed-named', [multiTypedEmbedded]);
+
+const mixedListItems: Bundle = {
+  $id: `${DATA}/b1`, $type: `${SCHEMA_NS}/Bundle`,
+  parts: [
+    embed<PartDef>({
+      $type: `${SCHEMA_NS}/PartDef`,
+      $types: [`${SCHEMA_NS}/PartDef`, `${SCHEMA_NS}/SealedDef`],
+      size: 1,
+    }, 'a'),
+    embed<PartDef>({ $type: `${SCHEMA_NS}/PartDef`, size: 2 }, 'b'),
+  ],
+};
+checkTyped(typ, 'types-in-list-items', [mixedListItems]);
+
+console.log(`typed surface: ${typedPass}/${typedTotal} pass`);
 
 if (totalFails > 0) { console.error(`\n${totalFails} FAILURES`); process.exit(1); }
 console.log('\nALL VECTORS PASS');
