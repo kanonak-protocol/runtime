@@ -63,6 +63,28 @@ public final class TypedConformance {
         @WireName("name") String name;
     }
 
+    // -- Generated-style model for the $types vectors (0.4.0, runtime#10) -----
+    // The multi-typed set rides the model via KanonakNode.setTypes ($types
+    // envelope only — deliberately no unprefixed wire name, because an ontology
+    // can model a property literally named "types").
+
+    static final class DefResource extends KanonakNode {
+        @WireName("note") String note;
+    }
+
+    static final class Bundle extends KanonakNode {
+        @WireName("parts") List<Ref<PartDef>> parts;
+    }
+
+    /** Same $type, single-valued parts — exercises the bare embedded form. */
+    static final class BundleSinglePart extends KanonakNode {
+        @WireName("parts") Ref<PartDef> parts;
+    }
+
+    static final class PartDef extends KanonakNode {
+        @WireName("size") Long size;
+    }
+
     static final class Account extends KanonakNode {
         @WireName("accountCode") String accountCode;
         @WireName("seats") Long seats;
@@ -144,6 +166,37 @@ public final class TypedConformance {
         check(basic, "basic-scalars-ref-list (Ref.to instance)", "basic-scalars-ref-list",
             basicSchema, List.of(alice, account(Ref.to(alice))));
 
+        // The 0.4.0 $types cases (runtime#10) through the typed path.
+        Map<String, Object> types = load("../vectors/codec-vectors-types.json");
+        CodecSchema typesSchema = Conformance.parseSchema(Conformance.asMap(types.get("schema")));
+
+        {
+            DefResource def = new DefResource();
+            def.setId(DATA + "/w1");
+            def.setTypeUri(SCHEMA + "/ClassDef");
+            def.setTypes(List.of(SCHEMA + "/AnnotatedDef", SCHEMA + "/ClassDef"));
+            def.note = "A";
+            check(types, "covered-redundant-set", typesSchema, List.of(def));
+        }
+
+        {
+            BundleSinglePart b = new BundleSinglePart();
+            b.setId(DATA + "/b1");
+            b.setTypeUri(SCHEMA + "/Bundle");
+            b.parts = Ref.embed(partDef(2L, true), "first");
+            check(types, "embedded-multi-typed-named", typesSchema, List.of(b));
+        }
+
+        {
+            Bundle b = new Bundle();
+            b.setId(DATA + "/b1");
+            b.setTypeUri(SCHEMA + "/Bundle");
+            b.parts = List.of(
+                Ref.embed(partDef(1L, true), "a"),
+                Ref.embed(partDef(2L, false), "b"));
+            check(types, "types-in-list-items", typesSchema, List.of(b));
+        }
+
         System.out.println("\n" + passed + " passed, " + failed + " failed");
         System.exit(failed == 0 ? 0 : 1);
     }
@@ -167,6 +220,16 @@ public final class TypedConformance {
         item.sku = sku;
         item.qty = qty;
         return item;
+    }
+
+    static PartDef partDef(Long size, boolean multiTyped) {
+        PartDef part = new PartDef();
+        part.setTypeUri(SCHEMA + "/PartDef");
+        if (multiTyped) {
+            part.setTypes(List.of(SCHEMA + "/PartDef", SCHEMA + "/SealedDef"));
+        }
+        part.size = size;
+        return part;
     }
 
     static Person alice() {

@@ -13,6 +13,7 @@ import java.util.Map;
 public abstract class KanonakNode {
     private String id;
     private String typeUri;
+    private java.util.List<String> types;
     private String name;
     private String packageContentHash;
     private String packageVersion;
@@ -34,6 +35,24 @@ public abstract class KanonakNode {
 
     public void setTypeUri(String typeUri) {
         this.typeUri = typeUri;
+    }
+
+    /**
+     * A multi-typed node's FULL type set ({@code $types}, 0.4.0, runtime#10) —
+     * present only when the node carries more than one type statement. Sorted
+     * by UTF-8 bytes, at least two members, no duplicates, {@code $type} a
+     * member; each member emits one type statement in canonical form. Exposed
+     * ONLY as the {@code $types} envelope — deliberately no unprefixed
+     * accessor name on the wire, because an ontology can model a property
+     * literally named {@code types}; the {@code $} prefix exists to avoid
+     * exactly that collision. {@code null} for single-typed nodes.
+     */
+    public java.util.List<String> getTypes() {
+        return types;
+    }
+
+    public void setTypes(java.util.List<String> types) {
+        this.types = types;
     }
 
     /**

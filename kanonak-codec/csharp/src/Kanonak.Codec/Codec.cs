@@ -23,11 +23,96 @@ namespace Kanonak.Codec
     public static class Codec
     {
         /// <summary>Reserved <c>$</c>-envelope keys — never emitted as ontology statements.
-        /// <c>$name</c> (0.2.0) carries an embedded value's authored dict-key — hash-relevant.</summary>
+        /// <c>$name</c> (0.2.0) carries an embedded value's authored dict-key — hash-relevant.
+        /// <c>$types</c> (0.4.0, runtime#10) carries a multi-typed node's FULL type set.</summary>
         private static readonly HashSet<string> EnvelopeKeys = new HashSet<string>
         {
-            "$type", "$id", "$name", "$contentHash", "$version", "$extra",
+            "$type", "$types", "$id", "$name", "$contentHash", "$version", "$extra",
         };
+
+        /// <summary>Lexicographic comparison by UTF-8 byte sequence (== code-point order).</summary>
+        private static int CompareUtf8(string a, string b)
+        {
+            byte[] ab = System.Text.Encoding.UTF8.GetBytes(a);
+            byte[] bb = System.Text.Encoding.UTF8.GetBytes(b);
+            int n = Math.Min(ab.Length, bb.Length);
+            for (int i = 0; i < n; i++)
+            {
+                int d = ab[i] - bb[i];
+                if (d != 0) return d;
+            }
+            return ab.Length - bb.Length;
+        }
+
+        /// <summary>
+        /// Validate a node-or-embedded's <c>$types</c> envelope (0.4.0, runtime#10)
+        /// and return the validated set, or null when the node is single-typed.
+        /// Invariants: sorted by UTF-8 bytes, at least two members, no duplicates,
+        /// and <c>$type</c> (the dispatch key, chosen by the schema layer's primary
+        /// rule) is a member. Enforced wherever the envelope is touched — Serialize,
+        /// Deserialize, and canonicalization — so a producer fails at emit time and
+        /// a reader never masks a nondeterministic emitter by silently repairing
+        /// the set.
+        /// </summary>
+        private static List<string> ValidatedTypes(IReadOnlyDictionary<string, object> map, string where)
+        {
+            if (!map.TryGetValue("$types", out var raw) || raw == null) return null;
+            if (raw is string || raw is IDictionary || !(raw is IEnumerable rawItems))
+                throw new ArgumentException(where + ": $types must be a list of non-empty type URIs");
+
+            var types = new List<string>();
+            foreach (var item in rawItems)
+            {
+                if (!(item is string s) || s.Length == 0)
+                    throw new ArgumentException(where + ": $types must be a list of non-empty type URIs");
+                types.Add(s);
+            }
+            if (types.Count < 2)
+                throw new ArgumentException(
+                    where + ": $types with " + types.Count + " member(s) is forbidden — a single-typed " +
+                    "node carries only $type (a second encoding of the same content would be hash-ambiguous)");
+            for (int i = 1; i < types.Count; i++)
+            {
+                int cmp = CompareUtf8(types[i - 1], types[i]);
+                if (cmp == 0)
+                    throw new ArgumentException(where + ": $types carries duplicate member " + types[i]);
+                if (cmp > 0)
+                    throw new ArgumentException(
+                        where + ": $types is not sorted by UTF-8 bytes (" + types[i - 1] +
+                        " sorts after " + types[i] + ") — ordering is the producer's job, never the reader's");
+            }
+            string primary = GetString(map, "$type");
+            if (primary == null || !types.Contains(primary))
+                throw new ArgumentException(
+                    where + ": $type (" + (primary ?? "null") + ") must be present and a member of $types");
+            return types;
+        }
+
+        /// <summary>
+        /// Recursively validate every <c>$types</c> envelope in a wire value (the
+        /// node itself and any embedded node at any depth). Shared by
+        /// <see cref="Serialize"/> (the producer fails at emit time) and
+        /// <see cref="Deserialize"/> (the strict reader rejects rather than repairs).
+        /// </summary>
+        private static void AssertTypesEnvelopes(object value, string where)
+        {
+            if (value is string) return;
+            if (value is IReadOnlyDictionary<string, object> map)
+            {
+                if (map.ContainsKey("$types")) ValidatedTypes(map, where);
+                foreach (var kv in map)
+                {
+                    if (kv.Key != "$types") AssertTypesEnvelopes(kv.Value, where + "." + kv.Key);
+                }
+                return;
+            }
+            if (value is IDictionary) return;
+            if (value is IEnumerable items)
+            {
+                int i = 0;
+                foreach (var item in items) AssertTypesEnvelopes(item, where + "[" + i++ + "]");
+            }
+        }
 
         // -- Hashing / canonical form -------------------------------------------
 
@@ -75,16 +160,20 @@ namespace Kanonak.Codec
 
         private static List<Statement> StatementsFor(IReadOnlyDictionary<string, object> node, CodecSchema schema)
         {
+            string id = GetString(node, "$id");
+            var types = ValidatedTypes(node, "Node " + (string.IsNullOrEmpty(id) ? "(no $id)" : id));
             string typeUri = GetString(node, "$type");
             if (string.IsNullOrEmpty(typeUri)) throw new ArgumentException("node is missing $type");
             if (!schema.Classes.TryGetValue(typeUri, out var cls))
                 throw new ArgumentException("no schema for type " + typeUri);
 
-            var statements = new List<Statement>
+            // The rdf:type triple(s) every resource carries: one per $types member
+            // for a multi-typed node (in $types' UTF-8 sorted order), else $type.
+            var statements = new List<Statement>();
+            foreach (var member in types ?? new List<string> { typeUri })
             {
-                // The rdf:type triple every resource carries.
-                new Statement(schema.TypePredicate, new Reference(typeUri)),
-            };
+                statements.Add(new Statement(schema.TypePredicate, new Reference(member)));
+            }
             statements.AddRange(FieldStatements(node, cls, schema));
             return statements;
         }
@@ -178,6 +267,7 @@ namespace Kanonak.Codec
                     "An embedded value under " + prop.Predicate + " must not carry $id — " +
                     "to point at a named resource, pass a reference ({\"$ref\": ...}).");
 
+            var types = ValidatedTypes(map, "Embedded value under " + prop.Predicate);
             string explicitType = GetString(map, "$type");
             string clsUri = explicitType ?? prop.Range;
             if (clsUri == null)
@@ -188,8 +278,17 @@ namespace Kanonak.Codec
                 throw new ArgumentException("no schema for embedded type " + clsUri);
 
             var statements = FieldStatements(map, cls, schema);
-            if (explicitType != null)
+            if (types != null)
+            {
+                // A multi-typed embedded ($types implies an explicit $type): one type
+                // statement per member, in $types (UTF-8 sorted) order — all hash-relevant.
+                foreach (var member in types)
+                    statements.Add(new Statement(schema.TypePredicate, new Reference(member)));
+            }
+            else if (explicitType != null)
+            {
                 statements.Add(new Statement(schema.TypePredicate, new Reference(explicitType)));
+            }
 
             string name = GetString(map, "$name");
             if (string.IsNullOrEmpty(name)) name = null;
@@ -228,6 +327,9 @@ namespace Kanonak.Codec
         /// </summary>
         public static Dictionary<string, object> Serialize(IReadOnlyDictionary<string, object> node)
         {
+            // Producer-side $types validation, at every depth — fail closest to the bug.
+            string where = GetString(node, "$id") ?? GetString(node, "$type") ?? "(node)";
+            AssertTypesEnvelopes(node, "serialize " + where);
             var outMap = new Dictionary<string, object>();
             foreach (var kv in node)
             {
@@ -253,6 +355,11 @@ namespace Kanonak.Codec
         {
             if (!json.TryGetValue("$type", out var typeObj) || !(typeObj is string typeUri))
                 throw new ArgumentException("Cannot deserialize: missing string $type");
+            // Reader-side $types validation, at every depth: an unsorted / singleton /
+            // duplicate / non-member set is REJECTED, never silently repaired —
+            // determinism belongs to the producer, and a lenient reader would mask a
+            // nondeterministic emitter.
+            AssertTypesEnvelopes(json, "deserialize " + (GetString(json, "$id") ?? typeUri));
             if (!schema.Classes.TryGetValue(typeUri, out var cls))
                 throw new ArgumentException("Cannot deserialize: no schema for type " + typeUri);
 

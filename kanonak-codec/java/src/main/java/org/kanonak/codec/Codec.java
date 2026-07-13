@@ -38,9 +38,95 @@ public final class Codec {
     /**
      * Reserved {@code $}-envelope keys — never emitted as ontology statements.
      * {@code $name} (0.2.0) carries an embedded value's authored dict-key — hash-relevant.
+     * {@code $types} (0.4.0, runtime#10) carries a multi-typed node's FULL type set.
      */
     private static final Set<String> ENVELOPE_KEYS =
-        Set.of("$type", "$id", "$name", "$contentHash", "$version", "$extra");
+        Set.of("$type", "$types", "$id", "$name", "$contentHash", "$version", "$extra");
+
+    /** Lexicographic comparison by UTF-8 byte sequence (== code-point order). */
+    private static int compareUtf8(String a, String b) {
+        return java.util.Arrays.compareUnsigned(
+            a.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+            b.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Validate a node-or-embedded's {@code $types} envelope (0.4.0, runtime#10)
+     * and return the validated set, or {@code null} when the node is
+     * single-typed. Invariants: sorted by UTF-8 bytes, at least two members, no
+     * duplicates, and {@code $type} (the dispatch key, chosen by the schema
+     * layer's primary rule) is a member. Enforced wherever the envelope is
+     * touched — serialize, deserialize, and canonicalization — so a producer
+     * fails at emit time and a reader never masks a nondeterministic emitter by
+     * silently repairing the set.
+     */
+    private static List<String> validatedTypes(Map<String, Object> map, String where) {
+        Object raw = map.get("$types");
+        if (raw == null) {
+            return null;
+        }
+        if (!(raw instanceof List<?> list)) {
+            throw new IllegalArgumentException(where + ": $types must be a list of non-empty type URIs");
+        }
+        List<String> types = new ArrayList<>(list.size());
+        for (Object item : list) {
+            if (!(item instanceof String s) || s.isEmpty()) {
+                throw new IllegalArgumentException(where + ": $types must be a list of non-empty type URIs");
+            }
+            types.add(s);
+        }
+        if (types.size() < 2) {
+            throw new IllegalArgumentException(
+                where + ": $types with " + types.size() + " member(s) is forbidden — a single-typed "
+                    + "node carries only $type (a second encoding of the same content would be hash-ambiguous)");
+        }
+        for (int i = 1; i < types.size(); i++) {
+            int cmp = compareUtf8(types.get(i - 1), types.get(i));
+            if (cmp == 0) {
+                throw new IllegalArgumentException(
+                    where + ": $types carries duplicate member " + types.get(i));
+            }
+            if (cmp > 0) {
+                throw new IllegalArgumentException(
+                    where + ": $types is not sorted by UTF-8 bytes (" + types.get(i - 1)
+                        + " sorts after " + types.get(i)
+                        + ") — ordering is the producer's job, never the reader's");
+            }
+        }
+        Object primary = map.get("$type");
+        if (!(primary instanceof String p) || !types.contains(p)) {
+            throw new IllegalArgumentException(
+                where + ": $type (" + primary + ") must be present and a member of $types");
+        }
+        return types;
+    }
+
+    /**
+     * Recursively validate every {@code $types} envelope in a wire value (the
+     * node itself and any embedded node at any depth). Shared by
+     * {@link #serialize} (the producer fails at emit time) and
+     * {@link #deserialize} (the strict reader rejects rather than repairs).
+     */
+    @SuppressWarnings("unchecked")
+    private static void assertTypesEnvelopes(Object value, String where) {
+        if (value instanceof List<?> list) {
+            for (int i = 0; i < list.size(); i++) {
+                assertTypesEnvelopes(list.get(i), where + "[" + i + "]");
+            }
+            return;
+        }
+        if (value instanceof Map<?, ?> m) {
+            Map<String, Object> map = (Map<String, Object>) m;
+            if (map.containsKey("$types")) {
+                validatedTypes(map, where);
+            }
+            for (Map.Entry<String, Object> e : map.entrySet()) {
+                if (!"$types".equals(e.getKey())) {
+                    assertTypesEnvelopes(e.getValue(), where + "." + e.getKey());
+                }
+            }
+        }
+    }
 
     /**
      * The raw lexical token of a scalar — the input the canonical form normalizes.
@@ -110,6 +196,7 @@ public final class Codec {
                 "An embedded value under " + prop.predicate() + " must not carry $id — "
                     + "to point at a named resource, pass a reference ({\"$ref\": ...}).");
         }
+        List<String> types = validatedTypes(map, "Embedded value under " + prop.predicate());
         String explicitType = map.get("$type") instanceof String t ? t : null;
         String clsUri = explicitType != null ? explicitType : prop.range();
         if (clsUri == null) {
@@ -123,7 +210,13 @@ public final class Codec {
         }
 
         List<Statement> statements = fieldStatements(map, cls, schema);
-        if (explicitType != null) {
+        if (types != null) {
+            // A multi-typed embedded ($types implies an explicit $type): one type
+            // statement per member, in $types (UTF-8 sorted) order — all hash-relevant.
+            for (String member : types) {
+                statements.add(new Statement(schema.typePredicate(), new Value.Ref(member)));
+            }
+        } else if (explicitType != null) {
             statements.add(new Statement(schema.typePredicate(), new Value.Ref(explicitType)));
         }
         String name = map.get("$name") instanceof String n && !n.isEmpty() ? n : null;
@@ -181,6 +274,9 @@ public final class Codec {
     }
 
     private static List<Statement> statementsFor(Map<String, Object> node, CodecSchema schema) {
+        Object id = node.get("$id");
+        List<String> types = validatedTypes(node,
+            "Node " + (id instanceof String s && !s.isEmpty() ? s : "(no $id)"));
         Object typeUri = node.get("$type");
         if (!(typeUri instanceof String) || ((String) typeUri).isEmpty()) {
             throw new IllegalArgumentException("node is missing $type");
@@ -191,8 +287,11 @@ public final class Codec {
         }
 
         List<Statement> statements = new ArrayList<>();
-        // The rdf:type triple every resource carries.
-        statements.add(new Statement(schema.typePredicate(), new Value.Ref((String) typeUri)));
+        // The rdf:type triple(s) every resource carries: one per $types member for
+        // a multi-typed node (in $types' UTF-8 sorted order), else the single $type.
+        for (String member : types != null ? types : List.of((String) typeUri)) {
+            statements.add(new Statement(schema.typePredicate(), new Value.Ref(member)));
+        }
         statements.addAll(fieldStatements(node, cls, schema));
         return statements;
     }
@@ -243,6 +342,9 @@ public final class Codec {
      */
     @SuppressWarnings("unchecked")
     public static Map<String, Object> serialize(Map<String, Object> node) {
+        // Producer-side $types validation, at every depth — fail closest to the bug.
+        Object where = node.get("$id") instanceof String s && !s.isEmpty() ? s : node.get("$type");
+        assertTypesEnvelopes(node, "serialize " + (where != null ? where : "(node)"));
         Map<String, Object> out = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : node.entrySet()) {
             if ("$extra".equals(entry.getKey()) || entry.getValue() == null) {
@@ -272,6 +374,12 @@ public final class Codec {
         if (!(typeUri instanceof String)) {
             throw new IllegalArgumentException("Cannot deserialize: missing string $type");
         }
+        // Reader-side $types validation, at every depth: an unsorted / singleton /
+        // duplicate / non-member set is REJECTED, never silently repaired —
+        // determinism belongs to the producer, and a lenient reader would mask a
+        // nondeterministic emitter.
+        Object where = json.get("$id") instanceof String s && !s.isEmpty() ? s : typeUri;
+        assertTypesEnvelopes(json, "deserialize " + where);
         CodecClass cls = schema.classes().get(typeUri);
         if (cls == null) {
             throw new IllegalArgumentException("Cannot deserialize: no schema for type " + typeUri);
