@@ -43,7 +43,67 @@ from kanonak_canonical import (
 
 # The reserved ``$``-envelope keys, which never become statements/predicates.
 # ``$name`` (0.2.0) carries an embedded value's authored dict-key — hash-relevant.
-ENVELOPE_KEYS = {"$type", "$id", "$name", "$contentHash", "$version", "$extra"}
+# ``$types`` (0.4.0, runtime#10) carries a multi-typed node's FULL type set.
+ENVELOPE_KEYS = {"$type", "$types", "$id", "$name", "$contentHash", "$version", "$extra"}
+
+
+def _compare_utf8(a: str, b: str) -> int:
+    """Lexicographic comparison by UTF-8 byte sequence (== code-point order)."""
+    ab, bb = a.encode("utf-8"), b.encode("utf-8")
+    return (ab > bb) - (ab < bb)
+
+
+def _validated_types(mapping: Mapping, where: str) -> Optional[List[str]]:
+    """Validate a node-or-embedded's ``$types`` envelope (0.4.0, runtime#10) and
+    return the validated set, or ``None`` when the node is single-typed.
+    Invariants: sorted by UTF-8 bytes, at least two members, no duplicates, and
+    ``$type`` (the dispatch key, chosen by the schema layer's primary rule) is a
+    member. Enforced wherever the envelope is touched — serialize, deserialize,
+    and canonicalization — so a producer fails at emit time and a reader never
+    masks a nondeterministic emitter by silently repairing the set."""
+    raw = mapping.get("$types")
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or any(not isinstance(m, str) or not m for m in raw):
+        raise ValueError(f"{where}: $types must be a list of non-empty type URIs")
+    if len(raw) < 2:
+        raise ValueError(
+            f"{where}: $types with {len(raw)} member(s) is forbidden — a "
+            "single-typed node carries only $type (a second encoding of the "
+            "same content would be hash-ambiguous)"
+        )
+    for prev, cur in zip(raw, raw[1:]):
+        cmp = _compare_utf8(prev, cur)
+        if cmp == 0:
+            raise ValueError(f"{where}: $types carries duplicate member {cur}")
+        if cmp > 0:
+            raise ValueError(
+                f"{where}: $types is not sorted by UTF-8 bytes ({prev} sorts "
+                f"after {cur}) — ordering is the producer's job, never the reader's"
+            )
+    primary = mapping.get("$type")
+    if not isinstance(primary, str) or primary not in raw:
+        raise ValueError(
+            f"{where}: $type ({primary!r}) must be present and a member of $types"
+        )
+    return raw
+
+
+def _assert_types_envelopes(value: Any, where: str) -> None:
+    """Recursively validate every ``$types`` envelope in a wire value (the node
+    itself and any embedded node at any depth). Shared by ``serialize`` (the
+    producer throws at emit time) and ``deserialize`` (the strict reader rejects
+    rather than repairs)."""
+    if isinstance(value, list):
+        for i, item in enumerate(value):
+            _assert_types_envelopes(item, f"{where}[{i}]")
+        return
+    if isinstance(value, dict):
+        if "$types" in value:
+            _validated_types(value, where)
+        for key, item in value.items():
+            if key != "$types":
+                _assert_types_envelopes(item, f"{where}.{key}")
 
 
 def _lexical(value: Any) -> str:
@@ -85,6 +145,7 @@ def _embedded_value(prop: Dict[str, Any], mapping: Dict[str, Any], schema: Dict[
             f"An embedded value under {prop['predicate']} must not carry $id — "
             "to point at a named resource, pass a reference ({'$ref': ...})."
         )
+    types = _validated_types(mapping, f"Embedded value under {prop['predicate']}")
     explicit_type = mapping.get("$type") if isinstance(mapping.get("$type"), str) else None
     cls_uri = explicit_type if explicit_type is not None else prop.get("range")
     if cls_uri is None:
@@ -97,7 +158,12 @@ def _embedded_value(prop: Dict[str, Any], mapping: Dict[str, Any], schema: Dict[
         raise ValueError(f"no schema for embedded type {cls_uri}")
 
     statements = _field_statements(mapping, cls, schema)
-    if explicit_type is not None:
+    if types is not None:
+        # A multi-typed embedded ($types implies an explicit $type): one type
+        # statement per member, in $types (UTF-8 sorted) order — all hash-relevant.
+        for member in types:
+            statements.append(Statement(schema["typePredicate"], Reference(member)))
+    elif explicit_type is not None:
         statements.append(Statement(schema["typePredicate"], Reference(explicit_type)))
     name = mapping.get("$name")
     name = name if isinstance(name, str) and name else None
@@ -136,6 +202,7 @@ def _field_statements(source: Dict[str, Any], cls: Dict[str, Any], schema: Dict[
 
 
 def _statements(node: Dict[str, Any], schema: Dict[str, Any]) -> List[Statement]:
+    types = _validated_types(node, f"Node {node.get('$id', '(no $id)')}")
     type_uri = node.get("$type")
     if not type_uri:
         raise ValueError("node is missing $type")
@@ -143,8 +210,12 @@ def _statements(node: Dict[str, Any], schema: Dict[str, Any]) -> List[Statement]
     if cls is None:
         raise ValueError(f"no schema for type {type_uri}")
 
-    # The rdf:type triple every subject carries, then its fields.
-    statements: List[Statement] = [Statement(schema["typePredicate"], Reference(type_uri))]
+    # The rdf:type triple(s) every subject carries: one per $types member for a
+    # multi-typed node (in $types' UTF-8 sorted order), else the single $type.
+    statements: List[Statement] = [
+        Statement(schema["typePredicate"], Reference(member))
+        for member in (types if types is not None else [type_uri])
+    ]
     statements.extend(_field_statements(node, cls, schema))
     return statements
 
@@ -182,6 +253,8 @@ def serialize(node: Dict[str, Any]) -> Dict[str, Any]:
     """Serialize a typed node to its normalized-JSON wire form. ``$extra`` entries
     ride as sibling fields after the modeled ones; a modeled field wins a name
     collision (``[JsonExtensionData]`` semantics)."""
+    # Producer-side $types validation, at every depth — fail closest to the bug.
+    _assert_types_envelopes(node, f"serialize {node.get('$id') or node.get('$type') or '(node)'}")
     out: Dict[str, Any] = {}
     for key, value in node.items():
         if key == "$extra" or value is None:
@@ -202,6 +275,11 @@ def deserialize(json_obj: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, A
     type_uri = json_obj.get("$type")
     if not isinstance(type_uri, str):
         raise ValueError("Cannot deserialize: missing string $type")
+    # Reader-side $types validation, at every depth: an unsorted / singleton /
+    # duplicate / non-member set is REJECTED, never silently repaired —
+    # determinism belongs to the producer, and a lenient reader would mask a
+    # nondeterministic emitter.
+    _assert_types_envelopes(json_obj, f"deserialize {json_obj.get('$id') or type_uri}")
     cls = schema["classes"].get(type_uri)
     if cls is None:
         raise ValueError(f"Cannot deserialize: no schema for type {type_uri}")

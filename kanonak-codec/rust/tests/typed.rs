@@ -351,3 +351,133 @@ fn typed_basic_vectors() {
         ],
     );
 }
+
+// -- Typed-surface $types cases (0.4.0, runtime#10) ---------------------------
+//
+// The multi-typed set rides the generated model as the $types envelope only
+// (deliberately no unprefixed `types` accessor — an ontology can model a
+// property literally named `types`) and reproduces the same golden vectors.
+
+#[derive(Serialize, Default)]
+struct DefResource {
+    #[serde(flatten)]
+    node: KanonakNode,
+    #[serde(rename = "note", skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
+}
+resource!(DefResource);
+
+#[derive(Serialize, Default)]
+struct Bundle {
+    #[serde(flatten)]
+    node: KanonakNode,
+    #[serde(rename = "parts", skip_serializing_if = "Option::is_none")]
+    parts: Option<Vec<Ref<PartDef>>>,
+}
+resource!(Bundle);
+
+/// Same $type, single-valued parts — exercises the bare embedded form.
+#[derive(Serialize, Default)]
+struct BundleSinglePart {
+    #[serde(flatten)]
+    node: KanonakNode,
+    #[serde(rename = "parts", skip_serializing_if = "Option::is_none")]
+    parts: Option<Ref<PartDef>>,
+}
+resource!(BundleSinglePart);
+
+#[derive(Serialize, Default)]
+struct PartDef {
+    #[serde(flatten)]
+    node: KanonakNode,
+    #[serde(rename = "size", skip_serializing_if = "Option::is_none")]
+    size: Option<i64>,
+}
+resource!(PartDef);
+
+#[test]
+fn typed_types_vectors() {
+    let doc = read_doc("codec-vectors-types.json");
+
+    check(
+        &doc,
+        "covered-redundant-set",
+        &[node(
+            &DefResource {
+                node: KanonakNode {
+                    id: Some(format!("{}/w1", DATA)),
+                    type_uri: Some(format!("{}/ClassDef", SCHEMA_NS)),
+                    types: Some(vec![
+                        format!("{}/AnnotatedDef", SCHEMA_NS),
+                        format!("{}/ClassDef", SCHEMA_NS),
+                    ]),
+                    ..Default::default()
+                },
+                note: Some("A".into()),
+            },
+            &doc,
+        )],
+    );
+
+    check(
+        &doc,
+        "embedded-multi-typed-named",
+        &[node(
+            &BundleSinglePart {
+                node: envelope("b1", "Bundle"),
+                parts: Some(Ref::embed_named(
+                    PartDef {
+                        node: KanonakNode {
+                            type_uri: Some(format!("{}/PartDef", SCHEMA_NS)),
+                            types: Some(vec![
+                                format!("{}/PartDef", SCHEMA_NS),
+                                format!("{}/SealedDef", SCHEMA_NS),
+                            ]),
+                            ..Default::default()
+                        },
+                        size: Some(2),
+                    },
+                    "first",
+                )),
+            },
+            &doc,
+        )],
+    );
+
+    check(
+        &doc,
+        "types-in-list-items",
+        &[node(
+            &Bundle {
+                node: envelope("b1", "Bundle"),
+                parts: Some(vec![
+                    Ref::embed_named(
+                        PartDef {
+                            node: KanonakNode {
+                                type_uri: Some(format!("{}/PartDef", SCHEMA_NS)),
+                                types: Some(vec![
+                                    format!("{}/PartDef", SCHEMA_NS),
+                                    format!("{}/SealedDef", SCHEMA_NS),
+                                ]),
+                                ..Default::default()
+                            },
+                            size: Some(1),
+                        },
+                        "a",
+                    ),
+                    Ref::embed_named(
+                        PartDef {
+                            node: KanonakNode {
+                                type_uri: Some(format!("{}/PartDef", SCHEMA_NS)),
+                                ..Default::default()
+                            },
+                            size: Some(2),
+                        },
+                        "b",
+                    ),
+                ]),
+            },
+            &doc,
+        )],
+    );
+}

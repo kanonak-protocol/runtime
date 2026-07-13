@@ -26,6 +26,16 @@ pub struct KanonakNode {
     #[serde(rename = "$type", skip_serializing_if = "Option::is_none", default)]
     pub type_uri: Option<String>,
 
+    /// A multi-typed node's FULL type set (0.4.0, runtime#10) — present only
+    /// when the node carries more than one type statement. Sorted by UTF-8
+    /// bytes, at least two members, no duplicates, `$type` a member; each
+    /// member emits one type statement in canonical form. Exposed ONLY as the
+    /// `$types` envelope — deliberately no unprefixed `types` accessor, because
+    /// an ontology can model a property literally named `types`; the `$` prefix
+    /// exists to avoid exactly that collision.
+    #[serde(rename = "$types", skip_serializing_if = "Option::is_none", default)]
+    pub types: Option<Vec<String>>,
+
     /// An embedded value's authored dict-key — HASH-RELEVANT (serialized into
     /// the canonical form). Only meaningful when the instance is used as an
     /// embedded value; `None` for subjects.
