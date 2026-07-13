@@ -23,7 +23,20 @@ import { canonicalForm, canonicalHash } from '@kanonak-protocol/canonical';
 import type { CanonicalInput, CanonicalInputStatement, CanonicalInputValue } from '@kanonak-protocol/canonical';
 
 /** Reserved `$`-envelope keys — never emitted as ontology statements. */
-const ENVELOPE_KEYS = new Set(['$type', '$id', '$name', '$contentHash', '$version', '$extra']);
+const ENVELOPE_KEYS = new Set(['$type', '$types', '$id', '$name', '$contentHash', '$version', '$extra']);
+
+const UTF8 = new TextEncoder();
+
+/** Lexicographic comparison by UTF-8 byte sequence (== Unicode code-point order). */
+function compareUtf8(a: string, b: string): number {
+  const ab = UTF8.encode(a);
+  const bb = UTF8.encode(b);
+  const n = Math.min(ab.length, bb.length);
+  for (let i = 0; i < n; i++) {
+    if (ab[i] !== bb[i]) return ab[i] - bb[i];
+  }
+  return ab.length - bb.length;
+}
 
 /** One property's canonicalization metadata, as embedded by the generator. */
 export interface CodecProp {
@@ -77,6 +90,18 @@ export interface CodecSchema {
  */
 export interface CodecNode {
   $type?: string;
+  /**
+   * The FULL type set of a multi-typed node (0.4.0, runtime#10) — present
+   * whenever the node carries MORE THAN ONE type statement, absent on
+   * single-typed nodes (whose only type is `$type`). Hash-relevant: each member
+   * emits one type statement in canonical form (no dedup, no extra statement
+   * for `$type` itself). Invariants, enforced at serialize, deserialize, and
+   * canonicalization time: sorted by UTF-8 bytes, at least two members, no
+   * duplicates, and `$type` (the dispatch key, chosen by the schema layer's
+   * primary rule) is a member. `$type` is NOT necessarily `$types[0]` —
+   * sorting is lexical, primary selection is semantic.
+   */
+  $types?: string[];
   $id?: string;
   $extra?: Record<string, unknown>;
 }
@@ -91,6 +116,11 @@ export interface CodecNode {
  * The full `$`-envelope as data — what a generated typed model's root carries.
  * `$name` is an embedded value's authored dict-key and is HASH-RELEVANT
  * (serialized into the canonical form); null/absent for subjects.
+ *
+ * A multi-typed node's set is exposed ONLY as `$types` (inherited from
+ * {@link CodecNode}) — deliberately no unprefixed `types` accessor, because an
+ * ontology can model a property literally named `types`; the `$` prefix exists
+ * to avoid exactly that collision.
  */
 export interface KanonakNode extends CodecNode {
   $name?: string;
@@ -174,6 +204,71 @@ function lexical(value: unknown): string {
   return typeof value === 'string' ? value : String(value);
 }
 
+/**
+ * Validate a node-or-embedded's `$types` envelope and return the validated set,
+ * or undefined when the node is single-typed (no `$types`). Enforced wherever
+ * the envelope is touched — serialize, deserialize, and canonicalization — so a
+ * producer fails at emit time and a reader never masks a nondeterministic
+ * emitter by silently repairing (re-sorting, deduping) the set.
+ */
+function validatedTypes(
+  map: { $type?: unknown; $types?: unknown },
+  where: string
+): string[] | undefined {
+  const raw = map.$types;
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw) || raw.some((m) => typeof m !== 'string' || m.length === 0)) {
+    throw new Error(`${where}: $types must be an array of non-empty type URIs`);
+  }
+  const types = raw as string[];
+  if (types.length < 2) {
+    throw new Error(
+      `${where}: $types with ${types.length} member(s) is forbidden — a single-typed ` +
+        'node carries only $type (a second encoding of the same content would be hash-ambiguous)'
+    );
+  }
+  for (let i = 1; i < types.length; i++) {
+    const cmp = compareUtf8(types[i - 1], types[i]);
+    if (cmp === 0) {
+      throw new Error(`${where}: $types carries duplicate member ${types[i]}`);
+    }
+    if (cmp > 0) {
+      throw new Error(
+        `${where}: $types is not sorted by UTF-8 bytes ` +
+          `(${types[i - 1]} sorts after ${types[i]}) — ordering is the producer's job, never the reader's`
+      );
+    }
+  }
+  const primary = map.$type;
+  if (typeof primary !== 'string' || !types.includes(primary)) {
+    throw new Error(
+      `${where}: $type (${typeof primary === 'string' ? primary : String(primary)}) ` +
+        'must be present and a member of $types'
+    );
+  }
+  return types;
+}
+
+/**
+ * Recursively validate every `$types` envelope in a wire value (the node itself
+ * and any embedded node at any depth). Shared by {@link serialize} (the
+ * producer throws at emit time) and {@link deserialize} (the strict reader
+ * rejects rather than repairs).
+ */
+function assertTypesEnvelopes(value: unknown, where: string): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, i) => assertTypesEnvelopes(item, `${where}[${i}]`));
+    return;
+  }
+  if (value && typeof value === 'object') {
+    const map = value as Record<string, unknown>;
+    if ('$types' in map) validatedTypes(map, where);
+    for (const [k, v] of Object.entries(map)) {
+      if (k !== '$types') assertTypesEnvelopes(v, `${where}.${k}`);
+    }
+  }
+}
+
 /** Build the `CanonicalInputValue` for one (already array-unwrapped) field value. */
 function valueOf(prop: CodecProp, raw: unknown, schema: CodecSchema): CanonicalInputValue {
   if (prop.kind === 'object') {
@@ -211,6 +306,7 @@ function embeddedValue(
         'to point at a named resource, pass a reference ({ $ref }).'
     );
   }
+  const types = validatedTypes(map, `Embedded value under ${prop.predicate}`);
   const explicitType = typeof map.$type === 'string' ? map.$type : undefined;
   const clsUri = explicitType ?? prop.range;
   if (!clsUri) {
@@ -223,7 +319,13 @@ function embeddedValue(
   if (!cls) throw new Error(`No schema for embedded type ${clsUri}`);
 
   const statements = fieldStatements(map, cls, schema);
-  if (explicitType) {
+  if (types) {
+    // A multi-typed embedded ($types implies an explicit $type): one type
+    // statement per member, in $types (UTF-8 sorted) order — all hash-relevant.
+    for (const member of types) {
+      statements.push({ predicate: schema.typePredicate, value: { ref: member } });
+    }
+  } else if (explicitType) {
     statements.push({ predicate: schema.typePredicate, value: { ref: explicitType } });
   }
   const name = typeof map.$name === 'string' && map.$name.length > 0 ? map.$name : undefined;
@@ -276,16 +378,21 @@ function fieldStatements(
   return statements;
 }
 
-/** Build the statements for one subject node: the type triple + its fields. */
+/** Build the statements for one subject node: its type triple(s) + its fields. */
 function statementsFor(node: CodecNode, schema: CodecSchema): CanonicalInputStatement[] {
+  const types = validatedTypes(node, `Node ${node.$id ?? '(no $id)'}`);
   const typeUri = node.$type;
   if (!typeUri) throw new Error(`Node ${node.$id ?? '(no $id)'} is missing $type`);
   const cls = schema.classes[typeUri];
   if (!cls) throw new Error(`No schema for type ${typeUri}`);
 
   return [
-    // The rdf:type triple every resource carries.
-    { predicate: schema.typePredicate, value: { ref: typeUri } },
+    // The rdf:type triple(s) every resource carries: one per $types member for
+    // a multi-typed node (in $types' UTF-8 sorted order), else the single $type.
+    ...(types ?? [typeUri]).map((member): CanonicalInputStatement => ({
+      predicate: schema.typePredicate,
+      value: { ref: member },
+    })),
     ...fieldStatements(node as unknown as Record<string, unknown>, cls, schema),
   ];
 }
@@ -346,6 +453,8 @@ export function packageContentHash(
  * `$extra` key. A modeled field always wins a name collision with an extra.
  */
 export function serialize(node: CodecNode): Record<string, unknown> {
+  // Producer-side $types validation, at every depth — fail closest to the bug.
+  assertTypesEnvelopes(node, `serialize ${node.$id ?? node.$type ?? '(node)'}`);
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(node)) {
     if (k === '$extra') continue;
@@ -369,6 +478,11 @@ export function serialize(node: CodecNode): Record<string, unknown> {
 export function deserialize(json: Record<string, unknown>, schema: CodecSchema): CodecNode {
   const typeUri = json.$type;
   if (typeof typeUri !== 'string') throw new Error('Cannot deserialize: missing string $type');
+  // Reader-side $types validation, at every depth: an unsorted / singleton /
+  // duplicate / non-member set is REJECTED, never silently repaired —
+  // determinism belongs to the producer, and a lenient reader would mask a
+  // nondeterministic emitter.
+  assertTypesEnvelopes(json, `deserialize ${typeof json.$id === 'string' ? json.$id : typeUri}`);
   const cls = schema.classes[typeUri];
   if (!cls) throw new Error(`Cannot deserialize: no schema for type ${typeUri}`);
 
