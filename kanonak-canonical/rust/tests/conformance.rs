@@ -26,7 +26,10 @@ fn lexical_vectors() {
         let id = v["id"].as_str().unwrap();
         let carrier = Carrier::from_tag(v["carrier"].as_str().unwrap()).unwrap();
         let input = v["input"].as_str().unwrap();
-        let expect_error = v.get("expectError").and_then(|x| x.as_bool()).unwrap_or(false);
+        let expect_error = v
+            .get("expectError")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
         match canonical_scalar_lexical(carrier, input) {
             Ok(actual) => {
                 if expect_error {
@@ -64,7 +67,10 @@ fn full_form_vectors() {
         let exp_hash = v["expectedHash"].as_str().unwrap();
         if form != exp_form {
             fails += 1;
-            eprintln!("FAIL [{}] form\n  expected: {}\n  actual:   {}", id, exp_form, form);
+            eprintln!(
+                "FAIL [{}] form\n  expected: {}\n  actual:   {}",
+                id, exp_form, form
+            );
         }
         if hash != exp_hash {
             fails += 1;
@@ -105,7 +111,10 @@ fn decode_value(v: &J) -> Value {
     if let Some(lit) = v.get("lit").and_then(|x| x.as_str()) {
         let dt = v["datatype"].as_str().unwrap();
         match carrier_of(dt) {
-            Some(c) => Value::Typed { carrier: c, lexical: lit.to_string() },
+            Some(c) => Value::Typed {
+                carrier: c,
+                lexical: lit.to_string(),
+            },
             None => Value::Raw(lit.to_string()),
         }
     } else if let Some(raw) = v.get("raw").and_then(|x| x.as_str()) {
@@ -114,7 +123,10 @@ fn decode_value(v: &J) -> Value {
         Value::Reference(r.to_string())
     } else if let Some(emb) = v.get("embed") {
         Value::Embedded {
-            name: emb.get("name").and_then(|x| x.as_str()).map(|s| s.to_string()),
+            name: emb
+                .get("name")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string()),
             statements: decode_statements(emb),
         }
     } else if let Some(list) = v.get("list").and_then(|x| x.as_array()) {

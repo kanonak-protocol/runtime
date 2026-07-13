@@ -249,6 +249,40 @@
       },
       "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"example.org/data@1.0.0/N\",\"statements\":[{\"predicate\":\"example.org/data@1.0.0/label\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"é\"}]}]}",
       "expectedHash": "sha256:25b63ea3f42aa11307cbe4793caa56009be337707db7254fa64f7b6ae8b06cce"
+    },
+    {
+      "id": "same-predicate-tie-order",
+      "description": "Two type statements share one predicate (a multi-typed subject, runtime#10) and arrive in REVERSE value order. Statements sharing a predicate order by the serialized statement blob’s UTF-8 bytes — the pinned tie-break that makes the form invariant under statement ordering. A port whose predicate sort merely preserves input order for ties (stable sort, or an unstable sort’s accident) fails this vector.",
+      "input": {
+        "subjects": [
+          {
+            "uri": "example.org/data@1.0.0/Widget",
+            "statements": [
+              {
+                "predicate": "kanonak.org/core-rdf@1.1.0/type",
+                "value": {
+                  "ref": "example.org/schema@1.0.0/Zeta"
+                }
+              },
+              {
+                "predicate": "kanonak.org/core-rdf@1.1.0/type",
+                "value": {
+                  "ref": "example.org/schema@1.0.0/Alpha"
+                }
+              },
+              {
+                "predicate": "example.org/schema@1.0.0/note",
+                "value": {
+                  "lit": "A",
+                  "datatype": "kanonak.org/core-xsd/string"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"example.org/data@1.0.0/Widget\",\"statements\":[{\"predicate\":\"example.org/schema@1.0.0/note\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"A\"},{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"example.org/schema@1.0.0/Alpha\"},{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"example.org/schema@1.0.0/Zeta\"}]}]}",
+      "expectedHash": "sha256:8ebb7d9ac3340db85bf717ca2a3e5a275195190514bd1b05641b9b2c97abc33c"
     }
   ]
 }

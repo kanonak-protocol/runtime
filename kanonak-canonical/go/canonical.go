@@ -433,20 +433,49 @@ func CanonicalHash(pkg Package) (string, error) {
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
+func serializeStatement(st Statement) (string, error) {
+	var b strings.Builder
+	b.WriteString(`{"predicate":`)
+	emitJSONString(&b, st.Predicate)
+	b.WriteByte(',')
+	if err := emitValueTail(&b, st.Value); err != nil {
+		return "", err
+	}
+	b.WriteByte('}')
+	return b.String(), nil
+}
+
+// emitStatements orders by predicate UTF-8 bytes (Go string comparison IS
+// byte-wise lexicographic); equal predicates (possible since multi-typed
+// subjects — several type statements share the type predicate) order by the
+// serialized statement blob's UTF-8 bytes. The tie-break makes the declared
+// invariance under statement ordering TRUE for same-predicate statements
+// rather than an accident of sort stability; no distinct-predicate ordering
+// is affected.
 func emitStatements(b *strings.Builder, stmts []Statement) error {
-	ordered := append([]Statement(nil), stmts...)
-	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Predicate < ordered[j].Predicate })
+	type rendered struct {
+		predicate  string
+		serialized string
+	}
+	ordered := make([]rendered, 0, len(stmts))
+	for _, st := range stmts {
+		serialized, err := serializeStatement(st)
+		if err != nil {
+			return err
+		}
+		ordered = append(ordered, rendered{predicate: st.Predicate, serialized: serialized})
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].predicate != ordered[j].predicate {
+			return ordered[i].predicate < ordered[j].predicate
+		}
+		return ordered[i].serialized < ordered[j].serialized
+	})
 	for i, st := range ordered {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		b.WriteString(`{"predicate":`)
-		emitJSONString(b, st.Predicate)
-		b.WriteByte(',')
-		if err := emitValueTail(b, st.Value); err != nil {
-			return err
-		}
-		b.WriteByte('}')
+		b.WriteString(st.serialized)
 	}
 	return nil
 }

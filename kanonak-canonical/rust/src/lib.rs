@@ -159,10 +159,18 @@ pub fn canonical_decimal(raw: &str) -> Result<String, CanonError> {
     if int_raw.is_empty() && frac_raw.is_empty() {
         return Err(CanonError(format!("canonicalDecimal: '{}' invalid", raw)));
     }
-    let sign = if caps.get(1).map(|m| m.as_str()).unwrap_or("") == "-" { "-" } else { "" };
+    let sign = if caps.get(1).map(|m| m.as_str()).unwrap_or("") == "-" {
+        "-"
+    } else {
+        ""
+    };
     let int_part = {
         let s = int_raw.trim_start_matches('0');
-        if s.is_empty() { "0" } else { s }
+        if s.is_empty() {
+            "0"
+        } else {
+            s
+        }
     };
     let frac_part = frac_raw.trim_end_matches('0');
     let magnitude = if !frac_part.is_empty() {
@@ -197,7 +205,10 @@ fn canonical_ieee(raw: &str, single: bool, label: &str) -> Result<String, CanonE
     if single {
         let f = n as f32;
         if !f.is_finite() {
-            return Err(CanonError(format!("canonical{}: '{}' out of range", label, raw)));
+            return Err(CanonError(format!(
+                "canonical{}: '{}' out of range",
+                label, raw
+            )));
         }
         if f == 0.0 {
             return Ok("0".to_string());
@@ -205,7 +216,10 @@ fn canonical_ieee(raw: &str, single: bool, label: &str) -> Result<String, CanonE
         Ok(format!("{}", f))
     } else {
         if !n.is_finite() {
-            return Err(CanonError(format!("canonical{}: '{}' out of range", label, raw)));
+            return Err(CanonError(format!(
+                "canonical{}: '{}' out of range",
+                label, raw
+            )));
         }
         if n == 0.0 {
             return Ok("0".to_string());
@@ -240,7 +254,10 @@ pub fn canonical_string(raw: &str) -> String {
 pub fn canonical_language_tag(tag: &str) -> Result<String, CanonError> {
     let subs: Vec<&str> = tag.trim().split('-').collect();
     if subs.is_empty() || subs[0].is_empty() {
-        return Err(CanonError(format!("canonicalLanguageTag: '{}' invalid", tag)));
+        return Err(CanonError(format!(
+            "canonicalLanguageTag: '{}' invalid",
+            tag
+        )));
     }
     let out: Vec<String> = subs
         .iter()
@@ -337,20 +354,37 @@ fn tz_offset_minutes(tz: &str) -> i64 {
 }
 
 pub fn canonical_date_time(raw: &str) -> Result<String, CanonError> {
-    let caps = re!(r"^(-?\d{4,})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$")
-        .captures(raw.trim())
-        .ok_or_else(|| CanonError(format!("canonicalDateTime: '{}' invalid", raw)))?;
+    let caps =
+        re!(r"^(-?\d{4,})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$")
+            .captures(raw.trim())
+            .ok_or_else(|| CanonError(format!("canonicalDateTime: '{}' invalid", raw)))?;
     let g = |i: usize| caps.get(i).map(|m| m.as_str()).unwrap_or("");
     let (yy, mo, dd, hh, mi, ss) = (g(1), g(2), g(3), g(4), g(5), g(6));
     let fraction = canonical_fraction(g(7));
     let tz = g(8);
 
     if tz.is_empty() {
-        return Ok(format!("{}-{}-{}T{}:{}:{}{}", canonical_year(yy), mo, dd, hh, mi, ss, fraction));
+        return Ok(format!(
+            "{}-{}-{}T{}:{}:{}{}",
+            canonical_year(yy),
+            mo,
+            dd,
+            hh,
+            mi,
+            ss,
+            fraction
+        ));
     }
     // Proleptic-Gregorian UTC shift on the integer fields (days-from-epoch).
-    let days = days_from_civil(yy.parse().unwrap(), mo.parse().unwrap(), dd.parse().unwrap());
-    let secs = days * 86400 + hh.parse::<i64>().unwrap() * 3600 + mi.parse::<i64>().unwrap() * 60 + ss.parse::<i64>().unwrap();
+    let days = days_from_civil(
+        yy.parse().unwrap(),
+        mo.parse().unwrap(),
+        dd.parse().unwrap(),
+    );
+    let secs = days * 86400
+        + hh.parse::<i64>().unwrap() * 3600
+        + mi.parse::<i64>().unwrap() * 60
+        + ss.parse::<i64>().unwrap();
     let shifted = secs - tz_offset_minutes(tz) * 60;
     let (y, m, d, sod) = civil_from_secs(shifted);
     let (sh, sm, sss) = (sod / 3600, (sod % 3600) / 60, sod % 60);
@@ -371,7 +405,13 @@ pub fn canonical_date(raw: &str) -> Result<String, CanonError> {
         .captures(raw.trim())
         .ok_or_else(|| CanonError(format!("canonicalDate: '{}' invalid", raw)))?;
     let g = |i: usize| caps.get(i).map(|m| m.as_str()).unwrap_or("");
-    Ok(format!("{}-{}-{}{}", canonical_year(g(1)), g(2), g(3), canonical_tz(g(4))))
+    Ok(format!(
+        "{}-{}-{}{}",
+        canonical_year(g(1)),
+        g(2),
+        g(3),
+        canonical_tz(g(4))
+    ))
 }
 
 pub fn canonical_time(raw: &str) -> Result<String, CanonError> {
@@ -384,7 +424,14 @@ pub fn canonical_time(raw: &str) -> Result<String, CanonError> {
     if hh == "24" && mi == "00" && ss == "00" && fraction.is_empty() {
         hh = "00".to_string();
     }
-    Ok(format!("{}:{}:{}{}{}", hh, mi, ss, fraction, canonical_tz(g(5))))
+    Ok(format!(
+        "{}:{}:{}{}{}",
+        hh,
+        mi,
+        ss,
+        fraction,
+        canonical_tz(g(5))
+    ))
 }
 
 pub fn canonical_scalar_lexical(carrier: Carrier, raw: &str) -> Result<String, CanonError> {
@@ -499,10 +546,16 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
 // ===========================================================================
 
 pub enum Value {
-    Typed { carrier: Carrier, lexical: String },
+    Typed {
+        carrier: Carrier,
+        lexical: String,
+    },
     Raw(String),
     Reference(String),
-    Embedded { name: Option<String>, statements: Vec<Statement> },
+    Embedded {
+        name: Option<String>,
+        statements: Vec<Statement>,
+    },
     List(Vec<Value>),
 }
 
@@ -546,18 +599,35 @@ pub fn canonical_hash(pkg: &Package) -> Result<String, CanonError> {
     Ok(format!("sha256:{:x}", digest))
 }
 
+fn serialize_statement(st: &Statement) -> Result<String, CanonError> {
+    let mut out = String::from("{\"predicate\":");
+    emit_json_string(&mut out, &st.predicate);
+    out.push(',');
+    emit_value_tail(&mut out, &st.value)?;
+    out.push('}');
+    Ok(out)
+}
+
+// Order by predicate UTF-8 bytes; equal predicates (possible since multi-typed
+// subjects — several type statements share the type predicate) order by the
+// serialized statement blob's UTF-8 bytes. The tie-break makes the declared
+// invariance under statement ordering TRUE for same-predicate statements
+// rather than an accident of sort stability; no distinct-predicate ordering
+// is affected.
 fn emit_statements(out: &mut String, stmts: &[Statement]) -> Result<(), CanonError> {
-    let mut ordered: Vec<&Statement> = stmts.iter().collect();
-    ordered.sort_by(|a, b| a.predicate.as_bytes().cmp(b.predicate.as_bytes()));
-    for (i, st) in ordered.iter().enumerate() {
+    let mut rendered: Vec<(&[u8], String)> = Vec::with_capacity(stmts.len());
+    for st in stmts {
+        rendered.push((st.predicate.as_bytes(), serialize_statement(st)?));
+    }
+    rendered.sort_by(|a, b| {
+        a.0.cmp(b.0)
+            .then_with(|| a.1.as_bytes().cmp(b.1.as_bytes()))
+    });
+    for (i, (_, serialized)) in rendered.iter().enumerate() {
         if i > 0 {
             out.push(',');
         }
-        out.push_str("{\"predicate\":");
-        emit_json_string(out, &st.predicate);
-        out.push(',');
-        emit_value_tail(out, &st.value)?;
-        out.push('}');
+        out.push_str(serialized);
     }
     Ok(())
 }

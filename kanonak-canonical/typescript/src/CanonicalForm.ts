@@ -6,7 +6,10 @@
  *
  * Wire form: compact JSON, RFC 8785 escaping, a FIXED per-blob field order
  * (predicate, type, then carrier/name, then value/statements/items). Ordering of
- * subjects (by URI) and statements (by predicate) is by UTF-8 byte sequence.
+ * subjects (by URI) and statements (by predicate) is by UTF-8 byte sequence;
+ * statements sharing a predicate (multi-typed subjects) order by the serialized
+ * statement blob's UTF-8 bytes — pinned so the form is genuinely invariant
+ * under statement ordering, never an accident of sort stability.
  * Frozen to `canonicalFormVersion` "1".
  */
 import { Carrier, carrierOf, canonicalScalarLexical } from './Datatypes.js';
@@ -82,8 +85,26 @@ function statementBlob(st: CanonicalInputStatement): StatementBlob {
   }
 }
 
+/**
+ * Order statements by predicate UTF-8 bytes; equal predicates (possible since
+ * multi-typed subjects — several type statements share the type predicate)
+ * order by the serialized statement blob's UTF-8 bytes. The tie-break makes
+ * the declared invariance under statement ordering TRUE for same-predicate
+ * statements rather than an accident of the host sort's stability; it changes
+ * no previously valid output, because ties were impossible before multi-type
+ * statements existed (no distinct-predicate ordering is affected).
+ */
 function canonicalStatements(stmts: CanonicalInputStatement[]): StatementBlob[] {
-  return stmts.map(statementBlob).sort((a, b) => compareUtf8(a.predicate, b.predicate));
+  return stmts
+    .map((st) => {
+      const blob = statementBlob(st);
+      return { blob, json: JSON.stringify(blob) };
+    })
+    .sort(
+      (a, b) =>
+        compareUtf8(a.blob.predicate, b.blob.predicate) || compareUtf8(a.json, b.json)
+    )
+    .map((x) => x.blob);
 }
 
 /** The canonical form (the `{subjects:[…]}` JSON) of a `CanonicalInput`. */

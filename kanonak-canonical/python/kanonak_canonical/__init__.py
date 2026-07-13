@@ -363,16 +363,25 @@ def canonical_hash(pkg: Package) -> str:
     return "sha256:" + hashlib.sha256(form.encode("utf-8")).hexdigest()
 
 
+def _serialize_statement(st: Statement) -> str:
+    out: List[str] = ['{"predicate":']
+    _emit_string(out, st.predicate)
+    out.append(",")
+    _emit_value_tail(out, st.value)
+    out.append("}")
+    return "".join(out)
+
+
 def _emit_statements(out: List[str], stmts: List[Statement]) -> None:
-    ordered = sorted(stmts, key=lambda s: s.predicate.encode("utf-8"))
-    for i, st in enumerate(ordered):
-        if i:
-            out.append(",")
-        out.append('{"predicate":')
-        _emit_string(out, st.predicate)
-        out.append(",")
-        _emit_value_tail(out, st.value)
-        out.append("}")
+    # Order by predicate UTF-8 bytes; equal predicates (possible since
+    # multi-typed subjects — several type statements share the type predicate)
+    # order by the serialized statement blob's UTF-8 bytes. The tie-break makes
+    # the declared invariance under statement ordering TRUE for same-predicate
+    # statements rather than an accident of sort stability; no distinct-predicate
+    # ordering is affected.
+    rendered = [(st.predicate.encode("utf-8"), _serialize_statement(st)) for st in stmts]
+    rendered.sort(key=lambda pair: (pair[0], pair[1].encode("utf-8")))
+    out.append(",".join(serialized for _, serialized in rendered))
 
 
 def _emit_value_tail(out: List[str], v: object) -> None:
