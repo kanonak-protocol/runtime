@@ -36,8 +36,128 @@ public final class Conformance {
             System.out.println(vectors + ": " + counts[0] + " passed, " + counts[1] + " failed");
         }
 
+        if (args.length == 0) {
+            String typesVectors = "../vectors/codec-vectors-types.json";
+            int[] counts = runTypesFile(typesVectors);
+            passed += counts[0];
+            failed += counts[1];
+            System.out.println(typesVectors + ": " + counts[0] + " passed, " + counts[1] + " failed");
+        }
+
         System.out.println("\n" + passed + " passed, " + failed + " failed");
         System.exit(failed == 0 ? 0 : 1);
+    }
+
+    /**
+     * The 0.4.0 multi-typed-subjects file (runtime#10). Beyond the standard
+     * form/hash/serialize checks it exercises the $types contract: expectError
+     * cases must be rejected on ALL THREE surfaces — serialize (the producer
+     * fails at emit time), deserialize (the reader rejects, never repairs), and
+     * canonicalization — and positive cases must round-trip:
+     * deserialize(serialize(x)) preserves $types exactly and re-canonicalizes
+     * to the same hash.
+     */
+    static int[] runTypesFile(String vectors) throws Exception {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) Json.parse(
+            Files.readString(Paths.get(vectors), StandardCharsets.UTF_8));
+
+        CodecSchema schema = parseSchema(asMap(data.get("schema")));
+
+        int passed = 0;
+        int failed = 0;
+
+        for (Object co : asList(data.get("cases"))) {
+            Map<String, Object> caseObj = asMap(co);
+            String cid = (String) caseObj.get("id");
+            List<Map<String, Object>> nodes = new ArrayList<>();
+            for (Object n : asList(caseObj.get("nodes"))) {
+                nodes.add(asMap(n));
+            }
+            PackageContext pkg = parsePkg(asMap(caseObj.get("pkg")));
+
+            if (Boolean.TRUE.equals(caseObj.get("expectError"))) {
+                boolean ok = true;
+                if (!rejects(() -> Codec.canonicalForm(nodes, schema, pkg))) {
+                    ok = false;
+                    System.out.println("FAIL [" + cid + "] expected canonicalize to reject, it did not");
+                }
+                if (!rejects(() -> nodes.forEach(Codec::serialize))) {
+                    ok = false;
+                    System.out.println("FAIL [" + cid + "] expected serialize to reject, it did not");
+                }
+                if (!rejects(() -> nodes.forEach(n -> Codec.deserialize(n, schema)))) {
+                    ok = false;
+                    System.out.println("FAIL [" + cid + "] expected deserialize to reject, it did not");
+                }
+                if (ok) {
+                    passed++;
+                } else {
+                    failed++;
+                }
+                continue;
+            }
+
+            String form = Codec.canonicalForm(nodes, schema, pkg);
+            String expForm = (String) caseObj.get("expectedCanonicalForm");
+            if (form.equals(expForm)) {
+                passed++;
+            } else {
+                failed++;
+                System.out.println("FAIL [" + cid + "] canonical form\n  got: " + form + "\n  exp: " + expForm);
+            }
+
+            String hash = Codec.contentHash(nodes, schema, pkg);
+            String expHash = (String) caseObj.get("expectedHash");
+            if (hash.equals(expHash)) {
+                passed++;
+            } else {
+                failed++;
+                System.out.println("FAIL [" + cid + "] hash\n  got: " + hash + "\n  exp: " + expHash);
+            }
+
+            List<Object> expSerialize = asList(caseObj.get("expectedSerialize"));
+            List<Map<String, Object>> roundTripped = new ArrayList<>();
+            boolean serOk = true;
+            for (int i = 0; i < nodes.size(); i++) {
+                Map<String, Object> wire = Codec.serialize(nodes.get(i));
+                if (!deepEquals(wire, expSerialize.get(i))) {
+                    serOk = false;
+                    System.out.println("FAIL [" + cid + "] serialize[" + i + "]\n  got: " + wire
+                        + "\n  exp: " + expSerialize.get(i));
+                }
+                Map<String, Object> back = Codec.deserialize(wire, schema);
+                if (!deepEquals(Codec.serialize(back), expSerialize.get(i))) {
+                    serOk = false;
+                    System.out.println("FAIL [" + cid + "] round-trip serialize[" + i + "] mismatch");
+                }
+                roundTripped.add(back);
+            }
+            if (serOk) {
+                passed++;
+            } else {
+                failed++;
+            }
+
+            String rtHash = Codec.contentHash(roundTripped, schema, pkg);
+            if (rtHash.equals(expHash)) {
+                passed++;
+            } else {
+                failed++;
+                System.out.println("FAIL [" + cid + "] round-trip hash\n  got: " + rtHash + "\n  exp: " + expHash);
+            }
+        }
+
+        return new int[] {passed, failed};
+    }
+
+    static boolean rejects(Runnable run) {
+        try {
+            run.run();
+            return false;
+        } catch (IllegalArgumentException expected) {
+            return true;
+        }
     }
 
     static int[] runFile(String vectors) throws Exception {

@@ -30,6 +30,15 @@ type KanonakNode struct {
 	// Type is the durable class URI — the value of the synthesized type triple.
 	Type string `json:"$type,omitempty"`
 
+	// Types is a multi-typed node's FULL type set (0.4.0, runtime#10) — present
+	// only when the node carries more than one type statement. Sorted by UTF-8
+	// bytes, at least two members, no duplicates, Type a member; each member
+	// emits one type statement in canonical form. Exposed ONLY as the $types
+	// envelope — deliberately no unprefixed accessor, because an ontology can
+	// model a property literally named "types"; the $ prefix exists to avoid
+	// exactly that collision.
+	Types []string `json:"$types,omitempty"`
+
 	// Name is an embedded value's authored dict-key — HASH-RELEVANT
 	// (serialized into the canonical form). Only meaningful when the instance
 	// is used as an embedded value (via EmbedNamed); empty for subjects.

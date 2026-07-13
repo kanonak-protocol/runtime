@@ -62,6 +62,32 @@ sealed class Account : KanonakNode
     [JsonPropertyName("tags")] public List<string> Tags { get; set; }
 }
 
+// -- Generated-style model for the $types vectors (0.4.0, runtime#10) --------
+// The multi-typed set rides the model via KanonakNode.Types ($types envelope
+// only — deliberately no unprefixed wire name, because an ontology can model a
+// property literally named "types").
+
+sealed class DefResource : KanonakNode
+{
+    [JsonPropertyName("note")] public string Note { get; set; }
+}
+
+sealed class Bundle : KanonakNode
+{
+    [JsonPropertyName("parts")] public List<Ref<PartDef>> Parts { get; set; }
+}
+
+// Same $type, single-valued parts — exercises the bare embedded form.
+sealed class BundleSinglePart : KanonakNode
+{
+    [JsonPropertyName("parts")] public Ref<PartDef> Parts { get; set; }
+}
+
+sealed class PartDef : KanonakNode
+{
+    [JsonPropertyName("size")] public long? Size { get; set; }
+}
+
 static class Program
 {
     const string SCHEMA = "probe.example.com/schema@1.0.0";
@@ -201,6 +227,57 @@ static class Program
                 AccountCode = "paul", Seats = 5, Rate = 1.5m, Active = true,
                 Owner = Ref<Person>.To(alice),
                 Tags = new List<string> { "x", "y" },
+            },
+        });
+
+        // The 0.4.0 $types cases (runtime#10) through the typed path.
+        var types = JsonDocument.Parse(File.ReadAllText(Path.Combine(vectorsDir, "codec-vectors-types.json")));
+        var typesSchema = CodecSchema.FromJson(types.RootElement.GetProperty("schema").GetRawText());
+        var typesPkg = new PackageContext
+        {
+            Publisher = "probe.example.com", PackageName = "data", Version = "1.0.0",
+            Label = "Types Probe Data",
+        };
+
+        Check(types, "covered-redundant-set", typesSchema, typesPkg, new KanonakNode[]
+        {
+            new DefResource
+            {
+                Id = DATA + "/w1", Type = SCHEMA + "/ClassDef",
+                Types = new List<string> { SCHEMA + "/AnnotatedDef", SCHEMA + "/ClassDef" },
+                Note = "A",
+            },
+        });
+
+        Check(types, "embedded-multi-typed-named", typesSchema, typesPkg, new KanonakNode[]
+        {
+            new BundleSinglePart
+            {
+                Id = DATA + "/b1", Type = SCHEMA + "/Bundle",
+                Parts = Ref<PartDef>.Embed(new PartDef
+                {
+                    Type = SCHEMA + "/PartDef",
+                    Types = new List<string> { SCHEMA + "/PartDef", SCHEMA + "/SealedDef" },
+                    Size = 2,
+                }, "first"),
+            },
+        });
+
+        Check(types, "types-in-list-items", typesSchema, typesPkg, new KanonakNode[]
+        {
+            new Bundle
+            {
+                Id = DATA + "/b1", Type = SCHEMA + "/Bundle",
+                Parts = new List<Ref<PartDef>>
+                {
+                    Ref<PartDef>.Embed(new PartDef
+                    {
+                        Type = SCHEMA + "/PartDef",
+                        Types = new List<string> { SCHEMA + "/PartDef", SCHEMA + "/SealedDef" },
+                        Size = 1,
+                    }, "a"),
+                    Ref<PartDef>.Embed(new PartDef { Type = SCHEMA + "/PartDef", Size = 2 }, "b"),
+                },
             },
         });
 

@@ -52,8 +52,98 @@ class Program
             failed += fileFailed;
         }
 
+        if (args.Length == 0)
+        {
+            string typesPath = FindVectors("codec-vectors-types.json");
+            if (typesPath == null)
+            {
+                Console.Error.WriteLine("codec-vectors-types.json not found; pass the vector files as arguments");
+                return 2;
+            }
+            int filePassed, fileFailed;
+            RunTypesFile(typesPath, out filePassed, out fileFailed);
+            Console.WriteLine($"{Path.GetFileName(typesPath)}: {filePassed} passed, {fileFailed} failed");
+            passed += filePassed;
+            failed += fileFailed;
+        }
+
         Console.WriteLine($"\n{passed} passed, {failed} failed");
         return failed == 0 ? 0 : 1;
+    }
+
+    // The 0.4.0 multi-typed-subjects file (runtime#10). Beyond the standard
+    // form/hash/serialize checks it exercises the $types contract: expectError
+    // cases must be rejected on ALL THREE surfaces — Serialize (the producer
+    // fails at emit time), Deserialize (the reader rejects, never repairs), and
+    // canonicalization — and positive cases must round-trip:
+    // Deserialize(Serialize(x)) preserves $types exactly and re-canonicalizes
+    // to the same hash.
+    static void RunTypesFile(string vectorsPath, out int passed, out int failed)
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllText(vectorsPath));
+        var root = doc.RootElement;
+        CodecSchema schema = DecodeSchema(root.GetProperty("schema"));
+
+        passed = 0; failed = 0;
+        foreach (var c in root.GetProperty("cases").EnumerateArray())
+        {
+            string id = c.GetProperty("id").GetString();
+            PackageContext pkg = DecodePkg(c.GetProperty("pkg"));
+
+            var nodes = new List<IReadOnlyDictionary<string, object>>();
+            foreach (var n in c.GetProperty("nodes").EnumerateArray())
+                nodes.Add((IReadOnlyDictionary<string, object>)DecodeJson(n));
+
+            if (c.TryGetProperty("expectError", out var expErr) && expErr.GetBoolean())
+            {
+                bool ok = true;
+                if (!Rejects(() => Codec.CanonicalForm(nodes, schema, pkg)))
+                { ok = false; Console.WriteLine($"FAIL [{id}] expected canonicalize to reject, it did not"); }
+                if (!Rejects(() => { foreach (var n in nodes) Codec.Serialize(n); }))
+                { ok = false; Console.WriteLine($"FAIL [{id}] expected serialize to reject, it did not"); }
+                if (!Rejects(() => { foreach (var n in nodes) Codec.Deserialize(n, schema); }))
+                { ok = false; Console.WriteLine($"FAIL [{id}] expected deserialize to reject, it did not"); }
+                if (ok) passed++; else failed++;
+                continue;
+            }
+
+            string form = Codec.CanonicalForm(nodes, schema, pkg);
+            string expForm = c.GetProperty("expectedCanonicalForm").GetString();
+            if (form == expForm) passed++;
+            else { failed++; Console.WriteLine($"FAIL [{id}] canonical form\n  got: {form}\n  exp: {expForm}"); }
+
+            string hash = Codec.ContentHash(nodes, schema, pkg);
+            string expHash = c.GetProperty("expectedHash").GetString();
+            if (hash == expHash) passed++;
+            else { failed++; Console.WriteLine($"FAIL [{id}] hash\n  got: {hash}\n  exp: {expHash}"); }
+
+            var expSer = c.GetProperty("expectedSerialize");
+            var roundTripped = new List<IReadOnlyDictionary<string, object>>();
+            bool serOk = true;
+            for (int i = 0; i < nodes.Count; i++)
+            {
+                var wire = Codec.Serialize(nodes[i]);
+                object exp = DecodeJson(expSer[i]);
+                if (!DeepEquals(wire, exp))
+                { serOk = false; Console.WriteLine($"FAIL [{id}] serialize[{i}]\n  got: {Show(wire)}\n  exp: {Show(exp)}"); }
+
+                var back = Codec.Deserialize(wire, schema);
+                if (!DeepEquals(Codec.Serialize(back), exp))
+                { serOk = false; Console.WriteLine($"FAIL [{id}] round-trip serialize[{i}] mismatch"); }
+                roundTripped.Add(back);
+            }
+            if (serOk) passed++; else failed++;
+
+            string rtHash = Codec.ContentHash(roundTripped, schema, pkg);
+            if (rtHash == expHash) passed++;
+            else { failed++; Console.WriteLine($"FAIL [{id}] round-trip hash\n  got: {rtHash}\n  exp: {expHash}"); }
+        }
+    }
+
+    static bool Rejects(Action run)
+    {
+        try { run(); return false; }
+        catch (ArgumentException) { return true; }
     }
 
     static void RunFile(string vectorsPath, out int passed, out int failed)

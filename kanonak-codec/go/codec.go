@@ -19,8 +19,91 @@ import (
 
 // envelopeKeys are the $-envelope keys excluded from statement/field emission.
 // $name (0.2.0) carries an embedded value's authored dict-key — hash-relevant.
+// $types (0.4.0, runtime#10) carries a multi-typed node's FULL type set.
 var envelopeKeys = map[string]bool{
-	"$type": true, "$id": true, "$name": true, "$contentHash": true, "$version": true, "$extra": true,
+	"$type": true, "$types": true, "$id": true, "$name": true, "$contentHash": true, "$version": true, "$extra": true,
+}
+
+// validatedTypes validates a node-or-embedded's $types envelope (0.4.0,
+// runtime#10) and returns the validated set, or nil when the node is
+// single-typed. Invariants: sorted by UTF-8 bytes (Go string comparison IS
+// byte-wise lexicographic), at least two members, no duplicates, and $type
+// (the dispatch key, chosen by the schema layer's primary rule) is a member.
+// Enforced wherever the envelope is touched — Serialize, Deserialize, and
+// canonicalization — so a producer fails at emit time and a reader never masks
+// a nondeterministic emitter by silently repairing the set.
+func validatedTypes(m map[string]interface{}, where string) ([]string, error) {
+	raw, has := m["$types"]
+	if !has || raw == nil {
+		return nil, nil
+	}
+	list, ok := raw.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("codec: %s: $types must be a list of non-empty type URIs", where)
+	}
+	types := make([]string, 0, len(list))
+	for _, item := range list {
+		s, isStr := item.(string)
+		if !isStr || s == "" {
+			return nil, fmt.Errorf("codec: %s: $types must be a list of non-empty type URIs", where)
+		}
+		types = append(types, s)
+	}
+	if len(types) < 2 {
+		return nil, fmt.Errorf(
+			"codec: %s: $types with %d member(s) is forbidden — a single-typed node carries "+
+				"only $type (a second encoding of the same content would be hash-ambiguous)",
+			where, len(types))
+	}
+	for i := 1; i < len(types); i++ {
+		if types[i-1] == types[i] {
+			return nil, fmt.Errorf("codec: %s: $types carries duplicate member %s", where, types[i])
+		}
+		if types[i-1] > types[i] {
+			return nil, fmt.Errorf(
+				"codec: %s: $types is not sorted by UTF-8 bytes (%s sorts after %s) — "+
+					"ordering is the producer's job, never the reader's",
+				where, types[i-1], types[i])
+		}
+	}
+	primary, _ := m["$type"].(string)
+	for _, t := range types {
+		if primary != "" && t == primary {
+			return types, nil
+		}
+	}
+	return nil, fmt.Errorf(
+		"codec: %s: $type (%q) must be present and a member of $types", where, primary)
+}
+
+// assertTypesEnvelopes recursively validates every $types envelope in a wire
+// value (the node itself and any embedded node at any depth). Shared by
+// Serialize (the producer fails at emit time) and Deserialize (the strict
+// reader rejects rather than repairs).
+func assertTypesEnvelopes(value interface{}, where string) error {
+	switch v := value.(type) {
+	case []interface{}:
+		for i, item := range v {
+			if err := assertTypesEnvelopes(item, fmt.Sprintf("%s[%d]", where, i)); err != nil {
+				return err
+			}
+		}
+	case map[string]interface{}:
+		if _, has := v["$types"]; has {
+			if _, err := validatedTypes(v, where); err != nil {
+				return err
+			}
+		}
+		for key, item := range v {
+			if key == "$types" {
+				continue
+			}
+			if err := assertTypesEnvelopes(item, where+"."+key); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // Prop describes a single modeled property of a class. Range (0.2.0) is the
@@ -117,6 +200,10 @@ func embeddedValue(prop Prop, m map[string]interface{}, schema CodecSchema) (can
 			"codec: an embedded value under %s must not carry $id — to point at a "+
 				"named resource, pass a reference ({\"$ref\": ...})", prop.Predicate)
 	}
+	types, err := validatedTypes(m, fmt.Sprintf("embedded value under %s", prop.Predicate))
+	if err != nil {
+		return nil, err
+	}
 	explicitType, _ := m["$type"].(string)
 	clsURI := explicitType
 	if clsURI == "" {
@@ -136,7 +223,16 @@ func embeddedValue(prop Prop, m map[string]interface{}, schema CodecSchema) (can
 	if err != nil {
 		return nil, err
 	}
-	if explicitType != "" {
+	if types != nil {
+		// A multi-typed embedded ($types implies an explicit $type): one type
+		// statement per member, in $types (UTF-8 sorted) order — all hash-relevant.
+		for _, member := range types {
+			stmts = append(stmts, canonical.Statement{
+				Predicate: schema.TypePredicate,
+				Value:     canonical.Ref{URI: member},
+			})
+		}
+	} else if explicitType != "" {
 		stmts = append(stmts, canonical.Statement{
 			Predicate: schema.TypePredicate,
 			Value:     canonical.Ref{URI: explicitType},
@@ -209,8 +305,16 @@ func fieldStatements(source map[string]interface{}, cls Class, schema CodecSchem
 }
 
 // statements builds the canonical statements for one subject node: the rdf:type
-// triple, then its fields.
+// triple(s), then its fields.
 func statements(node map[string]interface{}, schema CodecSchema) ([]canonical.Statement, error) {
+	id, _ := node["$id"].(string)
+	if id == "" {
+		id = "(no $id)"
+	}
+	types, err := validatedTypes(node, fmt.Sprintf("node %s", id))
+	if err != nil {
+		return nil, err
+	}
 	typeURI, _ := node["$type"].(string)
 	if typeURI == "" {
 		return nil, fmt.Errorf("codec: node is missing $type")
@@ -220,8 +324,17 @@ func statements(node map[string]interface{}, schema CodecSchema) ([]canonical.St
 		return nil, fmt.Errorf("codec: no schema for type %s", typeURI)
 	}
 
-	out := []canonical.Statement{
-		{Predicate: schema.TypePredicate, Value: canonical.Ref{URI: typeURI}},
+	// The rdf:type triple(s) every subject carries: one per $types member for a
+	// multi-typed node (in $types' UTF-8 sorted order), else the single $type.
+	members := types
+	if members == nil {
+		members = []string{typeURI}
+	}
+	out := make([]canonical.Statement, 0, len(members))
+	for _, member := range members {
+		out = append(out, canonical.Statement{
+			Predicate: schema.TypePredicate, Value: canonical.Ref{URI: member},
+		})
 	}
 	fields, err := fieldStatements(node, cls, schema)
 	if err != nil {
@@ -287,7 +400,19 @@ func ContentHash(nodes []map[string]interface{}, schema CodecSchema, pkg Package
 // Serialize renders a typed node to its normalized-JSON wire form. $extra
 // entries ride as sibling fields after the modeled ones; a modeled field wins a
 // name collision ([JsonExtensionData] semantics). nil values are dropped.
-func Serialize(node map[string]interface{}) map[string]interface{} {
+// Fallible since 0.4.0: an invalid $types envelope (at any depth) is a producer
+// bug and fails at emit time.
+func Serialize(node map[string]interface{}) (map[string]interface{}, error) {
+	where, _ := node["$id"].(string)
+	if where == "" {
+		where, _ = node["$type"].(string)
+	}
+	if where == "" {
+		where = "(node)"
+	}
+	if err := assertTypesEnvelopes(node, "serialize "+where); err != nil {
+		return nil, err
+	}
 	out := make(map[string]interface{})
 	for key, val := range node {
 		if key == "$extra" || val == nil {
@@ -305,7 +430,7 @@ func Serialize(node map[string]interface{}) map[string]interface{} {
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 // Deserialize parses normalized JSON into a typed node. $-envelope keys and
@@ -315,6 +440,17 @@ func Deserialize(jsonObj map[string]interface{}, schema CodecSchema) (map[string
 	typeURI, ok := jsonObj["$type"].(string)
 	if !ok {
 		return nil, fmt.Errorf("codec: cannot deserialize: missing string $type")
+	}
+	// Reader-side $types validation, at every depth: an unsorted / singleton /
+	// duplicate / non-member set is REJECTED, never silently repaired —
+	// determinism belongs to the producer, and a lenient reader would mask a
+	// nondeterministic emitter.
+	where, _ := jsonObj["$id"].(string)
+	if where == "" {
+		where = typeURI
+	}
+	if err := assertTypesEnvelopes(jsonObj, "deserialize "+where); err != nil {
+		return nil, err
 	}
 	cls, ok := schema.Classes[typeURI]
 	if !ok {

@@ -117,18 +117,42 @@ namespace Kanonak.Canonical
             sb.Append("]}");
         }
 
+        private static string SerializeStatement(Statement st)
+        {
+            var sb = new StringBuilder();
+            sb.Append("{\"predicate\":");
+            EmitJsonString(sb, st.Predicate);
+            sb.Append(',');
+            EmitValueTail(sb, st.Value);
+            sb.Append('}');
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Orders by predicate UTF-8 bytes; equal predicates (possible since
+        /// multi-typed subjects — several type statements share the type
+        /// predicate) order by the serialized statement blob's UTF-8 bytes. The
+        /// tie-break makes the declared invariance under statement ordering TRUE
+        /// for same-predicate statements — List&lt;T&gt;.Sort is an unstable
+        /// introsort, so without it, tie order would be an implementation
+        /// accident. No distinct-predicate ordering is affected.
+        /// </summary>
         private static void EmitStatements(StringBuilder sb, List<Statement> stmts)
         {
-            var ordered = new List<Statement>(stmts);
-            ordered.Sort((a, b) => CompareUtf8(a.Predicate, b.Predicate));
+            var ordered = new List<(string Predicate, string Serialized)>(stmts.Count);
+            foreach (var st in stmts)
+            {
+                ordered.Add((st.Predicate, SerializeStatement(st)));
+            }
+            ordered.Sort((a, b) =>
+            {
+                int byPredicate = CompareUtf8(a.Predicate, b.Predicate);
+                return byPredicate != 0 ? byPredicate : CompareUtf8(a.Serialized, b.Serialized);
+            });
             for (int i = 0; i < ordered.Count; i++)
             {
                 if (i > 0) sb.Append(',');
-                sb.Append("{\"predicate\":");
-                EmitJsonString(sb, ordered[i].Predicate);
-                sb.Append(',');
-                EmitValueTail(sb, ordered[i].Value);
-                sb.Append('}');
+                sb.Append(ordered[i].Serialized);
             }
         }
 

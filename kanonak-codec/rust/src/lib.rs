@@ -24,8 +24,10 @@ pub use typed::{to_node, KanonakNode, KanonakResource, Ref};
 
 /// The reserved `$`-envelope keys, which never become statements/predicates.
 /// `$name` (0.2.0) carries an embedded value's authored dict-key — hash-relevant.
-const ENVELOPE_KEYS: [&str; 6] = [
+/// `$types` (0.4.0, runtime#10) carries a multi-typed node's FULL type set.
+const ENVELOPE_KEYS: [&str; 7] = [
     "$type",
+    "$types",
     "$id",
     "$name",
     "$contentHash",
@@ -85,6 +87,106 @@ fn lexical(value: &Json) -> String {
     }
 }
 
+/// Validate a node-or-embedded's `$types` envelope (0.4.0, runtime#10) and
+/// return the validated set, or `None` when the node is single-typed.
+/// Invariants: sorted by UTF-8 bytes, at least two members, no duplicates, and
+/// `$type` (the dispatch key, chosen by the schema layer's primary rule) is a
+/// member. Enforced wherever the envelope is touched — serialize, deserialize,
+/// and canonicalization — so a producer fails at emit time and a reader never
+/// masks a nondeterministic emitter by silently repairing the set.
+fn validated_types(
+    map: &Map<String, Json>,
+    where_: &str,
+) -> Result<Option<Vec<String>>, CodecError> {
+    let raw = match map.get("$types") {
+        None | Some(Json::Null) => return Ok(None),
+        Some(v) => v,
+    };
+    let items = match raw.as_array() {
+        Some(items) => items,
+        None => {
+            return err(format!(
+                "{}: $types must be a list of non-empty type URIs",
+                where_
+            ))
+        }
+    };
+    let mut types: Vec<String> = Vec::with_capacity(items.len());
+    for item in items {
+        match item.as_str() {
+            Some(s) if !s.is_empty() => types.push(s.to_string()),
+            _ => {
+                return err(format!(
+                    "{}: $types must be a list of non-empty type URIs",
+                    where_
+                ))
+            }
+        }
+    }
+    if types.len() < 2 {
+        return err(format!(
+            "{}: $types with {} member(s) is forbidden — a single-typed node carries \
+             only $type (a second encoding of the same content would be hash-ambiguous)",
+            where_,
+            types.len()
+        ));
+    }
+    for pair in types.windows(2) {
+        match pair[0].as_bytes().cmp(pair[1].as_bytes()) {
+            std::cmp::Ordering::Equal => {
+                return err(format!(
+                    "{}: $types carries duplicate member {}",
+                    where_, pair[1]
+                ))
+            }
+            std::cmp::Ordering::Greater => {
+                return err(format!(
+                    "{}: $types is not sorted by UTF-8 bytes ({} sorts after {}) — \
+                     ordering is the producer's job, never the reader's",
+                    where_, pair[0], pair[1]
+                ))
+            }
+            std::cmp::Ordering::Less => {}
+        }
+    }
+    match map.get("$type").and_then(|t| t.as_str()) {
+        Some(primary) if types.iter().any(|t| t == primary) => Ok(Some(types)),
+        other => err(format!(
+            "{}: $type ({:?}) must be present and a member of $types",
+            where_, other
+        )),
+    }
+}
+
+/// Recursively validate every `$types` envelope in a wire value (the node
+/// itself and any embedded node at any depth). Shared by [`serialize`] (the
+/// producer fails at emit time) and [`deserialize`] (the strict reader rejects
+/// rather than repairs).
+fn assert_types_envelopes(value: &Json, where_: &str) -> Result<(), CodecError> {
+    match value {
+        Json::Array(items) => {
+            for (i, item) in items.iter().enumerate() {
+                assert_types_envelopes(item, &format!("{}[{}]", where_, i))?;
+            }
+            Ok(())
+        }
+        Json::Object(map) => assert_types_envelopes_map(map, where_),
+        _ => Ok(()),
+    }
+}
+
+fn assert_types_envelopes_map(map: &Map<String, Json>, where_: &str) -> Result<(), CodecError> {
+    if map.contains_key("$types") {
+        validated_types(map, where_)?;
+    }
+    for (key, value) in map.iter() {
+        if key != "$types" {
+            assert_types_envelopes(value, &format!("{}.{}", where_, key))?;
+        }
+    }
+    Ok(())
+}
+
 /// Build a single canonical `Value` for one (non-list) field datum, per its
 /// schema prop.
 fn build_value(prop: &Json, raw: &Json, schema: &Json) -> Result<Value, CodecError> {
@@ -136,6 +238,7 @@ fn embedded_value(
              pass a reference ({\"$ref\": ...}).",
         );
     }
+    let types = validated_types(map, "Embedded value")?;
     let explicit_type = map.get("$type").and_then(|t| t.as_str());
     let cls_uri = match explicit_type.or_else(|| prop.get("range").and_then(|r| r.as_str())) {
         Some(uri) => uri,
@@ -155,7 +258,20 @@ fn embedded_value(
         .ok_or_else(|| CodecError::Malformed(format!("class {} is missing 'props'", cls_uri)))?;
 
     let mut statements = field_statements(map, props, schema)?;
-    if let Some(type_uri) = explicit_type {
+    if let Some(members) = types {
+        // A multi-typed embedded ($types implies an explicit $type): one type
+        // statement per member, in $types (UTF-8 sorted) order — all hash-relevant.
+        let type_predicate = schema
+            .get("typePredicate")
+            .and_then(|p| p.as_str())
+            .ok_or_else(|| CodecError::Malformed("schema is missing 'typePredicate'".into()))?;
+        for member in members {
+            statements.push(Statement {
+                predicate: type_predicate.to_string(),
+                value: Value::Reference(member),
+            });
+        }
+    } else if let Some(type_uri) = explicit_type {
         let type_predicate = schema
             .get("typePredicate")
             .and_then(|p| p.as_str())
@@ -240,8 +356,15 @@ fn field_statements(
     Ok(out)
 }
 
-/// The statements for one subject node: the rdf:type triple, then its fields.
+/// The statements for one subject node: the rdf:type triple(s), then its fields.
 fn statements(node: &Node, schema: &Json) -> Result<Vec<Statement>, CodecError> {
+    let types = {
+        let id = node
+            .get("$id")
+            .and_then(|i| i.as_str())
+            .unwrap_or("(no $id)");
+        validated_types(node, &format!("Node {}", id))?
+    };
     let type_uri = node
         .get("$type")
         .and_then(|t| t.as_str())
@@ -263,10 +386,16 @@ fn statements(node: &Node, schema: &Json) -> Result<Vec<Statement>, CodecError> 
         .and_then(|p| p.as_str())
         .ok_or_else(|| CodecError::Malformed("schema is missing 'typePredicate'".into()))?;
 
-    let mut out: Vec<Statement> = vec![Statement {
-        predicate: type_predicate.to_string(),
-        value: Value::Reference(type_uri.to_string()),
-    }];
+    // The rdf:type triple(s) every subject carries: one per $types member for a
+    // multi-typed node (in $types' UTF-8 sorted order), else the single $type.
+    let members = types.unwrap_or_else(|| vec![type_uri.to_string()]);
+    let mut out: Vec<Statement> = members
+        .into_iter()
+        .map(|member| Statement {
+            predicate: type_predicate.to_string(),
+            value: Value::Reference(member),
+        })
+        .collect();
     out.extend(field_statements(node, props, schema)?);
     Ok(out)
 }
@@ -356,7 +485,15 @@ pub fn content_hash(nodes: &[Node], schema: &Json, pkg: &Json) -> Result<String,
 /// Serialize a typed node to its normalized-JSON wire form. `$extra` entries ride
 /// as sibling fields after the modeled ones; a modeled field wins a name
 /// collision (`[JsonExtensionData]` semantics). No `$extra` key on the wire.
-pub fn serialize(node: &Node) -> Node {
+/// Fallible since 0.4.0: an invalid `$types` envelope (at any depth) is a
+/// producer bug and fails at emit time.
+pub fn serialize(node: &Node) -> Result<Node, CodecError> {
+    let where_ = node
+        .get("$id")
+        .or_else(|| node.get("$type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("(node)");
+    assert_types_envelopes_map(node, &format!("serialize {}", where_))?;
     let mut out = Map::new();
     for (key, value) in node.iter() {
         if key == "$extra" || value.is_null() {
@@ -371,7 +508,7 @@ pub fn serialize(node: &Node) -> Node {
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// Parse normalized JSON into a typed node. `$`-envelope keys and fields modeled
@@ -382,6 +519,18 @@ pub fn deserialize(json_obj: &Node, schema: &Json) -> Result<Node, CodecError> {
         .get("$type")
         .and_then(|t| t.as_str())
         .ok_or_else(|| CodecError::Malformed("Cannot deserialize: missing string $type".into()))?;
+
+    // Reader-side $types validation, at every depth: an unsorted / singleton /
+    // duplicate / non-member set is REJECTED, never silently repaired —
+    // determinism belongs to the producer, and a lenient reader would mask a
+    // nondeterministic emitter.
+    {
+        let where_ = json_obj
+            .get("$id")
+            .and_then(|i| i.as_str())
+            .unwrap_or(type_uri);
+        assert_types_envelopes_map(json_obj, &format!("deserialize {}", where_))?;
+    }
 
     let classes = schema
         .get("classes")

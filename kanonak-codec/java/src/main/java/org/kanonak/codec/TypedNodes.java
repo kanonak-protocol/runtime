@@ -44,6 +44,9 @@ public final class TypedNodes {
         if (typed instanceof KanonakNode node) {
             putEnvelope(wire, "$id", node.getId());
             putEnvelope(wire, "$type", node.getTypeUri());
+            if (node.getTypes() != null && !node.getTypes().isEmpty()) {
+                wire.put("$types", new ArrayList<>(node.getTypes()));
+            }
             putEnvelope(wire, "$name", node.getName());
             putEnvelope(wire, "$contentHash", node.getPackageContentHash());
             putEnvelope(wire, "$version", node.getPackageVersion());

@@ -26,6 +26,8 @@ VECTOR_FILES = [
     os.path.join(_HERE, "..", "vectors", "codec-vectors-embedded.json"),
 ]
 
+TYPES_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-types.json")
+
 
 def run_file(vectors: str) -> "tuple[int, int]":
     with io.open(vectors, encoding="utf-8") as fh:
@@ -68,6 +70,138 @@ def run_file(vectors: str) -> "tuple[int, int]":
                 print(f"FAIL [{cid}] deserialize[{i}] $type")
             else:
                 passed += 1
+
+    return passed, failed
+
+
+def run_types_file(vectors: str) -> "tuple[int, int]":
+    """The 0.4.0 multi-typed-subjects file (runtime#10). Beyond the standard
+    form/hash/serialize checks it exercises the $types contract: expectError
+    cases must be rejected on ALL THREE surfaces — serialize (the producer
+    fails at emit time), deserialize (the reader rejects, never repairs), and
+    canonicalization — and positive cases must round-trip:
+    deserialize(serialize(x)) preserves $types exactly and re-canonicalizes to
+    the same hash."""
+    with io.open(vectors, encoding="utf-8") as fh:
+        data = json.load(fh)
+    schema = data["schema"]
+    passed = 0
+    failed = 0
+
+    for case in data["cases"]:
+        cid = case["id"]
+        nodes = case["nodes"]
+        pkg = case["pkg"]
+
+        if case.get("expectError"):
+            surfaces = [
+                ("canonicalize", lambda: canonical_form(nodes, schema, pkg)),
+                ("serialize", lambda: [serialize(n) for n in nodes]),
+                ("deserialize", lambda: [deserialize(n, schema) for n in nodes]),
+            ]
+            ok = True
+            for what, run in surfaces:
+                try:
+                    run()
+                except ValueError:
+                    continue
+                ok = False
+                print(f"FAIL [{cid}] expected {what} to reject, it did not")
+            if ok:
+                passed += 1
+            else:
+                failed += 1
+            continue
+
+        form = canonical_form(nodes, schema, pkg)
+        if form != case["expectedCanonicalForm"]:
+            failed += 1
+            print(f"FAIL [{cid}] canonical form\n  got: {form}\n  exp: {case['expectedCanonicalForm']}")
+        else:
+            passed += 1
+
+        h = content_hash(nodes, schema, pkg)
+        if h != case["expectedHash"]:
+            failed += 1
+            print(f"FAIL [{cid}] hash\n  got: {h}\n  exp: {case['expectedHash']}")
+        else:
+            passed += 1
+
+        ser = [serialize(n) for n in nodes]
+        if ser != case["expectedSerialize"]:
+            failed += 1
+            print(f"FAIL [{cid}] serialize\n  got: {ser}\n  exp: {case['expectedSerialize']}")
+        else:
+            passed += 1
+
+        round_tripped = [deserialize(s, schema) for s in ser]
+        rt_ser = [serialize(n) for n in round_tripped]
+        rt_hash = content_hash(round_tripped, schema, pkg)
+        if rt_ser != case["expectedSerialize"] or rt_hash != case["expectedHash"]:
+            failed += 1
+            print(f"FAIL [{cid}] round-trip\n  got: {rt_ser} @ {rt_hash}\n  exp: {case['expectedSerialize']} @ {case['expectedHash']}")
+        else:
+            passed += 1
+
+    return passed, failed
+
+
+def run_types_typed() -> "tuple[int, int]":
+    """Typed-surface $types cases (0.4.0, runtime#10): the multi-typed set rides
+    the wire dict as $types only (no unprefixed accessor) and reproduces the
+    same golden vectors through to_node/embed."""
+    schema_ns = "probe.example.com/schema@1.0.0"
+    data_ns = "probe.example.com/data@1.0.0"
+
+    def t(local: str) -> str:
+        return f"{schema_ns}/{local}"
+
+    def d(local: str) -> str:
+        return f"{data_ns}/{local}"
+
+    with io.open(TYPES_VECTOR_FILE, encoding="utf-8") as fh:
+        doc = json.load(fh)
+
+    checks = [
+        ("covered-redundant-set", [
+            {"$type": t("ClassDef"), "$types": [t("AnnotatedDef"), t("ClassDef")],
+             "$id": d("w1"), "note": "A"},
+        ]),
+        ("embedded-multi-typed-named", [
+            {"$type": t("Bundle"), "$id": d("b1"),
+             "parts": embed({"$type": t("PartDef"),
+                             "$types": [t("PartDef"), t("SealedDef")],
+                             "size": 2}, name="first")},
+        ]),
+        ("types-in-list-items", [
+            {"$type": t("Bundle"), "$id": d("b1"),
+             "parts": [embed({"$type": t("PartDef"),
+                              "$types": [t("PartDef"), t("SealedDef")],
+                              "size": 1}, name="a"),
+                       embed({"$type": t("PartDef"), "size": 2}, name="b")]},
+        ]),
+    ]
+
+    passed = 0
+    failed = 0
+    schema = doc["schema"]
+    for cid, typed in checks:
+        case = next(c for c in doc["cases"] if c["id"] == cid)
+        nodes = [to_node(x, schema) for x in typed]
+
+        form = canonical_form(nodes, schema, case["pkg"])
+        if form != case["expectedCanonicalForm"]:
+            failed += 1
+            print(f"FAIL [typed:{cid}] canonical form\n  got: {form}\n  exp: {case['expectedCanonicalForm']}")
+        else:
+            passed += 1
+
+        h = content_hash(nodes, schema, case["pkg"])
+        if h != case["expectedHash"]:
+            failed += 1
+            print(f"FAIL [typed:{cid}] hash\n  got: {h}\n  exp: {case['expectedHash']}")
+        else:
+            passed += 1
 
     return passed, failed
 
@@ -175,7 +309,15 @@ def main() -> int:
         passed += p
         failed += f
 
+    p, f = run_types_file(TYPES_VECTOR_FILE)
+    passed += p
+    failed += f
+
     p, f = run_typed()
+    passed += p
+    failed += f
+
+    p, f = run_types_typed()
     passed += p
     failed += f
 

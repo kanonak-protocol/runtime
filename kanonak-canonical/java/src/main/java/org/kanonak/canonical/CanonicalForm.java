@@ -76,17 +76,37 @@ public final class CanonicalForm {
         }
     }
 
+    private static String serializeStatement(Statement st) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\"predicate\":");
+        emitString(sb, st.predicate());
+        sb.append(',');
+        emitValueTail(sb, st.value());
+        sb.append('}');
+        return sb.toString();
+    }
+
+    /**
+     * Orders by predicate UTF-8 bytes; equal predicates (possible since
+     * multi-typed subjects — several type statements share the type predicate)
+     * order by the serialized statement blob's UTF-8 bytes. The tie-break makes
+     * the declared invariance under statement ordering TRUE for same-predicate
+     * statements rather than an accident of sort stability; no
+     * distinct-predicate ordering is affected.
+     */
     private static void emitStatements(StringBuilder sb, List<Statement> stmts) {
-        List<Statement> ordered = new ArrayList<>(stmts);
-        ordered.sort(Comparator.comparing(s -> s.predicate().getBytes(StandardCharsets.UTF_8), UTF8));
+        record Rendered(byte[] predicate, String serialized) {}
+        List<Rendered> ordered = new ArrayList<>(stmts.size());
+        for (Statement st : stmts) {
+            ordered.add(new Rendered(
+                st.predicate().getBytes(StandardCharsets.UTF_8), serializeStatement(st)));
+        }
+        ordered.sort(Comparator
+            .comparing(Rendered::predicate, UTF8)
+            .thenComparing(r -> r.serialized().getBytes(StandardCharsets.UTF_8), UTF8));
         for (int i = 0; i < ordered.size(); i++) {
             if (i > 0) sb.append(',');
-            Statement st = ordered.get(i);
-            sb.append("{\"predicate\":");
-            emitString(sb, st.predicate());
-            sb.append(',');
-            emitValueTail(sb, st.value());
-            sb.append('}');
+            sb.append(ordered.get(i).serialized());
         }
     }
 

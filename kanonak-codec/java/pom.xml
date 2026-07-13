@@ -6,7 +6,7 @@
 
     <groupId>org.kanonak</groupId>
     <artifactId>kanonak-codec</artifactId>
-    <version>0.3.0</version>
+    <version>0.4.0</version>
     <packaging>jar</packaging>
 
     <name>kanonak-codec</name>
@@ -45,7 +45,7 @@
         <dependency>
             <groupId>org.kanonak</groupId>
             <artifactId>kanonak-canonical</artifactId>
-            <version>0.1.0</version>
+            <version>0.1.1</version>
         </dependency>
     </dependencies>
 

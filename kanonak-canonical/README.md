@@ -46,9 +46,13 @@ the codec consume it (it is no longer bundled inside the SDK).
    boolean, string/anyURI (NFC), langString (NFC + BCP 47 tag case), hexBinary,
    base64Binary, dateTime (UTC `Z` shift) / date / time (lexical, no shift).
 3. **Wire form** — subjects ordered by UTF-8 bytes of the URI, statements by the
-   predicate URI; compact JSON with RFC 8785 escaping and a fixed per-blob field
-   order; the typed scalar blob `{type,carrier,value}`. SHA-256 of the UTF-8
-   bytes, prefixed `sha256:`.
+   predicate URI, and statements SHARING a predicate (multi-typed subjects —
+   several type statements on one subject, runtime#10) by the UTF-8 bytes of the
+   serialized statement blob. The tie-break is pinned so the form is genuinely
+   invariant under statement ordering — never an accident of the host sort's
+   stability (the `same-predicate-tie-order` vector enforces it). Compact JSON
+   with RFC 8785 escaping and a fixed per-blob field order; the typed scalar
+   blob `{type,carrier,value}`. SHA-256 of the UTF-8 bytes, prefixed `sha256:`.
 
 The `ephemeral` namespace-neutralization for EphemeralPackage body hashes is a
 *caller* concern (the producer/codec), not part of `canonicalForm` itself.

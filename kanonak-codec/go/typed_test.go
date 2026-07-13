@@ -275,3 +275,87 @@ func TestTypedBasicVectors(t *testing.T) {
 		account(owner),
 	})
 }
+
+// -- Typed-surface $types cases (0.4.0, runtime#10) ---------------------------
+//
+// The multi-typed set rides the generated model as the $types envelope only
+// (deliberately no unprefixed accessor — an ontology can model a property
+// literally named "types") and reproduces the same golden vectors.
+
+type DefResource struct {
+	KanonakNode
+	Note *string `json:"note,omitempty"`
+}
+
+type Bundle struct {
+	KanonakNode
+	Parts []Ref[PartDef] `json:"parts,omitzero"`
+}
+
+// BundleSinglePart is the same $type with a single-valued parts — exercises
+// the bare (non-list) embedded form.
+type BundleSinglePart struct {
+	KanonakNode
+	Parts Ref[PartDef] `json:"parts,omitzero"`
+}
+
+type PartDef struct {
+	KanonakNode
+	Size *int64 `json:"size,omitempty"`
+}
+
+const typesVectorsPath = "../vectors/codec-vectors-types.json"
+
+func TestTypedTypesVectors(t *testing.T) {
+	runTypedCase(t, typesVectorsPath, "covered-redundant-set", []interface{}{
+		DefResource{
+			KanonakNode: KanonakNode{
+				Id:   typedDataNS + "/w1",
+				Type: typedSchemaNS + "/ClassDef",
+				Types: []string{
+					typedSchemaNS + "/AnnotatedDef",
+					typedSchemaNS + "/ClassDef",
+				},
+			},
+			Note: strPtr("A"),
+		},
+	})
+
+	runTypedCase(t, typesVectorsPath, "embedded-multi-typed-named", []interface{}{
+		BundleSinglePart{
+			KanonakNode: envelope("b1", "Bundle"),
+			Parts: EmbedNamed(PartDef{
+				KanonakNode: KanonakNode{
+					Type: typedSchemaNS + "/PartDef",
+					Types: []string{
+						typedSchemaNS + "/PartDef",
+						typedSchemaNS + "/SealedDef",
+					},
+				},
+				Size: i64Ptr(2),
+			}, "first"),
+		},
+	})
+
+	runTypedCase(t, typesVectorsPath, "types-in-list-items", []interface{}{
+		Bundle{
+			KanonakNode: envelope("b1", "Bundle"),
+			Parts: []Ref[PartDef]{
+				EmbedNamed(PartDef{
+					KanonakNode: KanonakNode{
+						Type: typedSchemaNS + "/PartDef",
+						Types: []string{
+							typedSchemaNS + "/PartDef",
+							typedSchemaNS + "/SealedDef",
+						},
+					},
+					Size: i64Ptr(1),
+				}, "a"),
+				EmbedNamed(PartDef{
+					KanonakNode: KanonakNode{Type: typedSchemaNS + "/PartDef"},
+					Size:        i64Ptr(2),
+				}, "b"),
+			},
+		},
+	})
+}

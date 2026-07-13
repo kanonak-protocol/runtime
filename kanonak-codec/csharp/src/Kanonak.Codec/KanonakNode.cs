@@ -25,6 +25,20 @@ namespace Kanonak.Codec
         public string Type { get; set; }
 
         /// <summary>
+        /// A multi-typed node's FULL type set (0.4.0, runtime#10) — present only
+        /// when the node carries more than one type statement. Sorted by UTF-8
+        /// bytes, at least two members, no duplicates, <see cref="Type"/> a
+        /// member; each member emits one type statement in canonical form.
+        /// Exposed ONLY as the <c>$types</c> envelope — deliberately no
+        /// unprefixed wire name, because an ontology can model a property
+        /// literally named <c>types</c>; the <c>$</c> prefix exists to avoid
+        /// exactly that collision.
+        /// </summary>
+        [JsonPropertyName("$types")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public List<string> Types { get; set; }
+
+        /// <summary>
         /// An embedded value's authored dict-key — HASH-RELEVANT (serialized into
         /// the canonical form). Only meaningful when this instance is used as an
         /// embedded value (via <see cref="Ref{T}.Embed(T)"/>); null for subjects.
