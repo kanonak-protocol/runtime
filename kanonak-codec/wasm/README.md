@@ -17,7 +17,7 @@ The surface is JSON text in / JSON text out ([`wit/codec.wit`](./wit/codec.wit))
 interface codec {
     content-hash:   func(nodes: string, schema: string, pkg: string) -> result<string, string>;
     canonical-form: func(nodes: string, schema: string, pkg: string) -> result<string, string>;
-    serialize:      func(node: string, schema: string) -> result<string, string>;
+    serialize:      func(node: string) -> result<string, string>;
     deserialize:    func(node: string, schema: string) -> result<string, string>;
 }
 ```
@@ -25,10 +25,9 @@ interface codec {
 `nodes` is a JSON array of typed nodes (the `$`-envelope plus alias-collapsed
 fields), `schema` the embedded `CodecSchema`, `pkg` the package context
 (`{publisher, packageName, version, label?}`). The schema is just an input
-string — the component stays agnostic to how a caller obtained it. Errors are
-the codec's fail-loud messages; there are no fallbacks. `serialize` accepts a
-`schema` argument for symmetry with `deserialize`; it is validated as JSON but
-not consulted.
+string — the component stays agnostic to how a caller obtained it. `serialize`
+is schema-free, mirroring the native ports. Errors are the codec's fail-loud
+messages; there are no fallbacks.
 
 ## Build
 

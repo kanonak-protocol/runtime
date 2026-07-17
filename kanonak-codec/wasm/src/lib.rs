@@ -6,10 +6,6 @@
 //! is conformant by construction and gated by the same golden vectors as the
 //! six native ports.
 //!
-//! `serialize` accepts a `schema` argument for surface symmetry with
-//! `deserialize` (the WIT contract agreed with the Platform); it is validated
-//! as JSON but the underlying serialize does not consult it.
-
 use kanonak_codec::Node;
 use serde_json::Value as Json;
 
@@ -69,9 +65,8 @@ impl Guest for Component {
         kanonak_codec::canonical_form(&nodes, &schema, &pkg).map_err(|e| e.to_string())
     }
 
-    fn serialize(node: String, schema: String) -> Result<String, String> {
+    fn serialize(node: String) -> Result<String, String> {
         let node = parse_object("node", &node)?;
-        parse_json("schema", &schema)?;
         let wire = kanonak_codec::serialize(&node).map_err(|e| e.to_string())?;
         to_json_string(&wire)
     }

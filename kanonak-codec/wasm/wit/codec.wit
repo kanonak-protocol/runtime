@@ -16,9 +16,10 @@ interface codec {
     canonical-form: func(nodes: string, schema: string, pkg: string) -> result<string, string>;
 
     /// Serialize one typed node to its normalized-JSON wire form ($extra rides
-    /// as sibling fields; modeled fields win name collisions). Rejects an
-    /// invalid $types envelope at any depth — the producer fails at emit time.
-    serialize: func(node: string, schema: string) -> result<string, string>;
+    /// as sibling fields; modeled fields win name collisions). Schema-free,
+    /// mirroring the native ports. Rejects an invalid $types envelope at any
+    /// depth — the producer fails at emit time.
+    serialize: func(node: string) -> result<string, string>;
 
     /// Parse normalized JSON into a typed node: $-envelope keys and fields
     /// modeled on $type stay top-level, everything else is collected into
