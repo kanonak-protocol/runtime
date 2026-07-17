@@ -1,0 +1,16 @@
+{
+  "name": "kanonak-codec-wasm-conformance",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Conformance host for the kanonak-codec WebAssembly component: transpiles the component with jco and drives the shared golden vectors through its WIT surface.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "transpile": "jco transpile ../target/wasm32-wasip2/release/kanonak_codec_wasm.wasm -o dist --no-typescript",
+    "conformance": "npm run transpile && node run.mjs"
+  },
+  "devDependencies": {
+    "@bytecodealliance/jco": "^1.13.4",
+    "@bytecodealliance/preview2-shim": "^0.17.4"
+  }
+}

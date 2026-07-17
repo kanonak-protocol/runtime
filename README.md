@@ -4,8 +4,9 @@ The public, open-source runtime stack that every generated Kanonak SDK depends
 on — so the runtime is referenced from a public registry, **never inlined** into
 each generated SDK.
 
-Four libraries, six languages each, conformance-verified to produce
-**byte-identical results** across all of them:
+Four libraries, six languages each (plus a WebAssembly-component build of the
+codec), conformance-verified to produce **byte-identical results** across all
+of them:
 
 - **`kanonak-canonical`** — the canonical form + content hash; the reference
   implementation of the open spec [`kanonak.org/canonical-form`](https://kanonak.org/canonical-form)
@@ -32,10 +33,15 @@ are a separate, commercial concern and are not part of this repo.)
 
 ```
 kanonak-canonical/{python,rust,go,java,csharp,typescript}/   + vectors/
-kanonak-codec/{python,rust,go,java,csharp,typescript}/ + vectors/
+kanonak-codec/{python,rust,go,java,csharp,typescript,wasm}/ + vectors/
 kanonak-expression/{python,rust,go,java,csharp,typescript}/ + vectors/
 kanonak-wire/{python,rust,go,java,csharp,typescript}/ + vectors/
 ```
+
+`kanonak-codec/wasm/` is the 7th codec port: a WebAssembly component
+(`wasm32-wasip2`, exporting the `kanonak:codec` WIT interface) built from the
+Rust reference — not a reimplementation — and conformance-gated by the same
+vectors. See [`kanonak-codec/wasm/README.md`](./kanonak-codec/wasm/README.md).
 
 Each `vectors/` directory is the shared conformance contract: every language
 implementation is tested against the same `(input → canonical form, content
@@ -51,6 +57,10 @@ hash, serialization)` golden vectors.
 | C# | NuGet | `Kanonak.Canonical` | `Kanonak.Codec` | `Kanonak.Expression` | `Kanonak.Wire` |
 | Java | Maven Central | `org.kanonak:kanonak-canonical` | `org.kanonak:kanonak-codec` | `org.kanonak:kanonak-expression` | `org.kanonak:kanonak-wire` |
 | Go | proxy | `github.com/kanonak-protocol/runtime/kanonak-canonical/go` | `.../kanonak-codec/go` | `.../kanonak-expression/go` | `.../kanonak-wire/go` |
+
+The `kanonak-codec` WebAssembly component is built from source and CI-gated but
+not yet distributed through a registry (component registry distribution is a
+separate, pending decision).
 
 ## Releasing
 

@@ -1,0 +1,31 @@
+package kanonak:codec@0.4.0;
+
+/// The Kanonak codec runtime over a thin JSON-string ABI — the same four
+/// functions every native port exposes, so a Wasm host or component shares the
+/// exact content-identity contract as the six languages. All parameters and
+/// results are JSON text: `nodes` is an array of typed nodes ($-envelope +
+/// alias-collapsed fields), `schema` is the embedded CodecSchema, `pkg` is the
+/// package context ({publisher, packageName, version, label?}). Errors are the
+/// codec's fail-loud messages, never a fallback value.
+interface codec {
+    /// The `sha256:` content hash of a package built from nodes — byte-identical
+    /// to `kanonak hash` and every native port.
+    content-hash: func(nodes: string, schema: string, pkg: string) -> result<string, string>;
+
+    /// The canonical form (the `{subjects:[...]}` JSON) of a package from nodes.
+    canonical-form: func(nodes: string, schema: string, pkg: string) -> result<string, string>;
+
+    /// Serialize one typed node to its normalized-JSON wire form ($extra rides
+    /// as sibling fields; modeled fields win name collisions). Rejects an
+    /// invalid $types envelope at any depth — the producer fails at emit time.
+    serialize: func(node: string, schema: string) -> result<string, string>;
+
+    /// Parse normalized JSON into a typed node: $-envelope keys and fields
+    /// modeled on $type stay top-level, everything else is collected into
+    /// $extra. Rejects an invalid $types envelope — the reader never repairs.
+    deserialize: func(node: string, schema: string) -> result<string, string>;
+}
+
+world codec-runtime {
+    export codec;
+}

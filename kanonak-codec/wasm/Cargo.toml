@@ -1,0 +1,24 @@
+[package]
+name = "kanonak-codec-wasm"
+version = "0.4.0"
+edition = "2021"
+authors = ["Kanonak Maintainers (https://github.com/kanonak-protocol/runtime)"]
+description = "Kanonak codec runtime (WebAssembly component). The Rust reference wrapped behind the kanonak:codec WIT interface — not a reimplementation."
+license = "Apache-2.0"
+readme = "README.md"
+homepage = "https://kanonak.org"
+repository = "https://github.com/kanonak-protocol/runtime"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+kanonak-codec = { version = "0.4.0", path = "../rust" }
+serde_json = "1"
+wit-bindgen = "0.59.0"
+
+[profile.release]
+lto = true
+opt-level = "s"
+strip = true

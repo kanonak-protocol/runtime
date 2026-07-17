@@ -137,6 +137,24 @@ jobs:
           javac -d out src/main/java/org/kanonak/wire/*.java conformance/Conformance.java
           java -cp out Conformance ../vectors
 
+  # The 7th codec port: the Rust reference compiled to a wasm32-wasip2 component
+  # behind the kanonak:codec WIT interface, driven through the SAME golden
+  # vectors by a jco-transpiled Node host. Conformance-only for now (no publish
+  # job — component registry distribution is a separate decision).
+  test-wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: wasm32-wasip2 }
+      - uses: actions/setup-node@v6
+        with: { node-version: "22" }
+      - run: cargo build --manifest-path kanonak-codec/wasm/Cargo.toml --target wasm32-wasip2 --release
+      - run: |
+          cd kanonak-codec/wasm/conformance
+          npm install --no-audit --no-fund
+          npm run conformance
+
   # =============== PUBLISH (only on publish; gated by the production env) ===============
   publish-python:
     needs: test-python
