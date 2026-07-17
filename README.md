@@ -57,10 +57,14 @@ hash, serialization)` golden vectors.
 | C# | NuGet | `Kanonak.Canonical` | `Kanonak.Codec` | `Kanonak.Expression` | `Kanonak.Wire` |
 | Java | Maven Central | `org.kanonak:kanonak-canonical` | `org.kanonak:kanonak-codec` | `org.kanonak:kanonak-expression` | `org.kanonak:kanonak-wire` |
 | Go | proxy | `github.com/kanonak-protocol/runtime/kanonak-canonical/go` | `.../kanonak-codec/go` | `.../kanonak-expression/go` | `.../kanonak-wire/go` |
+| Wasm component | GHCR (OCI) | — | `ghcr.io/kanonak-protocol/codec` | — | — |
 
-The `kanonak-codec` WebAssembly component is built from source and CI-gated but
-not yet distributed through a registry (component registry distribution is a
-separate, pending decision).
+The `kanonak-codec` Wasm component ships as a wkg-format OCI artifact, tagged
+with the codec version:
+
+```sh
+wkg oci pull ghcr.io/kanonak-protocol/codec:0.4.0 -o codec.wasm
+```
 
 ## Releasing
 

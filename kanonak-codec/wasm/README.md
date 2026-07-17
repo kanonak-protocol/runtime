@@ -29,6 +29,18 @@ string — the component stays agnostic to how a caller obtained it. `serialize`
 is schema-free, mirroring the native ports. Errors are the codec's fail-loud
 messages; there are no fallbacks.
 
+## Fetch
+
+Released components are published to GHCR as wkg-format Wasm OCI Artifacts,
+tagged with the codec version (the native `kanonak-codec@X.Y.Z` and the
+component `codec:X.Y.Z` ship as one coordinated release):
+
+```sh
+wkg oci pull ghcr.io/kanonak-protocol/codec:0.4.0 -o codec.wasm
+```
+
+Anonymous pull, no auth — any OCI-capable fetcher (`oras`, etc.) works too.
+
 ## Build
 
 ```sh

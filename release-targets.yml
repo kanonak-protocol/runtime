@@ -191,3 +191,22 @@ targets:
       - "GitHub module paths (not a kanonak.org vanity): the monorepo subdir layout is incompatible with vanity import-prefix derivation. codec/go.mod keeps a local replace for monorepo dev; consumers ignore it and resolve canonical v0.1.0 from the proxy."
       - "Go has NO registry uploads and NO GitHub-Release requirement â€” a plain git tag is the release. proxy.golang.org caches a served version FOREVER: never move or reuse a tag; bump meta.go_module_versions instead."
       - "Without a tag, `go get @latest` still resolves â€” to an unpinned pseudo-version (v0.0.0-<date>-<commit>). A missing tag is therefore SILENT drift; the release-audit job hard-fails on it."
+
+  - language: wasm           # Component Model — CODEC ONLY (the 7th codec port)
+    registry: GHCR (OCI)
+    registry_url: https://ghcr.io
+    publishes:
+      codec: ghcr.io/kanonak-protocol/codec    # wkg-format Wasm OCI Artifact; tag = the codec version
+    account_namespace: "GitHub org kanonak-protocol (co-located with the repo; genuinely public + consumer-independent)"
+    auth: github-token         # ambient workflow GITHUB_TOKEN via WKG_OCI_USERNAME/WKG_OCI_PASSWORD (job permissions packages: write)
+    github_secrets: []         # none — GITHUB_TOKEN is ambient
+    fallback_secret: null
+    registry_side_config:
+      visibility: public       # ONE-TIME manual flip after the FIRST publish (GHCR creates org packages private)
+      linked_repo: kanonak-protocol/runtime   # via the org.opencontainers.image.source annotation on push
+    setup:
+      - "NOTHING before the first release. AFTER the first publish: org > Packages > codec > package settings > Change visibility > Public — anonymous `wkg oci pull` is the acceptance bar and release-audit hard-fails until this is done."
+    gotchas:
+      - "The Wasm component has no language-native registry; the Component-Model ecosystem distributes via OCI artifacts (warg is archived). Idiomatic fetch: `wkg oci pull ghcr.io/kanonak-protocol/codec:<ver> -o codec.wasm` (or oras)."
+      - "wkg is pinned in release.yml (v0.15.1, latest stable; 0.16 is an RC as of 2026-07-17). The artifact format is wkg's: config application/vnd.wasm.config.v0+json + a single application/wasm layer."
+      - "Release tags are immutable by discipline: publish-wasm pre-checks the manifest (authenticated, so it also works pre-visibility-flip) and skips an existing tag; bump the wasm crate version in lockstep with the native codec for a new release."

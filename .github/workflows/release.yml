@@ -139,8 +139,7 @@ jobs:
 
   # The 7th codec port: the Rust reference compiled to a wasm32-wasip2 component
   # behind the kanonak:codec WIT interface, driven through the SAME golden
-  # vectors by a jco-transpiled Node host. Conformance-only for now (no publish
-  # job — component registry distribution is a separate decision).
+  # vectors by a jco-transpiled Node host. Gates publish-wasm (GHCR OCI).
   test-wasm:
     runs-on: ubuntu-latest
     steps:
@@ -393,6 +392,58 @@ jobs:
             fi
           done
 
+  # The Wasm component (the 7th codec port) has no language-native registry —
+  # the Component-Model ecosystem distributes via OCI artifacts (warg is
+  # archived; wkg/oras pull from any OCI registry). GHCR is the public,
+  # repo-co-located OCI registry: publish a wkg-format Wasm OCI Artifact at
+  # ghcr.io/kanonak-protocol/codec:<version> (tag = the codec version, so the
+  # native codec and the component ship as one coordinated release).
+  # Idempotent: an existing tag is never re-pushed (release tags are
+  # immutable; bump the wasm crate version with the native codec instead).
+  # ONE-TIME registry-side step after the FIRST publish: set the org package
+  # ghcr.io/kanonak-protocol/codec to PUBLIC (org > Packages > codec >
+  # package settings) — GHCR creates org packages private, and anonymous
+  # `wkg oci pull` is the acceptance bar. release-audit hard-fails until then.
+  publish-wasm:
+    needs: test-wasm
+    if: ${{ github.event_name == 'push' || inputs.publish }}
+    environment: production
+    permissions:
+      contents: read
+      packages: write        # push the OCI artifact with the workflow GITHUB_TOKEN
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: wasm32-wasip2 }
+      - name: install wkg (pinned)
+        run: |
+          curl -sSfL -o wkg "https://github.com/bytecodealliance/wasm-pkg-tools/releases/download/v0.15.1/wkg-x86_64-unknown-linux-gnu"
+          chmod +x wkg && sudo mv wkg /usr/local/bin/wkg
+          wkg --version
+      - run: cargo build --manifest-path kanonak-codec/wasm/Cargo.toml --target wasm32-wasip2 --release
+      - name: push component to GHCR (skip existing — release tags are immutable)
+        env:
+          WKG_OCI_USERNAME: ${{ github.actor }}
+          WKG_OCI_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ver=$(grep -m1 '^version = ' kanonak-codec/wasm/Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          ref="ghcr.io/kanonak-protocol/codec:$ver"
+          # AUTHENTICATED existence pre-check, so idempotency holds even while
+          # the package is still private (before the one-time visibility flip).
+          tok=$(curl -sf -u "${WKG_OCI_USERNAME}:${WKG_OCI_PASSWORD}" "https://ghcr.io/token?scope=repository:kanonak-protocol/codec:pull" | jq -r .token)
+          if curl -sf -o /dev/null -H "Authorization: Bearer $tok" \
+               -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json" \
+               "https://ghcr.io/v2/kanonak-protocol/codec/manifests/$ver"; then
+            echo "$ref already exists - skipping (immutable release tag; bump the version for a new release)"
+          else
+            wkg oci push "$ref" kanonak-codec/wasm/target/wasm32-wasip2/release/kanonak_codec_wasm.wasm \
+              --annotation "org.opencontainers.image.source=https://github.com/kanonak-protocol/runtime" \
+              --annotation "org.opencontainers.image.description=kanonak-codec as a Wasm component (kanonak:codec WIT interface), conformance-locked to the shared golden vectors" \
+              --annotation "org.opencontainers.image.licenses=Apache-2.0"
+            echo "pushed $ref"
+          fi
+
   # RELEASE AUDIT — the cold-start truth check. Reads each member's expected
   # version from the COMMITTED manifests (repo state is the only memory; no
   # context carried in heads) and verifies presence on every registry + the Go
@@ -405,7 +456,7 @@ jobs:
   #     the publish job in this same run was the authoritative signal. Re-run
   #     the workflow later (fully idempotent) to see the audit go all-OK.
   release-audit:
-    needs: [publish-python, publish-rust, publish-typescript, publish-csharp, publish-java, publish-go]
+    needs: [publish-python, publish-rust, publish-typescript, publish-csharp, publish-java, publish-go, publish-wasm]
     if: ${{ always() && (github.event_name == 'push' || inputs.publish) }}
     runs-on: ubuntu-latest
     steps:
@@ -463,6 +514,19 @@ jobs:
               echo "::error::MISSING Go tag kanonak-$m/go/v$go_ver — publish-go should have pushed it; check that job's log"; fail=1
             fi
           done
+
+          # GHCR (the codec wasm component) — AUTHORITATIVE registry API, and
+          # checked ANONYMOUSLY on purpose: the acceptance bar is that a third
+          # party with no auth can `wkg oci pull` it. Hard-fails until the
+          # one-time public-visibility flip on the org package is done.
+          wasm_ver=$(grep -m1 '^version = ' kanonak-codec/wasm/Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          tok=$(curl -sf "https://ghcr.io/token?scope=repository:kanonak-protocol/codec:pull" | jq -r .token)
+          if retry 3 15 curl -sf -o /dev/null -H "Authorization: Bearer $tok" -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json" "https://ghcr.io/v2/kanonak-protocol/codec/manifests/$wasm_ver"; then
+            echo "OK       GHCR          ghcr.io/kanonak-protocol/codec:$wasm_ver (wasm component, anonymously pullable)"
+          else
+            echo "::error::MISSING GHCR ghcr.io/kanonak-protocol/codec:$wasm_ver — check publish-wasm, and that the org package is set PUBLIC (one-time step: org > Packages > codec > package settings; GHCR creates org packages private)"; fail=1
+          fi
+
           if [ "$pend" = "1" ]; then
             echo "::notice::Some mirror-backed registries report PENDING. The workflow is fully idempotent — re-run it (publish=true is safe) later and the audit should be all-OK."
           fi

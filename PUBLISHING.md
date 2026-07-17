@@ -29,9 +29,16 @@ the bare lib name (`canonical` / `codec` / `expression` / `wire`):
 | C# | NuGet | `Kanonak.Canonical` | `Kanonak.Codec` | `Kanonak.Expression` | `Kanonak.Wire` |
 | Java | Maven Central | `org.kanonak:kanonak-canonical` | `org.kanonak:kanonak-codec` | `org.kanonak:kanonak-expression` | `org.kanonak:kanonak-wire` |
 | Go | module proxy | `github.com/kanonak-protocol/runtime/kanonak-canonical/go` | `.../kanonak-codec/go` | `.../kanonak-expression/go` | `.../kanonak-wire/go` |
+| Wasm component | GHCR (OCI) | — | `ghcr.io/kanonak-protocol/codec` | — | — |
 
 Every package: `homepage` = `https://kanonak.org`, `repository` =
 `https://github.com/kanonak-protocol/runtime`, license **Apache-2.0**.
+
+**The Wasm component is codec-only** (the 7th codec port). It has no
+language-native registry — the Component-Model ecosystem distributes via OCI
+artifacts — so it ships as a wkg-format Wasm OCI Artifact on GHCR, tagged with
+the codec version (native `codec@X.Y.Z` and `codec:X.Y.Z` are one coordinated
+release). Fetch: `wkg oci pull ghcr.io/kanonak-protocol/codec:<ver> -o codec.wasm`.
 
 ## Connection + secrets matrix
 
@@ -46,6 +53,7 @@ Full detail (accounts, registry-side trusted-publisher config, setup steps) is i
 | C# | NuGet.org | OIDC trusted publishing | — (fallback `NUGET_API_KEY`) |
 | Java | Maven Central | Portal token + GPG | `MAVEN_CENTRAL_PASSWORD`, `MAVEN_GPG_PRIVATE_KEY`, `MAVEN_GPG_PASSPHRASE` (+ var `MAVEN_CENTRAL_USERNAME`) |
 | Go | module proxy | none | — |
+| Wasm | GHCR (OCI) | ambient `GITHUB_TOKEN` (`packages: write`) | — |
 
 **Recommended-path secret set (OIDC for PyPI/crates/npm/NuGet):**
 `MAVEN_CENTRAL_PASSWORD`, `MAVEN_GPG_PRIVATE_KEY`, `MAVEN_GPG_PASSPHRASE` (Maven
@@ -74,7 +82,8 @@ see each target's `registry_side_config` in `release-targets.yml`.
   across all six languages.
 - **OIDC workflow permissions:**
   `permissions: { id-token: write, contents: read, attestations: write }`
-  (the `publish-go` job alone overrides to `contents: write` to push tags).
+  (job-level overrides: `publish-go` takes `contents: write` to push tags;
+  `publish-wasm` takes `packages: write` to push the GHCR artifact).
 - **Versions are immutable;** bump the manifests before a real release.
 
 ## The cold-start contract (WE WILL FORGET — the machinery remembers)
@@ -93,6 +102,7 @@ pre-checks provably lag fresh publishes (both bit us on 2026-07-03):
 | NuGet | `--skip-duplicate` (server-side) |
 | Maven Central | repo1 pre-check (mirror, optimization only) + on failure the Portal **status API** is queried and a duplicate deployment is treated as already-published |
 | Go | `publish-go` job: tag exists → skip (tags are immutable once proxied) |
+| GHCR (Wasm) | authenticated manifest pre-check → skip existing tag (release tags are immutable by discipline; the auth means the check works even before the visibility flip) |
 
 **Go has no registry.** A release IS the git tag
 `kanonak-<member>/go/v<version>` (from `meta.go_module_versions` in
@@ -121,3 +131,8 @@ whole workflow** — never hand-finish a partial release.
 5. Go: push subdir tags `kanonak-canonical/go/vX.Y.Z` then `kanonak-codec/go/vX.Y.Z`
    (no infra; canonical first); `kanonak-expression/go/vX.Y.Z` and
    `kanonak-wire/go/vX.Y.Z` any time.
+6. GHCR (Wasm): nothing before the first release. **After the first publish**,
+   set the org package `ghcr.io/kanonak-protocol/codec` to **Public** (org →
+   Packages → codec → package settings) — anonymous `wkg oci pull` is the
+   acceptance bar, and `release-audit` checks it anonymously and hard-fails
+   until the flip is done.
