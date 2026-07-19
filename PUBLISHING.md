@@ -42,11 +42,14 @@ the codec version (native `codec@X.Y.Z` and `codec:X.Y.Z` are one coordinated
 release). Fetch: `wkg oci pull ghcr.io/kanonak-protocol/codec:<ver> -o codec.wasm`.
 
 **Swift has no central registry.** SwiftPM resolves a public git URL against
-ROOT semver tags, so the repo's coordinated `v*` release tag IS the Swift
-release (one version covers both products, behind the root `Package.swift`) —
-no publish job; `test-swift` gates the tag. Root tags predating
-`Package.swift` (v0.2.0–v0.4.0) cannot resolve; consumers pin `from:` the
-first tag that contains it. Consume:
+ROOT semver tags, so a Swift release IS a root `v<ver>` tag (one version
+covers both products, behind the root `Package.swift`) — pushed by the
+`publish-swift` job from `meta.swift_package_version` in
+`release-targets.yml`, NEVER manually (the release workflow is the one thing
+anyone must remember to run). Idempotent: an existing tag is never touched;
+bump `swift_package_version` and re-run for a new release. Root tags
+predating `Package.swift` (v0.2.0–v0.4.0) cannot resolve; consumers pin
+`from:` the first tag that contains it. Consume:
 `.package(url: "https://github.com/kanonak-protocol/runtime", from: "<ver>")`
 + products `KanonakCanonical` / `KanonakCodec`.
 
@@ -114,6 +117,7 @@ pre-checks provably lag fresh publishes (both bit us on 2026-07-03):
 | Maven Central | repo1 pre-check (mirror, optimization only) + on failure the Portal **status API** is queried and a duplicate deployment is treated as already-published |
 | Go | `publish-go` job: tag exists → skip (tags are immutable once proxied) |
 | GHCR (Wasm) | authenticated manifest pre-check → skip existing tag (release tags are immutable by discipline; the auth means the check works even before the visibility flip) |
+| Swift | `publish-swift` job: root `v<ver>` tag exists → skip (immutable once resolved; bump `swift_package_version` for a new release) |
 
 **Go has no registry.** A release IS the git tag
 `kanonak-<member>/go/v<version>` (from `meta.go_module_versions` in

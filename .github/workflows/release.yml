@@ -139,10 +139,8 @@ jobs:
 
   # The Swift ports (KanonakCanonical + KanonakCodec, behind the root
   # Package.swift). Swift has NO registry: SwiftPM resolves a public git URL
-  # against ROOT semver tags, so A RELEASE IS THE REPO'S COORDINATED `v*` TAG
-  # itself — no publish job exists or is needed; this test job gates the tag.
-  # The first Swift-consumable version is the first `v*` tag whose tree
-  # contains Package.swift (earlier tags predate it and cannot resolve).
+  # against ROOT semver tags, so a release is a root `v*` tag — pushed by the
+  # publish-swift job below (never manually), gated by this test job.
   test-swift:
     runs-on: ubuntu-latest
     container: swift:6.1
@@ -405,6 +403,41 @@ jobs:
             fi
           done
 
+  # Swift has NO registry: A RELEASE IS THE ROOT GIT TAG `v<swift_package_version>`
+  # (SwiftPM resolves ONLY root semver tags against the repo URL; the per-member
+  # Go-style tags are invisible to it). This job makes root tagging part of the
+  # machinery — the release workflow is the ONE thing anyone must remember to
+  # run, and a forgotten manual tag would be SILENT drift (consumers simply
+  # cannot resolve; same rule and same forgotten-step history as the Go tags).
+  # Version comes from meta.swift_package_version in release-targets.yml.
+  # Idempotent: an existing tag is NEVER touched or moved; to release a new
+  # Swift version, bump swift_package_version and re-run.
+  publish-swift:
+    needs: test-swift
+    if: ${{ github.event_name == 'push' || inputs.publish }}
+    environment: production
+    permissions:
+      contents: write        # push the root release tag with GITHUB_TOKEN
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: tag root swift release (skip existing — resolved tags are immutable)
+        run: |
+          python3 -m pip install --quiet pyyaml
+          ver=$(python3 -c "import yaml; print(yaml.safe_load(open('release-targets.yml'))['meta']['swift_package_version'])")
+          tag="v$ver"
+          if [ ! -f Package.swift ]; then
+            echo "::error::Package.swift not found at the release SHA — a root tag without it is unresolvable to SwiftPM; fix the tree (or the checkout ref) before releasing"
+            exit 1
+          fi
+          if git ls-remote --tags origin "refs/tags/$tag" | grep -q .; then
+            echo "$tag already exists - skipping (immutable once resolved; bump swift_package_version for a new release)"
+          else
+            git tag "$tag" "$GITHUB_SHA"
+            git push origin "refs/tags/$tag"
+            echo "pushed $tag @ $GITHUB_SHA"
+          fi
+
   # The Wasm component (the 7th codec port) has no language-native registry —
   # the Component-Model ecosystem distributes via OCI artifacts (warg is
   # archived; wkg/oras pull from any OCI registry). GHCR is the public,
@@ -469,7 +502,7 @@ jobs:
   #     the publish job in this same run was the authoritative signal. Re-run
   #     the workflow later (fully idempotent) to see the audit go all-OK.
   release-audit:
-    needs: [publish-python, publish-rust, publish-typescript, publish-csharp, publish-java, publish-go, publish-wasm]
+    needs: [publish-python, publish-rust, publish-typescript, publish-csharp, publish-java, publish-go, publish-wasm, publish-swift]
     if: ${{ always() && (github.event_name == 'push' || inputs.publish) }}
     runs-on: ubuntu-latest
     steps:
@@ -538,6 +571,22 @@ jobs:
             echo "OK       GHCR          ghcr.io/kanonak-protocol/codec:$wasm_ver (wasm component, anonymously pullable)"
           else
             echo "::error::MISSING GHCR ghcr.io/kanonak-protocol/codec:$wasm_ver — check publish-wasm, and that the org package is set PUBLIC (one-time step: org > Packages > codec > package settings; GHCR creates org packages private)"; fail=1
+          fi
+
+          # Swift (root git tag) — AUTHORITATIVE: ls-remote for the tag, then
+          # verify the tagged TREE carries the root Package.swift (a tag
+          # without it is unresolvable to SwiftPM — exactly the silent-drift
+          # failure this audit exists to catch).
+          swift_ver=$(python3 -c "import yaml; print(yaml.safe_load(open('release-targets.yml'))['meta']['swift_package_version'])")
+          if git ls-remote --tags origin "refs/tags/v$swift_ver" | grep -q .; then
+            if git fetch --quiet --depth 1 origin "refs/tags/v$swift_ver:refs/tags/v$swift_ver" \
+               && git ls-tree -r --name-only "v$swift_ver" | grep -qx "Package.swift"; then
+              echo "OK       Swift         v$swift_ver (root tag present, Package.swift in its tree)"
+            else
+              echo "::error::Swift root tag v$swift_ver exists but its tree carries NO root Package.swift — SwiftPM cannot resolve it. Never move the tag: bump swift_package_version and re-run from a tree that has it"; fail=1
+            fi
+          else
+            echo "::error::MISSING Swift root tag v$swift_ver — publish-swift should have pushed it; check that job's log"; fail=1
           fi
 
           if [ "$pend" = "1" ]; then

@@ -29,6 +29,14 @@ meta:
     codec: "0.4.0"
     expression: "0.1.0"
     wire: "0.1.0"
+  # Swift package version — the ROOT `v<ver>` tag (SwiftPM resolves ONLY root
+  # semver tags; one version covers KanonakCanonical + KanonakCodec behind the
+  # root Package.swift). The tag is pushed BY the release workflow's
+  # publish-swift job (NEVER manually — same rule and same forgotten-step
+  # history as the Go tags). SwiftPM caches a resolved tag by revision: never
+  # move or reuse one; bump HERE and re-run the workflow for a new release.
+  # Must sort AFTER every pre-Package.swift root tag (v0.2.0–v0.4.0).
+  swift_package_version: "0.5.0"
   # GitHub Actions OIDC (no stored token) is preferred where supported. A workflow
   # using OIDC needs:  permissions: { id-token: write, contents: read, attestations: write }
   # All PUBLISH jobs run in the `production` GitHub environment (required by NuGet trusted
@@ -218,12 +226,12 @@ targets:
       canonical: "product KanonakCanonical (root Package.swift)"
       codec: "product KanonakCodec (root Package.swift)"
     account_namespace: "GitHub org kanonak-protocol (the repo IS the registry)"
-    auth: none                 # a release is the repo's coordinated `v*` tag; no upload exists
+    auth: none                 # a release is a root `v*` tag; publish-swift pushes it with the ambient GITHUB_TOKEN
     github_secrets: []
     fallback_secret: null
     registry_side_config: {}
     setup:
-      - "NOTHING: SwiftPM resolves the repo URL against ROOT semver tags (`v*`), so the coordinated release tag IS the Swift release — no publish job. test-swift gates the tag."
+      - "NOTHING manual: the release workflow's publish-swift job pushes the root `v<meta.swift_package_version>` tag (idempotent — an existing tag is never touched); test-swift gates it. To release a new Swift version, bump swift_package_version and re-run the workflow."
     gotchas:
       - "SwiftPM understands ONLY root-level semver tags — the per-member Go-style tags (kanonak-codec/go/vX) are invisible to it, and every root `v*` tag IS a Swift package version. Tags v0.2.0-v0.4.0 predate Package.swift and cannot resolve; the first Swift-consumable version is the first tag whose tree contains it. Consumers must pin `from:` at or above that version."
       - "One Swift package version covers ALL members (root manifest), unlike the per-member versions elsewhere — the repo's coordinated `v*` release train is the Swift version line."
