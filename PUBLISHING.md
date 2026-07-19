@@ -30,6 +30,7 @@ the bare lib name (`canonical` / `codec` / `expression` / `wire`):
 | Java | Maven Central | `org.kanonak:kanonak-canonical` | `org.kanonak:kanonak-codec` | `org.kanonak:kanonak-expression` | `org.kanonak:kanonak-wire` |
 | Go | module proxy | `github.com/kanonak-protocol/runtime/kanonak-canonical/go` | `.../kanonak-codec/go` | `.../kanonak-expression/go` | `.../kanonak-wire/go` |
 | Wasm component | GHCR (OCI) | — | `ghcr.io/kanonak-protocol/codec` | — | — |
+| Swift | this repo + root `v*` tags | product `KanonakCanonical` | product `KanonakCodec` | — | — |
 
 Every package: `homepage` = `https://kanonak.org`, `repository` =
 `https://github.com/kanonak-protocol/runtime`, license **Apache-2.0**.
@@ -39,6 +40,15 @@ language-native registry — the Component-Model ecosystem distributes via OCI
 artifacts — so it ships as a wkg-format Wasm OCI Artifact on GHCR, tagged with
 the codec version (native `codec@X.Y.Z` and `codec:X.Y.Z` are one coordinated
 release). Fetch: `wkg oci pull ghcr.io/kanonak-protocol/codec:<ver> -o codec.wasm`.
+
+**Swift has no central registry.** SwiftPM resolves a public git URL against
+ROOT semver tags, so the repo's coordinated `v*` release tag IS the Swift
+release (one version covers both products, behind the root `Package.swift`) —
+no publish job; `test-swift` gates the tag. Root tags predating
+`Package.swift` (v0.2.0–v0.4.0) cannot resolve; consumers pin `from:` the
+first tag that contains it. Consume:
+`.package(url: "https://github.com/kanonak-protocol/runtime", from: "<ver>")`
++ products `KanonakCanonical` / `KanonakCodec`.
 
 ## Connection + secrets matrix
 
@@ -54,6 +64,7 @@ Full detail (accounts, registry-side trusted-publisher config, setup steps) is i
 | Java | Maven Central | Portal token + GPG | `MAVEN_CENTRAL_PASSWORD`, `MAVEN_GPG_PRIVATE_KEY`, `MAVEN_GPG_PASSPHRASE` (+ var `MAVEN_CENTRAL_USERNAME`) |
 | Go | module proxy | none | — |
 | Wasm | GHCR (OCI) | ambient `GITHUB_TOKEN` (`packages: write`) | — |
+| Swift | this repo (root `v*` tags) | none | — |
 
 **Recommended-path secret set (OIDC for PyPI/crates/npm/NuGet):**
 `MAVEN_CENTRAL_PASSWORD`, `MAVEN_GPG_PRIVATE_KEY`, `MAVEN_GPG_PASSPHRASE` (Maven
