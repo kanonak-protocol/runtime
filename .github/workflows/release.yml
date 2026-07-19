@@ -137,6 +137,19 @@ jobs:
           javac -d out src/main/java/org/kanonak/wire/*.java conformance/Conformance.java
           java -cp out Conformance ../vectors
 
+  # The Swift ports (KanonakCanonical + KanonakCodec, behind the root
+  # Package.swift). Swift has NO registry: SwiftPM resolves a public git URL
+  # against ROOT semver tags, so A RELEASE IS THE REPO'S COORDINATED `v*` TAG
+  # itself — no publish job exists or is needed; this test job gates the tag.
+  # The first Swift-consumable version is the first `v*` tag whose tree
+  # contains Package.swift (earlier tags predate it and cannot resolve).
+  test-swift:
+    runs-on: ubuntu-latest
+    container: swift:6.1
+    steps:
+      - uses: actions/checkout@v6
+      - run: swift test
+
   # The 7th codec port: the Rust reference compiled to a wasm32-wasip2 component
   # behind the kanonak:codec WIT interface, driven through the SAME golden
   # vectors by a jco-transpiled Node host. Gates publish-wasm (GHCR OCI).

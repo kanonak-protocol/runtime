@@ -210,3 +210,22 @@ targets:
       - "The Wasm component has no language-native registry; the Component-Model ecosystem distributes via OCI artifacts (warg is archived). Idiomatic fetch: `wkg oci pull ghcr.io/kanonak-protocol/codec:<ver> -o codec.wasm` (or oras)."
       - "wkg is pinned in release.yml (v0.15.1, latest stable; 0.16 is an RC as of 2026-07-17). The artifact format is wkg's: config application/vnd.wasm.config.v0+json + a single application/wasm layer."
       - "Release tags are immutable by discipline: publish-wasm pre-checks the manifest (authenticated, so it also works pre-visibility-flip) and skips an existing tag; bump the wasm crate version in lockstep with the native codec for a new release."
+
+  - language: swift          # CANONICAL + CODEC (behind the root Package.swift)
+    registry: "public git repo + root semver tags (Swift has no central registry)"
+    registry_url: https://github.com/kanonak-protocol/runtime
+    publishes:
+      canonical: "product KanonakCanonical (root Package.swift)"
+      codec: "product KanonakCodec (root Package.swift)"
+    account_namespace: "GitHub org kanonak-protocol (the repo IS the registry)"
+    auth: none                 # a release is the repo's coordinated `v*` tag; no upload exists
+    github_secrets: []
+    fallback_secret: null
+    registry_side_config: {}
+    setup:
+      - "NOTHING: SwiftPM resolves the repo URL against ROOT semver tags (`v*`), so the coordinated release tag IS the Swift release — no publish job. test-swift gates the tag."
+    gotchas:
+      - "SwiftPM understands ONLY root-level semver tags — the per-member Go-style tags (kanonak-codec/go/vX) are invisible to it, and every root `v*` tag IS a Swift package version. Tags v0.2.0-v0.4.0 predate Package.swift and cannot resolve; the first Swift-consumable version is the first tag whose tree contains it. Consumers must pin `from:` at or above that version."
+      - "One Swift package version covers ALL members (root manifest), unlike the per-member versions elsewhere — the repo's coordinated `v*` release train is the Swift version line."
+      - "The package identity a consumer writes is the URL basename: `.package(url: \"https://github.com/kanonak-protocol/runtime\", ...)` + products KanonakCanonical / KanonakCodec."
+      - "Optional discoverability: swiftpackageindex.com indexes public repos (it is an index, not a registry); nothing depends on it."
