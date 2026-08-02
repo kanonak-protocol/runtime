@@ -4,7 +4,7 @@ The public, open-source runtime stack that every generated Kanonak SDK depends
 on — so the runtime is referenced from a public registry, **never inlined** into
 each generated SDK.
 
-Four libraries, six languages each (plus a WebAssembly-component build of the
+Four libraries, seven languages each (plus a WebAssembly-component build of the
 codec), conformance-verified to produce **byte-identical results** across all
 of them:
 
@@ -32,11 +32,17 @@ are a separate, commercial concern and are not part of this repo.)
 ## Layout
 
 ```
-kanonak-canonical/{python,rust,go,java,csharp,typescript}/   + vectors/
-kanonak-codec/{python,rust,go,java,csharp,typescript,wasm}/ + vectors/
-kanonak-expression/{python,rust,go,java,csharp,typescript}/ + vectors/
-kanonak-wire/{python,rust,go,java,csharp,typescript}/ + vectors/
+kanonak-canonical/{python,rust,go,java,csharp,typescript,swift}/        + vectors/
+kanonak-codec/{python,rust,go,java,csharp,typescript,swift,wasm}/      + vectors/
+kanonak-expression/{python,rust,go,java,csharp,typescript,swift}/      + vectors/
+kanonak-wire/{python,rust,go,java,csharp,typescript,swift}/            + vectors/
 ```
+
+The Swift ports of all four members are exposed as ONE SwiftPM package by the
+root [`Package.swift`](./Package.swift) — SwiftPM resolves git-URL dependencies
+only against a root manifest, so each member's Swift sources live beside its
+other language ports and are surfaced as the products `KanonakCanonical`,
+`KanonakCodec`, `KanonakExpression`, and `KanonakWire`.
 
 `kanonak-codec/wasm/` is the 7th codec port: a WebAssembly component
 (`wasm32-wasip2`, exporting the `kanonak:codec` WIT interface) built from the
@@ -57,7 +63,19 @@ hash, serialization)` golden vectors.
 | C# | NuGet | `Kanonak.Canonical` | `Kanonak.Codec` | `Kanonak.Expression` | `Kanonak.Wire` |
 | Java | Maven Central | `org.kanonak:kanonak-canonical` | `org.kanonak:kanonak-codec` | `org.kanonak:kanonak-expression` | `org.kanonak:kanonak-wire` |
 | Go | proxy | `github.com/kanonak-protocol/runtime/kanonak-canonical/go` | `.../kanonak-codec/go` | `.../kanonak-expression/go` | `.../kanonak-wire/go` |
+| Swift | this repo, root `v*` tag | `KanonakCanonical` | `KanonakCodec` | `KanonakExpression` | `KanonakWire` |
 | Wasm component | GHCR (OCI) | — | `ghcr.io/kanonak-protocol/codec` | — | — |
+
+Swift has no central package registry — a public repo plus ROOT semver tags IS
+the ecosystem's registry mechanism, so a consumer depends on the repo URL and
+picks the product(s) they need:
+
+```swift
+.package(url: "https://github.com/kanonak-protocol/runtime", from: "0.5.0"),
+```
+
+Tags `v0.2.0`–`v0.4.0` predate the root `Package.swift` and cannot resolve;
+`v0.5.0` is the first Swift-consumable version.
 
 The `kanonak-codec` Wasm component ships as a wkg-format OCI artifact, tagged
 with the codec version:

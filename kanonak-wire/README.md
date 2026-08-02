@@ -12,8 +12,8 @@ invariant across ALL protocols — bounds-checked cursor reads/writes, endiannes
 strict text validation, and a rich error taxonomy. It knows nothing about any
 particular protocol.
 
-Every language port (Python, TypeScript, Go, Rust, Java, C#) produces identical
-values and identical errors for the shared golden vectors in
+Every language port (Python, TypeScript, Go, Rust, Java, C#, Swift) produces
+identical values and identical errors for the shared golden vectors in
 [`vectors/`](./vectors), including the determinism traps that expose language
 differences (unsigned values above int32, strict UTF-8 rejection, the UTF-16
 lone-surrogate encoder trap).
@@ -31,9 +31,13 @@ in place.
   Cases whose trap is unrepresentable in a language's type system carry a
   `requires` capability and are skipped WITH a reported skip count elsewhere:
   `wide-numeric-params` (writer numeric params can exceed the wire type's
-  range — TS, Python, Java; Rust/Go/C# take exact-width param types, where the
-  type IS the validation), `dynamic-numeric` (non-integer values — TS, Python),
-  `utf16-strings` (strings can hold unpaired surrogates — TS, Java, C#, Python).
+  range — TS, Python, Java; Rust/Go/C#/Swift take exact-width param types, where
+  the type IS the validation), `dynamic-numeric` (non-integer values — TS,
+  Python), `utf16-strings` (strings can hold unpaired surrogates — TS, Java, C#,
+  Python; a Swift `String` is a sequence of `Unicode.Scalar`s and cannot).
+
+  Swift therefore has NO capabilities and skips all six gated write vectors,
+  running 53 of 59 — the same position Rust and Go take on the numeric ones.
 
 ## Ports
 
@@ -45,6 +49,7 @@ in place.
 | Go | [`go/`](./go) | ✅ | `go test ./...` |
 | Java | [`java/`](./java) | ✅ | `javac -d out src/main/java/org/kanonak/wire/*.java conformance/Conformance.java && java -cp out Conformance ../vectors` |
 | C# | [`csharp/`](./csharp) | ✅ | `cd csharp && dotnet run --project test/Kanonak.Wire.Conformance -- ../vectors` |
+| Swift | [`swift/`](./swift) | ✅ | `swift test --filter WireVectorTests` (at the repo root) |
 
 ## What a port implements
 

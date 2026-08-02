@@ -12,6 +12,8 @@ let package = Package(
     products: [
         .library(name: "KanonakCanonical", targets: ["KanonakCanonical"]),
         .library(name: "KanonakCodec", targets: ["KanonakCodec"]),
+        .library(name: "KanonakExpression", targets: ["KanonakExpression"]),
+        .library(name: "KanonakWire", targets: ["KanonakWire"]),
     ],
     dependencies: [
         // SHA-256 on Darwin and Linux through one import (`Crypto`).
@@ -37,6 +39,27 @@ let package = Package(
             name: "KanonakCodecTests",
             dependencies: ["KanonakCodec"],
             path: "kanonak-codec/swift/Tests/KanonakCodecTests"
+        ),
+        // Independent of canonical/codec — the expression kernel is a pure
+        // operator engine over the dictionary node contract.
+        .target(
+            name: "KanonakExpression",
+            path: "kanonak-expression/swift/Sources/KanonakExpression"
+        ),
+        .testTarget(
+            name: "KanonakExpressionTests",
+            dependencies: ["KanonakExpression"],
+            path: "kanonak-expression/swift/Tests/KanonakExpressionTests"
+        ),
+        // Independent of every other member — the wire kernel is pure bytes.
+        .target(
+            name: "KanonakWire",
+            path: "kanonak-wire/swift/Sources/KanonakWire"
+        ),
+        .testTarget(
+            name: "KanonakWireTests",
+            dependencies: ["KanonakWire"],
+            path: "kanonak-wire/swift/Tests/KanonakWireTests"
         ),
     ]
 )

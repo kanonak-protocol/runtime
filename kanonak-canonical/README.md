@@ -23,7 +23,7 @@ ordering, or wire layout requires a NEW version, never an edit in place.
 
 ## Ports
 
-All six ports pass 100% of the golden vectors (64 lexical + 9 full-form).
+All seven ports pass 100% of the golden vectors (64 lexical + 9 full-form).
 
 | Language | Path | Status | Conformance command |
 |---|---|---|---|
@@ -33,6 +33,7 @@ All six ports pass 100% of the golden vectors (64 lexical + 9 full-form).
 | Java | [`java/`](./java) | ✅ | `javac -d out src/main/java/org/kanonak/canonical/*.java conformance/Conformance.java && java -cp out Conformance ../vectors` (in `java/`) |
 | Python | [`python/`](./python) | ✅ | `python conformance.py ../vectors` (in `python/`) |
 | TypeScript | [`typescript/`](./typescript) | ✅ | `npm install && npm run conformance` (in `typescript/`) |
+| Swift | [`swift/`](./swift) | ✅ | `swift test --filter KanonakCanonicalTests` (at the repo root) |
 
 The TypeScript port is published as `@kanonak-protocol/canonical`; the SDK and
 the codec consume it (it is no longer bundled inside the SDK).

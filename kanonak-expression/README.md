@@ -9,9 +9,24 @@ evaluates**. Generated SDKs reference it so a typed expression can be *run*, not
 just *represented* — without each language hand-writing (and diverging on) an
 evaluator.
 
-Every language port (Python, JavaScript/TypeScript, Go, Rust, Java, C#) produces
-identical values for the shared parity vectors in [`vectors/`](./vectors),
-including the determinism traps that expose language differences.
+Every language port (Python, JavaScript/TypeScript, Go, Rust, Java, C#, Swift)
+produces identical values for the shared parity vectors in
+[`vectors/`](./vectors), including the determinism traps that expose language
+differences.
+
+## Ports
+
+All seven ports pass 100% of the 54 parity vectors.
+
+| Language | Path | Status | Conformance command |
+|---|---|---|---|
+| TypeScript | [`typescript/`](./typescript) | ✅ | `npm run conformance` |
+| Rust | [`rust/`](./rust) | ✅ | `cargo test` |
+| Python | [`python/`](./python) | ✅ | `python conformance.py ../vectors` |
+| Go | [`go/`](./go) | ✅ | `go test ./...` |
+| Java | [`java/`](./java) | ✅ | `javac -d out src/main/java/org/kanonak/expression/*.java conformance/Conformance.java && java -cp out Conformance ../vectors` |
+| C# | [`csharp/`](./csharp) | ✅ | `cd csharp && dotnet run --project test/Kanonak.Expression.Conformance -- ../vectors` |
+| Swift | [`swift/`](./swift) | ✅ | `swift test --filter ExpressionVectorTests` (at the repo root) |
 
 ## The three layers
 
