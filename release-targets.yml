@@ -30,13 +30,16 @@ meta:
     expression: "0.1.0"
     wire: "0.1.0"
   # Swift package version — the ROOT `v<ver>` tag (SwiftPM resolves ONLY root
-  # semver tags; one version covers KanonakCanonical + KanonakCodec behind the
-  # root Package.swift). The tag is pushed BY the release workflow's
-  # publish-swift job (NEVER manually — same rule and same forgotten-step
-  # history as the Go tags). SwiftPM caches a resolved tag by revision: never
-  # move or reuse one; bump HERE and re-run the workflow for a new release.
+  # semver tags; ONE version covers all four products — KanonakCanonical,
+  # KanonakCodec, KanonakExpression, KanonakWire — behind the root
+  # Package.swift). The tag is pushed BY the release workflow's publish-swift
+  # job (NEVER manually — same rule and same forgotten-step history as the Go
+  # tags). SwiftPM caches a resolved tag by revision: never move or reuse one;
+  # bump HERE and re-run the workflow for a new release.
   # Must sort AFTER every pre-Package.swift root tag (v0.2.0–v0.4.0).
-  swift_package_version: "0.5.0"
+  # 0.6.0 adds KanonakExpression + KanonakWire (0.5.0 shipped canonical + codec
+  # only). Consumers of the two new products must pin `from: "0.6.0"`.
+  swift_package_version: "0.6.0"
   # GitHub Actions OIDC (no stored token) is preferred where supported. A workflow
   # using OIDC needs:  permissions: { id-token: write, contents: read, attestations: write }
   # All PUBLISH jobs run in the `production` GitHub environment (required by NuGet trusted

@@ -71,11 +71,13 @@ the ecosystem's registry mechanism, so a consumer depends on the repo URL and
 picks the product(s) they need:
 
 ```swift
-.package(url: "https://github.com/kanonak-protocol/runtime", from: "0.5.0"),
+.package(url: "https://github.com/kanonak-protocol/runtime", from: "0.6.0"),
 ```
 
-Tags `v0.2.0`–`v0.4.0` predate the root `Package.swift` and cannot resolve;
-`v0.5.0` is the first Swift-consumable version.
+Tags `v0.2.0`–`v0.4.0` predate the root `Package.swift` and cannot resolve, so
+`v0.5.0` is the first Swift-consumable version — but it shipped
+`KanonakCanonical` + `KanonakCodec` only. **`KanonakExpression` and
+`KanonakWire` require `v0.6.0` or later.**
 
 The `kanonak-codec` Wasm component ships as a wkg-format OCI artifact, tagged
 with the codec version:

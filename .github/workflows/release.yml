@@ -220,16 +220,47 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' && secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}
         run: |
+          # The existence pre-check FAILS CLOSED: `curl -sf` alone cannot tell a
+          # 404 (absent, publish it) from a 5xx/network error (unknown), and
+          # treating "unknown" as "absent" turns a transient blip into a failed
+          # release run. Branch on the actual status instead.
+          #
+          # And, like the npm and Maven jobs, the AUTHORITATIVE duplicate
+          # rejection from the write path is treated as success: crates.io's API
+          # is DB-backed and near-immediately consistent (it is the sparse index
+          # that lags — that is what the sleep below is for), so this is belt and
+          # braces rather than a known failure, but it makes the three
+          # lag-exposed publishers behave identically.
           pub() {
-            local manifest="$1" crate ver
+            local manifest="$1" crate ver code out
             crate=$(grep -m1 '^name = ' "$manifest" | sed -E 's/.*"(.*)".*/\1/')
             ver=$(grep -m1 '^version = ' "$manifest" | sed -E 's/.*"(.*)".*/\1/')
-            if curl -sf -o /dev/null -A "kanonak-release-ci (https://github.com/kanonak-protocol/runtime)" "https://crates.io/api/v1/crates/$crate/$ver"; then
-              echo "$crate@$ver already on crates.io - skipping"
-            else
-              cargo publish --manifest-path "$manifest"
+            # `|| code=…` on the ASSIGNMENT, not inside the substitution: curl
+            # already writes "000" via -w on a connection failure, so an inner
+            # `|| echo 000` would concatenate into "000000".
+            code=$(curl -s -o /dev/null -w '%{http_code}' -A "kanonak-release-ci (https://github.com/kanonak-protocol/runtime)" "https://crates.io/api/v1/crates/$crate/$ver") || code="000"
+            case "$code" in
+              200)
+                echo "$crate@$ver already on crates.io - skipping"
+                return 0
+                ;;
+              404) ;;  # absent — publish below
+              *)
+                echo "::error::could not determine whether $crate@$ver is on crates.io (HTTP $code) — refusing to publish blind. Re-run when crates.io is reachable."
+                return 1
+                ;;
+            esac
+            if out=$(cargo publish --manifest-path "$manifest" 2>&1); then
+              echo "$out" | tail -n 10
               sleep 30   # let the index surface it before a dependent crate resolves it
+              return 0
             fi
+            echo "$out" | tail -n 40
+            if grep -qiE "already (uploaded|exists)|is already uploaded" <<<"$out"; then
+              echo "$crate@$ver already on crates.io (API lag beat the pre-check) - continuing"
+              return 0
+            fi
+            return 1
           }
           pub kanonak-canonical/rust/Cargo.toml
           pub kanonak-codec/rust/Cargo.toml
@@ -396,6 +427,22 @@ jobs:
             fi
             if git ls-remote --tags origin "refs/tags/$tag" | grep -q .; then
               echo "$tag already exists - skipping (immutable once the proxy serves it; bump go_module_versions for a new release)"
+              # DRIFT: skip-if-exists is SAFE but silent. If this member's module
+              # tree has changed since its tag and the version was NOT bumped,
+              # the skip means those changes never reach Go consumers, and
+              # release-audit cannot see it (it only checks declared == published).
+              # Compare the SUBTREE object hash — path-scoped, so releasing one
+              # member never false-positives on the others, whose tags legitimately
+              # point at older commits.
+              if git fetch --quiet --depth 1 origin "refs/tags/$tag" 2>/dev/null; then
+                tagged=$(git rev-parse "FETCH_HEAD:kanonak-$m/go" 2>/dev/null || true)
+                current=$(git rev-parse "HEAD:kanonak-$m/go" 2>/dev/null || true)
+                if [ -n "$tagged" ] && [ -n "$current" ] && [ "$tagged" != "$current" ]; then
+                  echo "::warning::kanonak-$m/go has CHANGED since $tag (tree $tagged -> $current) but go_module_versions.$m is still $ver — those changes will NOT reach Go consumers. Bump it in release-targets.yml and re-run."
+                fi
+              else
+                echo "::warning::could not fetch $tag to check for drift in kanonak-$m/go — skipping the drift check only; the tag itself is untouched"
+              fi
             else
               git tag "$tag" "$GITHUB_SHA"
               git push origin "refs/tags/$tag"
@@ -432,7 +479,26 @@ jobs:
           fi
           if git ls-remote --tags origin "refs/tags/$tag" | grep -q .; then
             echo "$tag already exists - skipping (immutable once resolved; bump swift_package_version for a new release)"
+            # DRIFT: the same silent-skip hazard as the Go tags, and it has
+            # already bitten once — the Swift expression + wire ports landed on
+            # main while swift_package_version still read 0.5.0, so a publish
+            # run would have skipped the tag and release-audit would have
+            # reported OK with two products unreleasable. Every Swift source
+            # path is compared, so any change without a bump is surfaced.
+            if git fetch --quiet --depth 1 origin "refs/tags/$tag" 2>/dev/null; then
+              if ! git diff --quiet FETCH_HEAD HEAD -- Package.swift kanonak-*/swift 2>/dev/null; then
+                echo "::warning::Swift sources have CHANGED since $tag but swift_package_version is still $ver — those changes will NOT reach SwiftPM consumers (a resolved tag is cached by revision and must never be moved). Bump it in release-targets.yml and re-run."
+                git diff --stat FETCH_HEAD HEAD -- Package.swift kanonak-*/swift || true
+              fi
+            else
+              echo "::warning::could not fetch $tag to check for Swift drift — skipping the drift check only; the tag itself is untouched"
+            fi
           else
+            # NOTE: this tag matches `on.push.tags: ["v*"]`. It does not retrigger
+            # this workflow because pushes made with GITHUB_TOKEN never trigger
+            # workflow runs. If this is ever switched to a PAT or deploy key it
+            # WILL retrigger — harmless (the rerun finds the tag and skips) but
+            # wasteful, and only idempotency keeps it to a single extra run.
             git tag "$tag" "$GITHUB_SHA"
             git push origin "refs/tags/$tag"
             echo "pushed $tag @ $GITHUB_SHA"
@@ -477,18 +543,36 @@ jobs:
           ref="ghcr.io/kanonak-protocol/codec:$ver"
           # AUTHENTICATED existence pre-check, so idempotency holds even while
           # the package is still private (before the one-time visibility flip).
-          tok=$(curl -sf -u "${WKG_OCI_USERNAME}:${WKG_OCI_PASSWORD}" "https://ghcr.io/token?scope=repository:kanonak-protocol/codec:pull" | jq -r .token)
-          if curl -sf -o /dev/null -H "Authorization: Bearer $tok" \
+          #
+          # This check FAILS CLOSED, and here that is load-bearing rather than
+          # tidiness: GHCR does NOT enforce tag immutability by default and
+          # nothing here configures it, so unlike every other target — where the
+          # registry itself rejects a duplicate — this pre-check is the ONLY
+          # thing standing between a re-run and an OVERWRITE of a published
+          # artifact. Rust builds are not bit-reproducible, so an overwrite would
+          # swap the bytes under an already-published digest. `curl -sf` cannot
+          # distinguish 404 (absent) from 5xx/network (unknown), so a transient
+          # blip was enough to fall through to the push. Branch on the status.
+          tok=$(curl -sf -u "${WKG_OCI_USERNAME}:${WKG_OCI_PASSWORD}" "https://ghcr.io/token?scope=repository:kanonak-protocol/codec:pull" | jq -r .token || true)
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $tok" \
                -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json" \
-               "https://ghcr.io/v2/kanonak-protocol/codec/manifests/$ver"; then
-            echo "$ref already exists - skipping (immutable release tag; bump the version for a new release)"
-          else
-            wkg oci push "$ref" kanonak-codec/wasm/target/wasm32-wasip2/release/kanonak_codec_wasm.wasm \
-              --annotation "org.opencontainers.image.source=https://github.com/kanonak-protocol/runtime" \
-              --annotation "org.opencontainers.image.description=kanonak-codec as a Wasm component (kanonak:codec WIT interface), conformance-locked to the shared golden vectors" \
-              --annotation "org.opencontainers.image.licenses=Apache-2.0"
-            echo "pushed $ref"
-          fi
+               "https://ghcr.io/v2/kanonak-protocol/codec/manifests/$ver") || code="000"
+          case "$code" in
+            200)
+              echo "$ref already exists - skipping (release tags are immutable by discipline; bump the version for a new release)"
+              ;;
+            404)
+              wkg oci push "$ref" kanonak-codec/wasm/target/wasm32-wasip2/release/kanonak_codec_wasm.wasm \
+                --annotation "org.opencontainers.image.source=https://github.com/kanonak-protocol/runtime" \
+                --annotation "org.opencontainers.image.description=kanonak-codec as a Wasm component (kanonak:codec WIT interface), conformance-locked to the shared golden vectors" \
+                --annotation "org.opencontainers.image.licenses=Apache-2.0"
+              echo "pushed $ref"
+              ;;
+            *)
+              echo "::error::could not determine whether $ref exists (HTTP $code) — refusing to push, because GHCR would OVERWRITE the tag rather than reject it. Check the GHCR token/scope and re-run."
+              exit 1
+              ;;
+          esac
 
   # RELEASE AUDIT — the cold-start truth check. Reads each member's expected
   # version from the COMMITTED manifests (repo state is the only memory; no
