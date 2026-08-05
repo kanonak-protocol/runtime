@@ -661,10 +661,18 @@ jobs:
           # verify the tagged TREE carries the root Package.swift (a tag
           # without it is unresolvable to SwiftPM — exactly the silent-drift
           # failure this audit exists to catch).
+          #
+          # The fetch is a SEPARATE, retried step with its own error message.
+          # It used to share one `fetch && ls-tree` condition with the tree
+          # check, so a transient fetch failure was reported as "tree carries
+          # NO Package.swift" — a false alarm against a provably good tag
+          # (run 31047092610). Retried like every network call in this audit,
+          # and not --quiet, so git's own stderr lands in the log.
           swift_ver=$(python3 -c "import yaml; print(yaml.safe_load(open('release-targets.yml'))['meta']['swift_package_version'])")
           if git ls-remote --tags origin "refs/tags/v$swift_ver" | grep -q .; then
-            if git fetch --quiet --depth 1 origin "refs/tags/v$swift_ver:refs/tags/v$swift_ver" \
-               && git ls-tree -r --name-only "v$swift_ver" | grep -qx "Package.swift"; then
+            if ! retry 3 15 git fetch --depth 1 origin "refs/tags/v$swift_ver:refs/tags/v$swift_ver"; then
+              echo "::error::Swift root tag v$swift_ver exists on origin but could not be FETCHED to inspect its tree (see git's output above; likely transient) — the tag itself is untouched; re-run the audit"; fail=1
+            elif git ls-tree -r --name-only "v$swift_ver" | grep -qx "Package.swift"; then
               echo "OK       Swift         v$swift_ver (root tag present, Package.swift in its tree)"
             else
               echo "::error::Swift root tag v$swift_ver exists but its tree carries NO root Package.swift — SwiftPM cannot resolve it. Never move the tag: bump swift_package_version and re-run from a tree that has it"; fail=1

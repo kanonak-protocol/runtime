@@ -27,7 +27,7 @@ meta:
   go_module_versions:
     canonical: "0.1.1"
     codec: "0.4.0"
-    expression: "0.1.0"
+    expression: "0.2.0"
     wire: "0.1.0"
   # Swift package version — the ROOT `v<ver>` tag (SwiftPM resolves ONLY root
   # semver tags; ONE version covers all four products — KanonakCanonical,
@@ -39,7 +39,9 @@ meta:
   # Must sort AFTER every pre-Package.swift root tag (v0.2.0–v0.4.0).
   # 0.6.0 adds KanonakExpression + KanonakWire (0.5.0 shipped canonical + codec
   # only). Consumers of the two new products must pin `from: "0.6.0"`.
-  swift_package_version: "0.6.0"
+  # 0.7.0 adds the ordered comparisons (IsAtLeast/Dominates) + explain() to
+  # KanonakExpression (expression 0.2.0 in the per-member registries).
+  swift_package_version: "0.7.0"
   # GitHub Actions OIDC (no stored token) is preferred where supported. A workflow
   # using OIDC needs:  permissions: { id-token: write, contents: read, attestations: write }
   # All PUBLISH jobs run in the `production` GitHub environment (required by NuGet trusted
