@@ -53,6 +53,31 @@ export interface ExprNode {
  * domain leaf containing sub-expressions can recurse into the kernel. */
 export type Resolve<C> = (node: ExprNode, ctx: C, evaluate: (n: ExprNode, ctx: C) => number) => number;
 
+/**
+ * The transitive closures ordered comparisons consult, keyed by the ordering
+ * property's canonical URI, then by member: `closures[property][from]` is the
+ * set of members `from` reaches. Flat, already-closed data — typically the
+ * SDK reasoner's `prp-trp` saturation emitted at code-generation time. The
+ * kernel does set membership only; it NEVER computes a closure, resolves a
+ * package, or reasons. Supplying the closure is the caller's business, the
+ * same division that keeps variable binding out of the kernel.
+ */
+export type ClosureTable = Record<string, Record<string, readonly string[]>>;
+
+/** Resolve an identity leaf inside an ordered comparison — any operand node
+ * that is not a `tx.UriLiteral` — to a member's canonical versionless URI
+ * (`publisher/package/name`). The identity-domain mirror of {@link Resolve}:
+ * the kernel owns the constant leaf, the caller owns bindings. */
+export type ResolveRef<C> = (node: ExprNode, ctx: C) => string;
+
+/** Optional evaluation context for the ordered comparisons (`IsAtLeast`,
+ * `Dominates`). Absent (or missing a needed entry), an ordered comparison
+ * fails loudly — never a silent false from a missing table. */
+export interface EvalOptions<C> {
+  closures?: ClosureTable;
+  resolveRef?: ResolveRef<C>;
+}
+
 export class ExpressionError extends Error {}
 
 /** Operand shape per operator, derived from the `tx` superclass hierarchy. */
@@ -166,12 +191,73 @@ function literalValue(node: ExprNode): number | undefined {
 }
 
 /**
+ * The identity an ordered comparison compares — a member's canonical
+ * versionless URI. `tx.UriLiteral` is the kernel-known constant leaf (its
+ * `refTo` IS the identity, the way a literal's value is its number); every
+ * other node is the caller's, through `resolveRef` — the same division as the
+ * numeric domain's literals-vs-`resolve`.
+ */
+function identityOf<C>(node: ExprNode, ctx: C, options: EvalOptions<C> | undefined): string {
+  if (node.type === `${TX}/UriLiteral`) {
+    const ref = node.refTo;
+    if (typeof ref !== 'string' || ref.length === 0) {
+      throw new ExpressionError('UriLiteral is missing refTo');
+    }
+    return ref;
+  }
+  if (!options?.resolveRef) {
+    throw new ExpressionError(`No resolveRef supplied for identity leaf '${node.type}'`);
+  }
+  return options.resolveRef(node, ctx);
+}
+
+/**
+ * Fold an ordered comparison (`IsAtLeast` / `Dominates`) to `1`/`0`.
+ *
+ * The ordering is the supplied closure for the node's `viaProperty` —
+ * membership in already-closed data, nothing more. Identity is canonical
+ * versionless URI string equality, matching `tx.Equals`' identity rule.
+ * `IsAtLeast` folds reflexivity into the operator (same member → 1) so a
+ * strictly-ordered vocabulary need not declare itself reflexive; `Dominates`
+ * is strict (same member → 0). Two members with no path yield 0 — the
+ * fail-closed direction for a predicate — but a MISSING closure table is a
+ * configuration failure and errors loudly.
+ */
+function foldOrdered<C>(
+  node: ExprNode,
+  ctx: C,
+  options: EvalOptions<C> | undefined,
+): { value: number; left: string; right: string } {
+  const via = node.viaProperty;
+  if (typeof via !== 'string' || via.length === 0) {
+    throw new ExpressionError(`${node.type} is missing viaProperty`);
+  }
+  const left = identityOf(operand(node, 'compareLeft'), ctx, options);
+  const right = identityOf(operand(node, 'compareRight'), ctx, options);
+  const closure = options?.closures?.[via];
+  if (!closure) {
+    throw new ExpressionError(`No closure supplied for ordering property '${via}'`);
+  }
+  const value = left === right
+    ? bool(node.type === `${TX}/IsAtLeast`)
+    : bool((closure[left] ?? []).includes(right));
+  return { value, left, right };
+}
+
+/**
  * Evaluate an expression tree to a number. Operators fold via the frozen
  * dispatch + primitive tables; literals yield their numeric value; any other
- * node is delegated to `resolve`.
+ * node is delegated to `resolve`. `options` carries the ordered-comparison
+ * context (closures + identity-leaf resolution) and is only consulted when an
+ * `IsAtLeast` / `Dominates` node is reached.
  */
-export function evaluate<C = unknown>(node: ExprNode, ctx: C, resolve: Resolve<C>): number {
-  const recurse = (n: ExprNode, c: C): number => evaluate(n, c, resolve);
+export function evaluate<C = unknown>(
+  node: ExprNode,
+  ctx: C,
+  resolve: Resolve<C>,
+  options?: EvalOptions<C>,
+): number {
+  const recurse = (n: ExprNode, c: C): number => evaluate(n, c, resolve, options);
 
   const arity = OPERATOR_ARITY[node.type];
   if (arity) {
@@ -211,6 +297,10 @@ export function evaluate<C = unknown>(node: ExprNode, ctx: C, resolve: Resolve<C
     return bool(!truthy(recurse(operand(node, 'operand'), ctx)));
   }
 
+  if (node.type === `${TX}/IsAtLeast` || node.type === `${TX}/Dominates`) {
+    return foldOrdered(node, ctx, options).value;
+  }
+
   const lit = literalValue(node);
   if (lit !== undefined) return lit;
 
@@ -224,4 +314,109 @@ function operand(node: ExprNode, key: string): ExprNode {
     throw new ExpressionError(`${node.type} is missing operand '${key}'`);
   }
   return v as ExprNode;
+}
+
+/**
+ * One node of an evaluation trace — the verdict tree {@link explain} returns.
+ *
+ * Mirrors the expression: `type` is the node's type URI, `value` its result
+ * (`1`/`0` for booleans), `children` the operand traces in evaluation order.
+ * A short-circuited operand is simply ABSENT from `children` — the trace is
+ * truthful about what ran. Ordered comparisons carry their resolved operand
+ * identities as `leftRef`/`rightRef` instead of children, since their
+ * operands are identities rather than numeric folds.
+ *
+ * This is a runtime return shape, not an ontology class: nothing authors a
+ * trace, so nothing about it is modelled or serialized as vocabulary.
+ */
+export interface TraceNode {
+  type: string;
+  value: number;
+  children: TraceNode[];
+  leftRef?: string;
+  rightRef?: string;
+}
+
+/**
+ * Evaluate an expression tree and return the verdict tree — the regex-debugger
+ * view: every evaluated node, its own result, and (for ordered comparisons)
+ * the identities it compared. The root's `value` is exactly what
+ * {@link evaluate} returns for the same inputs; the conformance suite runs
+ * every vector through both and requires agreement, so the two entry points
+ * cannot drift. Kept separate from `evaluate` so the hot path never pays for
+ * trace allocation.
+ *
+ * Errors propagate exactly as in `evaluate` — a failed evaluation yields an
+ * error, not a partial trace.
+ */
+export function explain<C = unknown>(
+  node: ExprNode,
+  ctx: C,
+  resolve: Resolve<C>,
+  options?: EvalOptions<C>,
+): TraceNode {
+  // Numeric recursion for subtrees the caller's `resolve` re-enters: those
+  // folds happen inside the caller and are invisible to the trace, exactly
+  // like the caller's own computation. Only kernel-visited nodes appear.
+  const recurseValue = (n: ExprNode, c: C): number => evaluate(n, c, resolve, options);
+
+  const trace = (n: ExprNode, c: C): TraceNode => {
+    const arity = OPERATOR_ARITY[n.type];
+    if (arity) {
+      switch (arity.kind) {
+        case 'unary': {
+          const x = trace(operand(n, arity.operand), c);
+          return { type: n.type, value: UNARY[n.type](x.value), children: [x] };
+        }
+        case 'binary': {
+          const a = trace(operand(n, arity.left), c);
+          const b = trace(operand(n, arity.right), c);
+          return { type: n.type, value: BINARY[n.type](a.value, b.value), children: [a, b] };
+        }
+        case 'nary': {
+          const items = n[arity.operands];
+          if (!Array.isArray(items)) throw new ExpressionError(`${n.type} expects an '${arity.operands}' list`);
+          const isAnd = n.type === `${TX}/And`;
+          const children: TraceNode[] = [];
+          for (const item of items) {
+            const child = trace(item as ExprNode, c);
+            children.push(child);
+            const v = truthy(child.value);
+            // Same short-circuit as `evaluate`: operands after the deciding
+            // one are never evaluated and never appear in the trace.
+            if (isAnd && !v) return { type: n.type, value: 0, children };
+            if (!isAnd && v) return { type: n.type, value: 1, children };
+          }
+          return { type: n.type, value: bool(isAnd), children };
+        }
+        case 'ternary': {
+          const v = trace(operand(n, arity.a), c);
+          const lo = trace(operand(n, arity.b), c);
+          const hi = trace(operand(n, arity.c), c);
+          return {
+            type: n.type,
+            value: Math.min(Math.max(v.value, lo.value), hi.value),
+            children: [v, lo, hi],
+          };
+        }
+      }
+    }
+
+    if (n.type === `${TX}/Not`) {
+      const x = trace(operand(n, 'operand'), c);
+      return { type: n.type, value: bool(!truthy(x.value)), children: [x] };
+    }
+
+    if (n.type === `${TX}/IsAtLeast` || n.type === `${TX}/Dominates`) {
+      const r = foldOrdered(n, c, options);
+      return { type: n.type, value: r.value, children: [], leftRef: r.left, rightRef: r.right };
+    }
+
+    const lit = literalValue(n);
+    if (lit !== undefined) return { type: n.type, value: lit, children: [] };
+
+    return { type: n.type, value: resolve(n, c, recurseValue), children: [] };
+  };
+
+  return trace(node, ctx);
 }

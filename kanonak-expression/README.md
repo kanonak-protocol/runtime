@@ -16,7 +16,7 @@ differences.
 
 ## Ports
 
-All seven ports pass 100% of the 54 parity vectors.
+All seven ports pass 100% of the 69 parity vectors.
 
 | Language | Path | Status | Conformance command |
 |---|---|---|---|
@@ -88,11 +88,61 @@ way `Divide`/`Ln`/`Sqrt` do.
 | `BinaryArithmetic` | `arithLeft`, `arithRight` | Add, Subtract, Multiply, Divide, Power, Modulo, Minimum, Maximum |
 | `UnaryNumericOp` | `value` | Abs, Negate, Exp, Ln, Log10, Sqrt, Floor, Ceil, Round, Sign |
 | `BinaryComparison` | `compareLeft`, `compareRight` | Equals, GreaterThan, LessThan, GreaterThanOrEqual, LessThanOrEqual |
+| `OrderedComparison` | `compareLeft`, `compareRight`, `viaProperty` | IsAtLeast, Dominates |
 | `BooleanLogic` | `operands` (list) | And, Or |
 | (direct) | `operand` | Not |
 | (direct, ternary) | `clipValue`, `clipLower`, `clipUpper` | Clip |
 
 Literals: `IntegerLiteral`, `DecimalLiteral`, `BooleanLiteral` (→ `1`/`0`).
+Identity leaf (inside ordered comparisons): `UriLiteral` (`refTo` = a member's
+canonical versionless URI).
+
+## Ordered comparisons
+
+`IsAtLeast` / `Dominates` compare **ordered vocabulary members** — members of a
+closed set ranked by an `owl:TransitiveProperty` — by consulting that property's
+transitive closure. Identity is canonical versionless URI equality
+(`publisher/package/name`), the same rule as `tx.Equals`; the ordering is never
+a projected ordinal, so inserting a member into a scale cannot silently shift
+the meaning of persisted rules.
+
+- **The closure is caller-supplied evaluation context** (`EvalOptions.closures`:
+  `property → member → reachable members`). Flat, already-closed data —
+  typically the SDK reasoner's `prp-trp` saturation emitted at code-generation
+  time. The kernel does set membership only; it never resolves a package or
+  computes a closure, the same division that keeps variable binding out of the
+  kernel. A missing closure table is a loud error, never a silent false.
+- **`IsAtLeast` is reflexive at the operator** (same member → true) so a
+  strictly-ordered vocabulary need not declare itself reflexive to be
+  comparable; **`Dominates` is strict** (same member → false).
+- **Unrelated members yield false, not an error** — the fail-closed direction
+  for a predicate.
+- Operand leaves: `UriLiteral` is kernel-known (its `refTo` IS the identity,
+  as a literal's value is its number); any other leaf goes to the caller's
+  `resolveRef(node, ctx)` — the identity-domain mirror of `resolve`.
+
+## explain — the verdict tree
+
+`explain(node, ctx, resolve, options)` evaluates and returns a trace mirroring
+the expression — the regex-debugger view: each evaluated node with its own
+verdict (`type`, `value`, `children`; ordered comparisons carry the resolved
+`leftRef`/`rightRef` instead of children). Short-circuited operands are absent
+— the trace is truthful about what ran. `evaluate` stays a bare number and is
+untouched by tracing; every parity vector runs through both entry points and
+their values must agree, so they cannot drift. The trace is a runtime return
+shape, not an ontology class — nothing authors one.
+
+## Totality
+
+Evaluation always terminates: the operator set has no loops, no recursion
+beyond tree depth, and no unbounded iteration — an expression over a finite
+tree performs a bounded fold, and ordered comparisons are set-membership
+lookups in supplied data. This is a stated property of the runtime, not an
+accident: predicates evaluated over third-party-authored rules (access
+decisions, policy checks) may rely on it. Combined with operands restricted to
+ordered vocabulary members, a predicate's domain is finite — equivalence,
+subsumption, satisfiability, and monotonicity of rules are checkable by
+exhaustive enumeration.
 
 ## Vectors
 

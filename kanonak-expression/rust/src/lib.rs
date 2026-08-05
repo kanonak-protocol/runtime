@@ -58,6 +58,45 @@ pub type Resolve<'a, C> =
     &'a dyn Fn(&Value, &mut C, &mut dyn FnMut(&Value, &mut C) -> Result<f64, ExpressionError>)
         -> Result<f64, ExpressionError>;
 
+/// Resolve an identity leaf inside an ordered comparison — any operand node
+/// that is not a `tx.UriLiteral` — to a member's canonical versionless URI
+/// (`publisher/package/name`). The identity-domain mirror of [`Resolve`]: the
+/// kernel owns the constant leaf, the caller owns bindings.
+pub type ResolveRef<'a, C> = &'a dyn Fn(&Value, &mut C) -> Result<String, ExpressionError>;
+
+/// The transitive closures ordered comparisons consult, keyed by the ordering
+/// property's canonical URI, then by member: `closures[property][from]` is the
+/// set of members `from` reaches. Flat, already-closed data — typically the SDK
+/// reasoner's `prp-trp` saturation emitted at code-generation time. The kernel
+/// does set membership only; it never computes a closure, resolves a package,
+/// or reasons.
+pub type ClosureTable =
+    std::collections::HashMap<String, std::collections::HashMap<String, Vec<String>>>;
+
+/// Optional evaluation context for the ordered comparisons (`IsAtLeast`,
+/// `Dominates`). Absent (or missing a needed entry), an ordered comparison
+/// fails loudly — never a silent false from a missing table.
+pub struct EvalOptions<'a, C> {
+    pub closures: Option<&'a ClosureTable>,
+    pub resolve_ref: Option<ResolveRef<'a, C>>,
+}
+
+/// One node of an evaluation trace — the verdict tree [`explain`] returns.
+/// Mirrors the expression: `typ` is the node's type URI, `value` its result
+/// (`1.0`/`0.0` for booleans), `children` the operand traces in evaluation
+/// order. A short-circuited operand is simply ABSENT from `children` — the
+/// trace is truthful about what ran. Ordered comparisons carry their resolved
+/// operand identities as `left_ref`/`right_ref` instead of children. This is a
+/// runtime return shape, not an ontology class.
+#[derive(Debug, Clone)]
+pub struct TraceNode {
+    pub typ: String,
+    pub value: f64,
+    pub children: Vec<TraceNode>,
+    pub left_ref: Option<String>,
+    pub right_ref: Option<String>,
+}
+
 /// Operand shape per operator, derived from the `tx` superclass hierarchy.
 enum Arity {
     Unary { operand: &'static str },
@@ -254,6 +293,60 @@ fn operand<'a>(node: &'a Value, typ: &str, key: &str) -> Result<&'a Value, Expre
     }
 }
 
+/// The identity an ordered comparison compares — a member's canonical
+/// versionless URI. `tx.UriLiteral` is the kernel-known constant leaf (its
+/// `refTo` IS the identity, the way a literal's value is its number); every
+/// other node is the caller's, through `resolve_ref`.
+fn identity_of<C>(
+    node: &Value,
+    ctx: &mut C,
+    options: Option<&EvalOptions<C>>,
+) -> Result<String, ExpressionError> {
+    let typ = node_type(node)?;
+    if typ == "kanonak.org/transformations/UriLiteral" {
+        return match node.get("refTo").and_then(|v| v.as_str()) {
+            Some(s) if !s.is_empty() => Ok(s.to_string()),
+            _ => err("UriLiteral is missing refTo"),
+        };
+    }
+    match options.and_then(|o| o.resolve_ref) {
+        Some(resolve_ref) => resolve_ref(node, ctx),
+        None => err(format!("No resolveRef supplied for identity leaf '{typ}'")),
+    }
+}
+
+/// Fold an ordered comparison (`IsAtLeast` / `Dominates`) to `1.0`/`0.0` plus
+/// the resolved operand identities. The ordering is the supplied closure for
+/// the node's `viaProperty` — membership in already-closed data, nothing more.
+/// Identity is canonical versionless URI string equality, matching
+/// `tx.Equals`' identity rule. `IsAtLeast` folds reflexivity into the operator
+/// (same member → 1); `Dominates` is strict (same member → 0). Two members
+/// with no path yield 0 — fail-closed — but a MISSING closure table is a
+/// configuration failure and errors loudly.
+fn fold_ordered<C>(
+    node: &Value,
+    typ: &str,
+    ctx: &mut C,
+    options: Option<&EvalOptions<C>>,
+) -> Result<(f64, String, String), ExpressionError> {
+    let via = match node.get("viaProperty").and_then(|v| v.as_str()) {
+        Some(s) if !s.is_empty() => s,
+        _ => return err(format!("{typ} is missing viaProperty")),
+    };
+    let left = identity_of(operand(node, typ, "compareLeft")?, ctx, options)?;
+    let right = identity_of(operand(node, typ, "compareRight")?, ctx, options)?;
+    let closure = match options.and_then(|o| o.closures).and_then(|c| c.get(via)) {
+        Some(c) => c,
+        None => return err(format!("No closure supplied for ordering property '{via}'")),
+    };
+    let value = if left == right {
+        boolnum(typ == "kanonak.org/transformations/IsAtLeast")
+    } else {
+        boolnum(closure.get(&left).map_or(false, |set| set.iter().any(|m| m == &right)))
+    };
+    Ok((value, left, right))
+}
+
 /// Evaluate an expression tree to a number. Operators fold via the frozen
 /// dispatch + primitive tables; literals yield their numeric value; any other
 /// node is delegated to `resolve`.
@@ -262,22 +355,35 @@ pub fn evaluate<C>(
     ctx: &mut C,
     resolve: Resolve<C>,
 ) -> Result<f64, ExpressionError> {
+    evaluate_with_options(node, ctx, resolve, None)
+}
+
+/// [`evaluate`] with the ordered-comparison evaluation context (closures +
+/// identity-leaf resolution). `options` is only consulted when an `IsAtLeast` /
+/// `Dominates` node is reached; `None` is valid for trees without them.
+pub fn evaluate_with_options<C>(
+    node: &Value,
+    ctx: &mut C,
+    resolve: Resolve<C>,
+    options: Option<&EvalOptions<C>>,
+) -> Result<f64, ExpressionError> {
     fn go<C>(
         node: &Value,
         ctx: &mut C,
         resolve: Resolve<C>,
+        options: Option<&EvalOptions<C>>,
     ) -> Result<f64, ExpressionError> {
         let typ = node_type(node)?;
 
         if let Some(arity) = operator_arity(typ) {
             return match arity {
                 Arity::Unary { operand: key } => {
-                    let x = go(operand(node, typ, key)?, ctx, resolve)?;
+                    let x = go(operand(node, typ, key)?, ctx, resolve, options)?;
                     unary(typ, x)
                 }
                 Arity::Binary { left, right } => {
-                    let a = go(operand(node, typ, left)?, ctx, resolve)?;
-                    let b = go(operand(node, typ, right)?, ctx, resolve)?;
+                    let a = go(operand(node, typ, left)?, ctx, resolve, options)?;
+                    let b = go(operand(node, typ, right)?, ctx, resolve, options)?;
                     binary(typ, a, b)
                 }
                 Arity::Nary { operands } => {
@@ -288,7 +394,7 @@ pub fn evaluate<C>(
                     let is_and = typ == "kanonak.org/transformations/And";
                     // Short-circuit; empty And vacuously true, empty Or vacuously false.
                     for item in items {
-                        let v = truthy(go(item, ctx, resolve)?);
+                        let v = truthy(go(item, ctx, resolve, options)?);
                         if is_and && !v {
                             return Ok(0.0);
                         }
@@ -300,17 +406,23 @@ pub fn evaluate<C>(
                 }
                 Arity::Ternary { a, b, c } => {
                     // Only Clip today: clamp clipValue into [clipLower, clipUpper].
-                    let v = go(operand(node, typ, a)?, ctx, resolve)?;
-                    let lo = go(operand(node, typ, b)?, ctx, resolve)?;
-                    let hi = go(operand(node, typ, c)?, ctx, resolve)?;
+                    let v = go(operand(node, typ, a)?, ctx, resolve, options)?;
+                    let lo = go(operand(node, typ, b)?, ctx, resolve, options)?;
+                    let hi = go(operand(node, typ, c)?, ctx, resolve, options)?;
                     Ok(v.max(lo).min(hi))
                 }
             };
         }
 
         if typ == "kanonak.org/transformations/Not" {
-            let inner = go(operand(node, typ, "operand")?, ctx, resolve)?;
+            let inner = go(operand(node, typ, "operand")?, ctx, resolve, options)?;
             return Ok(boolnum(!truthy(inner)));
+        }
+
+        if typ == "kanonak.org/transformations/IsAtLeast"
+            || typ == "kanonak.org/transformations/Dominates"
+        {
+            return fold_ordered(node, typ, ctx, options).map(|(v, _, _)| v);
         }
 
         if let Some(lit) = literal_value(node, typ) {
@@ -319,9 +431,119 @@ pub fn evaluate<C>(
 
         // Not an operator or literal — a binding or domain leaf. The caller owns it.
         let mut recurse =
-            |n: &Value, c: &mut C| -> Result<f64, ExpressionError> { go(n, c, resolve) };
+            |n: &Value, c: &mut C| -> Result<f64, ExpressionError> { go(n, c, resolve, options) };
         resolve(node, ctx, &mut recurse)
     }
 
-    go(node, ctx, resolve)
+    go(node, ctx, resolve, options)
+}
+
+/// Evaluate an expression tree and return the verdict tree — the regex-debugger
+/// view: every evaluated node, its own result, and (for ordered comparisons)
+/// the identities it compared. The root's `value` is exactly what [`evaluate`]
+/// returns for the same inputs; the conformance suite runs every vector through
+/// both and requires agreement, so the two entry points cannot drift. Kept
+/// separate from `evaluate` so the hot path never pays for trace allocation.
+/// Errors propagate exactly as in `evaluate` — a failed evaluation yields an
+/// error, not a partial trace.
+pub fn explain<C>(
+    node: &Value,
+    ctx: &mut C,
+    resolve: Resolve<C>,
+    options: Option<&EvalOptions<C>>,
+) -> Result<TraceNode, ExpressionError> {
+    fn leaf(typ: &str, value: f64) -> TraceNode {
+        TraceNode { typ: typ.to_string(), value, children: Vec::new(), left_ref: None, right_ref: None }
+    }
+    fn parent(typ: &str, value: f64, children: Vec<TraceNode>) -> TraceNode {
+        TraceNode { typ: typ.to_string(), value, children, left_ref: None, right_ref: None }
+    }
+
+    fn go<C>(
+        node: &Value,
+        ctx: &mut C,
+        resolve: Resolve<C>,
+        options: Option<&EvalOptions<C>>,
+    ) -> Result<TraceNode, ExpressionError> {
+        let typ = node_type(node)?;
+
+        if let Some(arity) = operator_arity(typ) {
+            return match arity {
+                Arity::Unary { operand: key } => {
+                    let x = go(operand(node, typ, key)?, ctx, resolve, options)?;
+                    let value = unary(typ, x.value)?;
+                    Ok(parent(typ, value, vec![x]))
+                }
+                Arity::Binary { left, right } => {
+                    let a = go(operand(node, typ, left)?, ctx, resolve, options)?;
+                    let b = go(operand(node, typ, right)?, ctx, resolve, options)?;
+                    let value = binary(typ, a.value, b.value)?;
+                    Ok(parent(typ, value, vec![a, b]))
+                }
+                Arity::Nary { operands } => {
+                    let items = match node.get(operands).and_then(|v| v.as_array()) {
+                        Some(arr) => arr,
+                        None => return err(format!("{typ} expects an '{operands}' list")),
+                    };
+                    let is_and = typ == "kanonak.org/transformations/And";
+                    let mut children = Vec::new();
+                    for item in items {
+                        let child = go(item, ctx, resolve, options)?;
+                        let v = truthy(child.value);
+                        children.push(child);
+                        // Same short-circuit as `evaluate`: operands after the
+                        // deciding one are never evaluated and never appear.
+                        if is_and && !v {
+                            return Ok(parent(typ, 0.0, children));
+                        }
+                        if !is_and && v {
+                            return Ok(parent(typ, 1.0, children));
+                        }
+                    }
+                    Ok(parent(typ, boolnum(is_and), children))
+                }
+                Arity::Ternary { a, b, c } => {
+                    let v = go(operand(node, typ, a)?, ctx, resolve, options)?;
+                    let lo = go(operand(node, typ, b)?, ctx, resolve, options)?;
+                    let hi = go(operand(node, typ, c)?, ctx, resolve, options)?;
+                    let value = v.value.max(lo.value).min(hi.value);
+                    Ok(parent(typ, value, vec![v, lo, hi]))
+                }
+            };
+        }
+
+        if typ == "kanonak.org/transformations/Not" {
+            let x = go(operand(node, typ, "operand")?, ctx, resolve, options)?;
+            let value = boolnum(!truthy(x.value));
+            return Ok(parent(typ, value, vec![x]));
+        }
+
+        if typ == "kanonak.org/transformations/IsAtLeast"
+            || typ == "kanonak.org/transformations/Dominates"
+        {
+            let (value, left, right) = fold_ordered(node, typ, ctx, options)?;
+            return Ok(TraceNode {
+                typ: typ.to_string(),
+                value,
+                children: Vec::new(),
+                left_ref: Some(left),
+                right_ref: Some(right),
+            });
+        }
+
+        if let Some(lit) = literal_value(node, typ) {
+            return Ok(leaf(typ, lit));
+        }
+
+        // Numeric recursion for subtrees the caller's `resolve` re-enters: those
+        // folds happen inside the caller and are invisible to the trace. Only
+        // kernel-visited nodes appear.
+        let mut recurse = |n: &Value, c: &mut C| -> Result<f64, ExpressionError> {
+            evaluate_with_options(n, c, resolve, options)
+        };
+        let value = resolve(node, ctx, &mut recurse)?;
+        Ok(leaf(typ, value))
+    }
+
+    go(node, ctx, resolve, options)
 }

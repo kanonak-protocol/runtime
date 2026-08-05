@@ -63,6 +63,55 @@ public typealias Evaluator<C> = (ExprNode, C) throws -> Double
 /// binding env, a sim clock, integration state).
 public typealias Resolve<C> = (ExprNode, C, Evaluator<C>) throws -> Double
 
+/// Resolve an identity leaf inside an ordered comparison — any operand node that
+/// is not a `tx.UriLiteral` — to a member's canonical versionless URI
+/// (`publisher/package/name`). The identity-domain mirror of `Resolve`: the
+/// kernel owns the constant leaf, the caller owns bindings.
+public typealias ResolveRef<C> = (ExprNode, C) throws -> String
+
+/// The transitive closures ordered comparisons consult, keyed by the ordering
+/// property's canonical URI, then by member: `closures[property][from]` is the
+/// set of members `from` reaches. Flat, already-closed data — typically the SDK
+/// reasoner's `prp-trp` saturation emitted at code-generation time. The kernel
+/// does set membership only; it never computes a closure, resolves a package, or
+/// reasons.
+public typealias ClosureTable = [String: [String: [String]]]
+
+/// Optional evaluation context for the ordered comparisons (`IsAtLeast`,
+/// `Dominates`). Absent (or missing a needed entry), an ordered comparison fails
+/// loudly — never a silent false from a missing table.
+public struct EvalOptions<C> {
+    public let closures: ClosureTable?
+    public let resolveRef: ResolveRef<C>?
+    public init(closures: ClosureTable? = nil, resolveRef: ResolveRef<C>? = nil) {
+        self.closures = closures
+        self.resolveRef = resolveRef
+    }
+}
+
+/// One node of an evaluation trace — the verdict tree `explain` returns. Mirrors
+/// the expression: `type` is the node's type URI, `value` its result (`1`/`0`
+/// for booleans), `children` the operand traces in evaluation order. A
+/// short-circuited operand is simply ABSENT from `children` — the trace is
+/// truthful about what ran. Ordered comparisons carry their resolved operand
+/// identities as `leftRef`/`rightRef` instead of children. A runtime return
+/// shape, not an ontology class.
+public struct TraceNode {
+    public let type: String
+    public let value: Double
+    public let children: [TraceNode]
+    public let leftRef: String?
+    public let rightRef: String?
+    init(_ type: String, _ value: Double, _ children: [TraceNode] = [],
+         leftRef: String? = nil, rightRef: String? = nil) {
+        self.type = type
+        self.value = value
+        self.children = children
+        self.leftRef = leftRef
+        self.rightRef = rightRef
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Layer 1: dispatch
 // ---------------------------------------------------------------------------
@@ -206,11 +255,63 @@ private func operand(_ node: ExprNode, _ key: String, _ type: String) throws -> 
     return child
 }
 
+/// The identity an ordered comparison compares — a member's canonical
+/// versionless URI. `tx.UriLiteral` is the kernel-known constant leaf (its
+/// `refTo` IS the identity, the way a literal's value is its number); every
+/// other node is the caller's, through `options.resolveRef`.
+private func identityOf<C>(_ node: ExprNode, _ ctx: C, _ options: EvalOptions<C>?) throws -> String {
+    let type = node["type"] as? String ?? ""
+    if type == "\(tx)/UriLiteral" {
+        guard let ref = node["refTo"] as? String, !ref.isEmpty else {
+            throw ExpressionError("UriLiteral is missing refTo")
+        }
+        return ref
+    }
+    guard let resolveRef = options?.resolveRef else {
+        throw ExpressionError("No resolveRef supplied for identity leaf '\(type)'")
+    }
+    return try resolveRef(node, ctx)
+}
+
+/// Fold an ordered comparison (`IsAtLeast` / `Dominates`) to `1`/`0` plus the
+/// resolved operand identities. The ordering is the supplied closure for the
+/// node's `viaProperty` — membership in already-closed data, nothing more.
+/// Identity is canonical versionless URI string equality, matching `tx.Equals`'
+/// identity rule. `IsAtLeast` folds reflexivity into the operator (same member
+/// → 1); `Dominates` is strict (same member → 0). Two members with no path
+/// yield 0 — fail-closed — but a MISSING closure table is a configuration
+/// failure and errors loudly.
+private func foldOrdered<C>(
+    _ node: ExprNode, _ type: String, _ ctx: C, _ options: EvalOptions<C>?
+) throws -> (value: Double, left: String, right: String) {
+    guard let via = node["viaProperty"] as? String, !via.isEmpty else {
+        throw ExpressionError("\(type) is missing viaProperty")
+    }
+    let left = try identityOf(try operand(node, "compareLeft", type), ctx, options)
+    let right = try identityOf(try operand(node, "compareRight", type), ctx, options)
+    guard let closure = options?.closures?[via] else {
+        throw ExpressionError("No closure supplied for ordering property '\(via)'")
+    }
+    if left == right {
+        return (boolValue(type == "\(tx)/IsAtLeast"), left, right)
+    }
+    return (boolValue(closure[left]?.contains(right) ?? false), left, right)
+}
+
 /// Evaluate an expression tree to a number. Operators fold via the frozen
 /// dispatch + primitive tables; literals yield their numeric value; any other
 /// node is delegated to `resolve`.
 public func evaluate<C>(_ node: ExprNode, _ ctx: C, _ resolve: @escaping Resolve<C>) throws -> Double {
-    let recurse: Evaluator<C> = { n, c in try evaluate(n, c, resolve) }
+    try evaluate(node, ctx, resolve, nil)
+}
+
+/// `evaluate` with the ordered-comparison evaluation context (closures +
+/// identity-leaf resolution). `options` is only consulted when an `IsAtLeast` /
+/// `Dominates` node is reached; `nil` is valid for trees without them.
+public func evaluate<C>(
+    _ node: ExprNode, _ ctx: C, _ resolve: @escaping Resolve<C>, _ options: EvalOptions<C>?
+) throws -> Double {
+    let recurse: Evaluator<C> = { n, c in try evaluate(n, c, resolve, options) }
 
     // A node with no `type` matches no operator and no literal, and falls
     // through to the caller's resolve — same as every other port.
@@ -262,8 +363,90 @@ public func evaluate<C>(_ node: ExprNode, _ ctx: C, _ resolve: @escaping Resolve
         return boolValue(!truthy(try recurse(try operand(node, "operand", type), ctx)))
     }
 
+    if type == "\(tx)/IsAtLeast" || type == "\(tx)/Dominates" {
+        return try foldOrdered(node, type, ctx, options).value
+    }
+
     if let lit = literalValue(node, type) { return lit }
 
     // Not an operator or literal — a binding or domain leaf. The caller owns it.
     return try resolve(node, ctx, recurse)
+}
+
+/// Evaluate an expression tree and return the verdict tree — the regex-debugger
+/// view: every evaluated node, its own result, and (for ordered comparisons)
+/// the identities it compared. The root's `value` is exactly what `evaluate`
+/// returns for the same inputs; the conformance suite runs every vector through
+/// both and requires agreement, so the two entry points cannot drift. Kept
+/// separate from `evaluate` so the hot path never pays for trace allocation.
+/// Errors propagate exactly as in `evaluate` — a failed evaluation throws,
+/// never a partial trace.
+public func explain<C>(
+    _ node: ExprNode, _ ctx: C, _ resolve: @escaping Resolve<C>, _ options: EvalOptions<C>? = nil
+) throws -> TraceNode {
+    // Numeric recursion for subtrees the caller's `resolve` re-enters: those
+    // folds happen inside the caller and are invisible to the trace. Only
+    // kernel-visited nodes appear.
+    let recurseValue: Evaluator<C> = { n, c in try evaluate(n, c, resolve, options) }
+
+    let type = node["type"] as? String ?? ""
+
+    if let arity = operatorArity[type] {
+        switch arity {
+        case .unary(let key):
+            let x = try explain(try operand(node, key, type), ctx, resolve, options)
+            guard let op = unaryOps[type] else {
+                throw ExpressionError("no primitive for unary operator '\(type)'")
+            }
+            return TraceNode(type, try op(x.value), [x])
+
+        case .binary(let leftKey, let rightKey):
+            let a = try explain(try operand(node, leftKey, type), ctx, resolve, options)
+            let b = try explain(try operand(node, rightKey, type), ctx, resolve, options)
+            guard let op = binaryOps[type] else {
+                throw ExpressionError("no primitive for binary operator '\(type)'")
+            }
+            return TraceNode(type, try op(a.value, b.value), [a, b])
+
+        case .nary(let key):
+            guard let items = node[key] as? [Any] else {
+                throw ExpressionError("\(type) expects an '\(key)' list")
+            }
+            let isAnd = type == "\(tx)/And"
+            var children: [TraceNode] = []
+            for item in items {
+                guard let child = item as? ExprNode else {
+                    throw ExpressionError("\(type): '\(key)' list holds a non-node item")
+                }
+                let childTrace = try explain(child, ctx, resolve, options)
+                children.append(childTrace)
+                let v = truthy(childTrace.value)
+                // Same short-circuit as `evaluate`: operands after the deciding
+                // one are never evaluated and never appear in the trace.
+                if isAnd && !v { return TraceNode(type, 0, children) }
+                if !isAnd && v { return TraceNode(type, 1, children) }
+            }
+            return TraceNode(type, boolValue(isAnd), children)
+
+        case .ternary(let aKey, let bKey, let cKey):
+            let v = try explain(try operand(node, aKey, type), ctx, resolve, options)
+            let lo = try explain(try operand(node, bKey, type), ctx, resolve, options)
+            let hi = try explain(try operand(node, cKey, type), ctx, resolve, options)
+            return TraceNode(type, Swift.min(Swift.max(v.value, lo.value), hi.value), [v, lo, hi])
+        }
+    }
+
+    if type == "\(tx)/Not" {
+        let x = try explain(try operand(node, "operand", type), ctx, resolve, options)
+        return TraceNode(type, boolValue(!truthy(x.value)), [x])
+    }
+
+    if type == "\(tx)/IsAtLeast" || type == "\(tx)/Dominates" {
+        let r = try foldOrdered(node, type, ctx, options)
+        return TraceNode(type, r.value, [], leftRef: r.left, rightRef: r.right)
+    }
+
+    if let lit = literalValue(node, type) { return TraceNode(type, lit) }
+
+    return TraceNode(type, try resolve(node, ctx, recurseValue))
 }

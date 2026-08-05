@@ -8,8 +8,11 @@ using Kanonak.Expression;
 // Conformance runner: drives the shared expression parity vectors through the C#
 // kanonak-expression port. Each vector's `expr` is evaluated with a `resolve` hook
 // that binds tx.VarRef names from the vector's `env` — the demonstration that
-// variable binding lives in the caller, not the runtime. Exits non-zero on any
-// failure.
+// variable binding lives in the caller, not the runtime. Ordered-comparison
+// vectors additionally supply `closures` (the ClosureTable) and `refEnv` (identity
+// bindings for the resolveRef hook). Every vector also runs through Explain and
+// its root value must agree with Evaluate; vectors with a `trace` assert the
+// verdict tree structurally. Exits non-zero on any failure.
 //   dotnet run -- <vectors-dir>
 
 class Program
@@ -50,6 +53,7 @@ class Program
 
             // The caller's resolve: tx.VarRef -> env binding; any other leaf is unbound here.
             var env = ReadEnv(v);
+            var refEnv = ReadRefEnv(v);
             Resolve resolve = (node, ctx, evaluate) =>
             {
                 if (node.Type == VARREF)
@@ -61,28 +65,39 @@ class Program
                 }
                 throw new ExpressionError($"No resolver for leaf '{node.Type}'");
             };
+            // The identity-domain mirror: tx.VarRef -> refEnv member URI.
+            ResolveRef resolveRef = (node, ctx) =>
+            {
+                if (node.Type == VARREF)
+                {
+                    string name = node.Get("varName") as string;
+                    if (name == null || !refEnv.ContainsKey(name))
+                        throw new ExpressionError($"Unbound reference \"{name}\"");
+                    return refEnv[name];
+                }
+                throw new ExpressionError($"No reference resolver for leaf '{node.Type}'");
+            };
+            var options = new EvalOptions { Closures = ReadClosures(v), ResolveRef = resolveRef };
 
             ExprNode expr = ParseNode(v.GetProperty("expr"));
             bool expectError = v.TryGetProperty("expectError", out var ee) && ee.GetBoolean();
 
             if (expectError)
             {
-                try
-                {
-                    double got = Expr.Evaluate(expr, env, resolve);
-                    fail++; Console.Error.WriteLine($"{id}: expected an error, got {got}");
-                }
-                catch (ExpressionError)
-                {
-                    pass++;
-                }
+                bool evalThrew = false, explainThrew = false;
+                try { Expr.Evaluate(expr, null, resolve, options); } catch (ExpressionError) { evalThrew = true; }
+                try { Expr.Explain(expr, null, resolve, options); } catch (ExpressionError) { explainThrew = true; }
+                if (evalThrew && explainThrew) pass++;
+                else { fail++; Console.Error.WriteLine($"{id}: expected an error from Evaluate AND Explain"); }
                 continue;
             }
 
             double result;
+            TraceNode trace;
             try
             {
-                result = Expr.Evaluate(expr, env, resolve);
+                result = Expr.Evaluate(expr, null, resolve, options);
+                trace = Expr.Explain(expr, null, resolve, options);
             }
             catch (Exception e)
             {
@@ -96,8 +111,19 @@ class Program
             else
                 ok = result == expected;
 
-            if (ok) pass++;
-            else { fail++; Console.Error.WriteLine($"{id}: expected {expected} got {result}"); }
+            if (!ok)
+            {
+                fail++; Console.Error.WriteLine($"{id}: expected {expected} got {result}"); continue;
+            }
+            if (trace.Value != result)
+            {
+                fail++; Console.Error.WriteLine($"{id}: Explain value {trace.Value} != Evaluate value {result}"); continue;
+            }
+            if (v.TryGetProperty("trace", out var wantTrace) && !TraceMatches(trace, wantTrace))
+            {
+                fail++; Console.Error.WriteLine($"{id}: trace mismatch"); continue;
+            }
+            pass++;
         }
 
         Console.WriteLine($"expression-vectors: {pass}/{total} pass");
@@ -113,6 +139,56 @@ class Program
             foreach (var p in e.EnumerateObject())
                 env[p.Name] = p.Value.GetDouble();
         return env;
+    }
+
+    static Dictionary<string, string> ReadRefEnv(JsonElement v)
+    {
+        var refEnv = new Dictionary<string, string>();
+        if (v.TryGetProperty("refEnv", out var e))
+            foreach (var p in e.EnumerateObject())
+                refEnv[p.Name] = p.Value.GetString();
+        return refEnv;
+    }
+
+    static Dictionary<string, Dictionary<string, List<string>>> ReadClosures(JsonElement v)
+    {
+        if (!v.TryGetProperty("closures", out var c)) return null;
+        var table = new Dictionary<string, Dictionary<string, List<string>>>();
+        foreach (var prop in c.EnumerateObject())
+        {
+            var inner = new Dictionary<string, List<string>>();
+            foreach (var member in prop.Value.EnumerateObject())
+            {
+                var reachable = new List<string>();
+                foreach (var m in member.Value.EnumerateArray()) reachable.Add(m.GetString());
+                inner[member.Name] = reachable;
+            }
+            table[prop.Name] = inner;
+        }
+        return table;
+    }
+
+    // Structural equality of a produced verdict tree against the vector's expected
+    // JSON tree, including absent-vs-present refs.
+    static bool TraceMatches(TraceNode got, JsonElement want)
+    {
+        if (got.Type != want.GetProperty("type").GetString()) return false;
+        if (got.Value != want.GetProperty("value").GetDouble()) return false;
+        string wantLeft = want.TryGetProperty("leftRef", out var lr) ? lr.GetString() : null;
+        if (got.LeftRef != wantLeft) return false;
+        string wantRight = want.TryGetProperty("rightRef", out var rr) ? rr.GetString() : null;
+        if (got.RightRef != wantRight) return false;
+        int wantCount = want.TryGetProperty("children", out var wc) ? wc.GetArrayLength() : 0;
+        if (got.Children.Count != wantCount) return false;
+        int i = 0;
+        if (wantCount > 0)
+        {
+            foreach (var w in wc.EnumerateArray())
+            {
+                if (!TraceMatches(got.Children[i++], w)) return false;
+            }
+        }
+        return true;
     }
 
     // Parse a JSON expression node into the ExprNode model. Object children become

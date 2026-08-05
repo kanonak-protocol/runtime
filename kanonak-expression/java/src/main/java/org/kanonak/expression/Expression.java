@@ -63,6 +63,66 @@ public final class Expression {
         double apply(Map<String, Object> node, C ctx);
     }
 
+    /**
+     * Resolve an identity leaf inside an ordered comparison — any operand node that is not a
+     * {@code tx.UriLiteral} — to a member's canonical versionless URI
+     * ({@code publisher/package/name}). The identity-domain mirror of {@link Resolve}: the
+     * kernel owns the constant leaf, the caller owns bindings.
+     *
+     * @param <C> the opaque caller-context type
+     */
+    @FunctionalInterface
+    public interface ResolveRef<C> {
+        String resolve(Map<String, Object> node, C ctx);
+    }
+
+    /**
+     * Optional evaluation context for the ordered comparisons ({@code IsAtLeast},
+     * {@code Dominates}). {@code closures} is the transitive-closure data, keyed by the
+     * ordering property's canonical URI, then by member: {@code closures[property][from]} is
+     * the set of members {@code from} reaches — flat, already-closed data, typically the SDK
+     * reasoner's {@code prp-trp} saturation emitted at code-generation time. The kernel does
+     * set membership only; it never computes a closure, resolves a package, or reasons.
+     * Absent (or missing a needed entry), an ordered comparison fails loudly — never a silent
+     * false from a missing table.
+     *
+     * @param <C> the opaque caller-context type
+     */
+    public static final class EvalOptions<C> {
+        final Map<String, Map<String, List<String>>> closures;
+        final ResolveRef<C> resolveRef;
+        public EvalOptions(Map<String, Map<String, List<String>>> closures, ResolveRef<C> resolveRef) {
+            this.closures = closures;
+            this.resolveRef = resolveRef;
+        }
+    }
+
+    /**
+     * One node of an evaluation trace — the verdict tree {@link #explain} returns. Mirrors the
+     * expression: {@code type} is the node's type URI, {@code value} its result ({@code 1}/{@code 0}
+     * for booleans), {@code children} the operand traces in evaluation order. A short-circuited
+     * operand is simply ABSENT from {@code children} — the trace is truthful about what ran.
+     * Ordered comparisons carry their resolved operand identities as {@code leftRef}/{@code rightRef}
+     * (otherwise {@code null}) instead of children. A runtime return shape, not an ontology class.
+     */
+    public static final class TraceNode {
+        public final String type;
+        public final double value;
+        public final List<TraceNode> children;
+        public final String leftRef;
+        public final String rightRef;
+        TraceNode(String type, double value, List<TraceNode> children, String leftRef, String rightRef) {
+            this.type = type;
+            this.value = value;
+            this.children = children;
+            this.leftRef = leftRef;
+            this.rightRef = rightRef;
+        }
+        TraceNode(String type, double value, List<TraceNode> children) {
+            this(type, value, children, null, null);
+        }
+    }
+
     /** Raised on any determinism-contract violation (divide/modulo by zero, Ln/Log10 of ≤0, Sqrt of <0, malformed node). */
     public static final class ExpressionError extends RuntimeException {
         public ExpressionError(String message) { super(message); }
@@ -185,7 +245,17 @@ public final class Expression {
      * @return the folded numeric value
      */
     public static <C> double evaluate(Map<String, Object> node, C ctx, Resolve<C> resolve) {
-        Recurse<C> recurse = (n, c) -> evaluate(n, c, resolve);
+        return evaluate(node, ctx, resolve, null);
+    }
+
+    /**
+     * {@link #evaluate(Map, Object, Resolve)} with the ordered-comparison evaluation context
+     * (closures + identity-leaf resolution). {@code options} is only consulted when an
+     * {@code IsAtLeast} / {@code Dominates} node is reached; {@code null} is valid for trees
+     * without them.
+     */
+    public static <C> double evaluate(Map<String, Object> node, C ctx, Resolve<C> resolve, EvalOptions<C> options) {
+        Recurse<C> recurse = (n, c) -> evaluate(n, c, resolve, options);
         String type = type(node);
 
         Arity arity = OPERATOR_ARITY.get(type);
@@ -228,11 +298,145 @@ public final class Expression {
             return bool(!truthy(recurse.apply(operand(node, "operand"), ctx)));
         }
 
+        if ((TX + "/IsAtLeast").equals(type) || (TX + "/Dominates").equals(type)) {
+            return foldOrdered(node, type, ctx, options).value;
+        }
+
         Double lit = literalValue(node, type);
         if (lit != null) return lit;
 
         // Not an operator or literal — a binding or domain leaf. The caller owns it.
         return resolve.resolve(node, ctx, recurse);
+    }
+
+    /** The ordered fold's result: the verdict plus the resolved operand identities. */
+    private static final class Ordered {
+        final double value;
+        final String left;
+        final String right;
+        Ordered(double value, String left, String right) { this.value = value; this.left = left; this.right = right; }
+    }
+
+    /**
+     * The identity an ordered comparison compares — a member's canonical versionless URI.
+     * {@code tx.UriLiteral} is the kernel-known constant leaf (its {@code refTo} IS the
+     * identity, the way a literal's value is its number); every other node is the caller's,
+     * through {@code options.resolveRef}.
+     */
+    private static <C> String identityOf(Map<String, Object> node, C ctx, EvalOptions<C> options) {
+        if ((TX + "/UriLiteral").equals(type(node))) {
+            Object ref = node.get("refTo");
+            if (!(ref instanceof String s) || s.isEmpty()) {
+                throw new ExpressionError("UriLiteral is missing refTo");
+            }
+            return s;
+        }
+        if (options == null || options.resolveRef == null) {
+            throw new ExpressionError("No resolveRef supplied for identity leaf '" + type(node) + "'");
+        }
+        return options.resolveRef.resolve(node, ctx);
+    }
+
+    /**
+     * Fold an ordered comparison ({@code IsAtLeast} / {@code Dominates}) to {@code 1}/{@code 0}
+     * plus the resolved operand identities. The ordering is the supplied closure for the node's
+     * {@code viaProperty} — membership in already-closed data, nothing more. Identity is
+     * canonical versionless URI string equality, matching {@code tx.Equals}' identity rule.
+     * {@code IsAtLeast} folds reflexivity into the operator (same member → 1); {@code Dominates}
+     * is strict (same member → 0). Two members with no path yield 0 — fail-closed — but a
+     * MISSING closure table is a configuration failure and errors loudly.
+     */
+    private static <C> Ordered foldOrdered(Map<String, Object> node, String type, C ctx, EvalOptions<C> options) {
+        Object viaObj = node.get("viaProperty");
+        if (!(viaObj instanceof String via) || via.isEmpty()) {
+            throw new ExpressionError(type + " is missing viaProperty");
+        }
+        String left = identityOf(operand(node, "compareLeft"), ctx, options);
+        String right = identityOf(operand(node, "compareRight"), ctx, options);
+        Map<String, List<String>> closure = null;
+        if (options != null && options.closures != null) closure = options.closures.get(via);
+        if (closure == null) {
+            throw new ExpressionError("No closure supplied for ordering property '" + via + "'");
+        }
+        double value;
+        if (left.equals(right)) {
+            value = bool((TX + "/IsAtLeast").equals(type));
+        } else {
+            List<String> reachable = closure.get(left);
+            value = bool(reachable != null && reachable.contains(right));
+        }
+        return new Ordered(value, left, right);
+    }
+
+    /**
+     * Evaluate an expression tree and return the verdict tree — the regex-debugger view: every
+     * evaluated node, its own result, and (for ordered comparisons) the identities it compared.
+     * The root's {@code value} is exactly what {@link #evaluate} returns for the same inputs;
+     * the conformance suite runs every vector through both and requires agreement, so the two
+     * entry points cannot drift. Kept separate from {@code evaluate} so the hot path never pays
+     * for trace allocation. Errors propagate exactly as in {@code evaluate} — a failed
+     * evaluation throws, never a partial trace.
+     */
+    public static <C> TraceNode explain(Map<String, Object> node, C ctx, Resolve<C> resolve, EvalOptions<C> options) {
+        // Numeric recursion for subtrees the caller's resolve re-enters: those folds happen
+        // inside the caller and are invisible to the trace. Only kernel-visited nodes appear.
+        Recurse<C> recurseValue = (n, c) -> evaluate(n, c, resolve, options);
+        String type = type(node);
+
+        Arity arity = OPERATOR_ARITY.get(type);
+        if (arity != null) {
+            switch (arity.kind) {
+                case UNARY: {
+                    TraceNode x = explain(operand(node, arity.a), ctx, resolve, options);
+                    return new TraceNode(type, UNARY.get(type).apply(x.value), List.of(x));
+                }
+                case BINARY: {
+                    TraceNode a = explain(operand(node, arity.a), ctx, resolve, options);
+                    TraceNode b = explain(operand(node, arity.b), ctx, resolve, options);
+                    return new TraceNode(type, BINARY.get(type).apply(a.value, b.value), List.of(a, b));
+                }
+                case NARY: {
+                    Object items = node.get(arity.a);
+                    if (!(items instanceof List<?> list)) {
+                        throw new ExpressionError(type + " expects an '" + arity.a + "' list");
+                    }
+                    boolean isAnd = (TX + "/And").equals(type);
+                    java.util.ArrayList<TraceNode> children = new java.util.ArrayList<>();
+                    for (Object item : list) {
+                        TraceNode child = explain(asNode(item), ctx, resolve, options);
+                        children.add(child);
+                        boolean v = truthy(child.value);
+                        // Same short-circuit as evaluate: operands after the deciding one are
+                        // never evaluated and never appear in the trace.
+                        if (isAnd && !v) return new TraceNode(type, 0, List.copyOf(children));
+                        if (!isAnd && v) return new TraceNode(type, 1, List.copyOf(children));
+                    }
+                    return new TraceNode(type, bool(isAnd), List.copyOf(children));
+                }
+                case TERNARY: {
+                    TraceNode v = explain(operand(node, arity.a), ctx, resolve, options);
+                    TraceNode lo = explain(operand(node, arity.b), ctx, resolve, options);
+                    TraceNode hi = explain(operand(node, arity.c), ctx, resolve, options);
+                    double value = Math.min(Math.max(v.value, lo.value), hi.value);
+                    return new TraceNode(type, value, List.of(v, lo, hi));
+                }
+            }
+        }
+
+        if ((TX + "/Not").equals(type)) {
+            TraceNode x = explain(operand(node, "operand"), ctx, resolve, options);
+            return new TraceNode(type, bool(!truthy(x.value)), List.of(x));
+        }
+
+        if ((TX + "/IsAtLeast").equals(type) || (TX + "/Dominates").equals(type)) {
+            Ordered r = foldOrdered(node, type, ctx, options);
+            return new TraceNode(type, r.value, List.of(), r.left, r.right);
+        }
+
+        Double lit = literalValue(node, type);
+        if (lit != null) return new TraceNode(type, lit, List.of());
+
+        return new TraceNode(type, resolve.resolve(node, ctx, recurseValue), List.of());
     }
 
     /** Numeric value of a literal node, or {@code null} if it is not a literal. */

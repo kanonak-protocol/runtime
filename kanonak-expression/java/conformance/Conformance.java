@@ -9,7 +9,11 @@ import java.util.Map;
 import org.kanonak.expression.Expression;
 import org.kanonak.expression.Expression.ExpressionError;
 
-/** Drives the shared parity vectors through the Java kanonak-expression port. */
+/**
+ * Drives the shared parity vectors through the Java kanonak-expression port. Every vector runs
+ * through evaluate AND explain and their values must agree; ordered-comparison vectors supply
+ * closures and refEnv, and vectors with a trace assert the verdict tree structurally.
+ */
 public final class Conformance {
     public static void main(String[] args) throws Exception {
         String vdir = args.length > 0 ? args[0] : "../vectors";
@@ -17,18 +21,70 @@ public final class Conformance {
         System.exit(fails == 0 ? 0 : 1);
     }
 
+    /** The conformance context: numeric bindings (env) plus identity bindings (refEnv). */
+    static final class Ctx {
+        final Map<String, Object> env;
+        final Map<String, Object> refEnv;
+        Ctx(Map<String, Object> env, Map<String, Object> refEnv) { this.env = env; this.refEnv = refEnv; }
+    }
+
     /** The conformance resolve hook: tx.VarRef -> env[varName] (raise if absent); any other unknown leaf -> raise. */
-    static double resolve(Map<String, Object> node, Map<String, Object> env, Expression.Recurse<Map<String, Object>> evaluate) {
+    static double resolve(Map<String, Object> node, Ctx ctx, Expression.Recurse<Ctx> evaluate) {
         if ("kanonak.org/transformations/VarRef".equals(node.get("type"))) {
             String name = (String) node.get("varName");
-            if (env == null || !env.containsKey(name)) {
+            if (ctx.env == null || !ctx.env.containsKey(name)) {
                 throw new ExpressionError("unbound variable: " + name);
             }
-            Object v = env.get(name);
+            Object v = ctx.env.get(name);
             if (v instanceof Number n) return n.doubleValue();
             throw new ExpressionError("non-numeric binding for " + name + ": " + v);
         }
         throw new ExpressionError("unknown leaf node type: " + node.get("type"));
+    }
+
+    /** The identity-domain mirror: tx.VarRef -> refEnv[varName] member URI. */
+    static String resolveRef(Map<String, Object> node, Ctx ctx) {
+        if ("kanonak.org/transformations/VarRef".equals(node.get("type"))) {
+            String name = (String) node.get("varName");
+            if (ctx.refEnv == null || !ctx.refEnv.containsKey(name)) {
+                throw new ExpressionError("unbound reference: " + name);
+            }
+            return (String) ctx.refEnv.get(name);
+        }
+        throw new ExpressionError("no reference resolver for leaf: " + node.get("type"));
+    }
+
+    /** The vector's closures JSON as the typed ClosureTable shape. */
+    @SuppressWarnings("unchecked")
+    static Map<String, Map<String, List<String>>> closuresOf(Map<String, Object> v) {
+        Object raw = v.get("closures");
+        if (!(raw instanceof Map<?, ?>)) return null;
+        Map<String, Map<String, List<String>>> table = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, Object> prop : ((Map<String, Object>) raw).entrySet()) {
+            Map<String, List<String>> inner = new java.util.LinkedHashMap<>();
+            for (Map.Entry<String, Object> member : ((Map<String, Object>) prop.getValue()).entrySet()) {
+                List<String> reachable = new ArrayList<>();
+                for (Object m : (List<Object>) member.getValue()) reachable.add((String) m);
+                inner.put(member.getKey(), reachable);
+            }
+            table.put(prop.getKey(), inner);
+        }
+        return table;
+    }
+
+    /** Structural equality of a produced verdict tree against the vector's expected JSON tree. */
+    @SuppressWarnings("unchecked")
+    static boolean traceMatches(Expression.TraceNode got, Map<String, Object> want) {
+        if (!got.type.equals(want.get("type"))) return false;
+        if (got.value != ((Number) want.get("value")).doubleValue()) return false;
+        if (!java.util.Objects.equals(got.leftRef, want.get("leftRef"))) return false;
+        if (!java.util.Objects.equals(got.rightRef, want.get("rightRef"))) return false;
+        List<Object> wantChildren = (List<Object>) want.getOrDefault("children", List.of());
+        if (got.children.size() != wantChildren.size()) return false;
+        for (int i = 0; i < wantChildren.size(); i++) {
+            if (!traceMatches(got.children.get(i), (Map<String, Object>) wantChildren.get(i))) return false;
+        }
+        return true;
     }
 
     @SuppressWarnings("unchecked")
@@ -41,25 +97,50 @@ public final class Conformance {
             total++;
             String id = (String) v.get("id");
             Map<String, Object> expr = (Map<String, Object>) v.get("expr");
-            Map<String, Object> env = (Map<String, Object>) v.getOrDefault("env", Map.of());
+            Ctx ctx = new Ctx(
+                (Map<String, Object>) v.getOrDefault("env", Map.of()),
+                (Map<String, Object>) v.getOrDefault("refEnv", Map.of()));
             boolean expectError = Boolean.TRUE.equals(v.get("expectError"));
-            try {
-                double got = Expression.evaluate(expr, env, Conformance::resolve);
-                if (expectError) {
-                    fail++; System.out.println("  FAIL [" + id + "] expected error, got " + got);
-                } else {
-                    double expected = ((Number) v.get("expected")).doubleValue();
-                    Object tol = v.get("tolerance");
-                    boolean ok = tol != null
-                        ? Math.abs(got - expected) <= ((Number) tol).doubleValue()
-                        : got == expected;
-                    if (ok) pass++;
-                    else { fail++; System.out.println("  FAIL [" + id + "] expected " + expected + ", got " + got); }
-                }
-            } catch (RuntimeException e) {
-                if (expectError) pass++;
-                else { fail++; System.out.println("  FAIL [" + id + "] threw: " + e.getMessage()); }
+            Expression.EvalOptions<Ctx> options =
+                new Expression.EvalOptions<>(closuresOf(v), Conformance::resolveRef);
+
+            if (expectError) {
+                boolean evalThrew = false, explainThrew = false;
+                try { Expression.evaluate(expr, ctx, Conformance::resolve, options); } catch (RuntimeException e) { evalThrew = true; }
+                try { Expression.explain(expr, ctx, Conformance::resolve, options); } catch (RuntimeException e) { explainThrew = true; }
+                if (evalThrew && explainThrew) pass++;
+                else { fail++; System.out.println("  FAIL [" + id + "] expected an error from evaluate AND explain"); }
+                continue;
             }
+
+            double got;
+            Expression.TraceNode trace;
+            try {
+                got = Expression.evaluate(expr, ctx, Conformance::resolve, options);
+                trace = Expression.explain(expr, ctx, Conformance::resolve, options);
+            } catch (RuntimeException e) {
+                fail++; System.out.println("  FAIL [" + id + "] threw: " + e.getMessage());
+                continue;
+            }
+            double expected = ((Number) v.get("expected")).doubleValue();
+            Object tol = v.get("tolerance");
+            boolean ok = tol != null
+                ? Math.abs(got - expected) <= ((Number) tol).doubleValue()
+                : got == expected;
+            if (!ok) {
+                fail++; System.out.println("  FAIL [" + id + "] expected " + expected + ", got " + got);
+                continue;
+            }
+            if (trace.value != got) {
+                fail++; System.out.println("  FAIL [" + id + "] explain value " + trace.value + " != evaluate value " + got);
+                continue;
+            }
+            Object wantTrace = v.get("trace");
+            if (wantTrace != null && !traceMatches(trace, (Map<String, Object>) wantTrace)) {
+                fail++; System.out.println("  FAIL [" + id + "] trace mismatch");
+                continue;
+            }
+            pass++;
         }
         System.out.println("expression-vectors: " + pass + "/" + total + " pass" + (fail == 0 ? "" : ", " + fail + " fail"));
         return fail;

@@ -58,6 +58,28 @@ func (n Node) Type() string {
 // recurse into the kernel.
 type Resolve func(node Node, ctx interface{}, evaluate func(Node, interface{}) float64) float64
 
+// ClosureTable is the transitive closures ordered comparisons consult, keyed by
+// the ordering property's canonical URI, then by member: Closures[property][from]
+// is the set of members `from` reaches. Flat, already-closed data — typically
+// the SDK reasoner's prp-trp saturation emitted at code-generation time. The
+// kernel does set membership only; it never computes a closure, resolves a
+// package, or reasons.
+type ClosureTable map[string]map[string][]string
+
+// ResolveRef resolves an identity leaf inside an ordered comparison — any
+// operand node that is not a tx.UriLiteral — to a member's canonical versionless
+// URI (publisher/package/name). The identity-domain mirror of Resolve: the
+// kernel owns the constant leaf, the caller owns bindings.
+type ResolveRef func(node Node, ctx interface{}) string
+
+// Options is the optional evaluation context for the ordered comparisons
+// (IsAtLeast, Dominates). Absent (or missing a needed entry), an ordered
+// comparison fails loudly — never a silent false from a missing table.
+type Options struct {
+	Closures   ClosureTable
+	ResolveRef ResolveRef
+}
+
 // Error is the runtime error type. Raised (via panic) for domain violations and
 // dispatched into Go errors at the Evaluate boundary.
 type Error struct{ Msg string }
@@ -249,9 +271,59 @@ func operand(node Node, key string) Node {
 	return Node(m)
 }
 
+// identityOf resolves an ordered-comparison operand to a member's canonical
+// versionless URI. tx.UriLiteral is the kernel-known constant leaf (its refTo
+// IS the identity, the way a literal's value is its number); every other node
+// is the caller's, through Options.ResolveRef.
+func identityOf(node Node, ctx interface{}, opts *Options) string {
+	if node.Type() == tx+"/UriLiteral" {
+		ref, _ := node["refTo"].(string)
+		if ref == "" {
+			raise("UriLiteral is missing refTo")
+		}
+		return ref
+	}
+	if opts == nil || opts.ResolveRef == nil {
+		raise("No resolveRef supplied for identity leaf '%s'", node.Type())
+	}
+	return opts.ResolveRef(node, ctx)
+}
+
+// foldOrdered folds IsAtLeast / Dominates to 1/0 plus the resolved operand
+// identities. The ordering is the supplied closure for the node's viaProperty —
+// membership in already-closed data, nothing more. Identity is canonical
+// versionless URI string equality, matching tx.Equals' identity rule.
+// IsAtLeast folds reflexivity into the operator (same member → 1); Dominates
+// is strict (same member → 0). Two members with no path yield 0 — fail-closed
+// — but a MISSING closure table is a configuration failure and errors loudly.
+func foldOrdered(node Node, ctx interface{}, opts *Options) (value float64, left, right string) {
+	via, _ := node["viaProperty"].(string)
+	if via == "" {
+		raise("%s is missing viaProperty", node.Type())
+	}
+	left = identityOf(operand(node, "compareLeft"), ctx, opts)
+	right = identityOf(operand(node, "compareRight"), ctx, opts)
+	var closure map[string][]string
+	if opts != nil && opts.Closures != nil {
+		closure = opts.Closures[via]
+	}
+	if closure == nil {
+		raise("No closure supplied for ordering property '%s'", via)
+	}
+	if left == right {
+		return boolNum(node.Type() == tx+"/IsAtLeast"), left, right
+	}
+	for _, m := range closure[left] {
+		if m == right {
+			return 1, left, right
+		}
+	}
+	return 0, left, right
+}
+
 // evaluatePanic is the inner fold; it panics with *Error on domain violations.
-func evaluatePanic(node Node, ctx interface{}, resolve Resolve) float64 {
-	recurse := func(n Node, c interface{}) float64 { return evaluatePanic(n, c, resolve) }
+func evaluatePanic(node Node, ctx interface{}, resolve Resolve, opts *Options) float64 {
+	recurse := func(n Node, c interface{}) float64 { return evaluatePanic(n, c, resolve, opts) }
 
 	if ar, ok := operatorArity[node.Type()]; ok {
 		switch ar.kind {
@@ -298,12 +370,17 @@ func evaluatePanic(node Node, ctx interface{}, resolve Resolve) float64 {
 		return boolNum(!truthy(recurse(operand(node, "operand"), ctx)))
 	}
 
+	if node.Type() == tx+"/IsAtLeast" || node.Type() == tx+"/Dominates" {
+		v, _, _ := foldOrdered(node, ctx, opts)
+		return v
+	}
+
 	if lit, ok := literalValue(node); ok {
 		return lit
 	}
 
 	// Not an operator or literal — a binding or domain leaf. The caller owns it.
-	return resolve(node, ctx, func(n Node, c interface{}) float64 { return evaluatePanic(n, c, resolve) })
+	return resolve(node, ctx, func(n Node, c interface{}) float64 { return evaluatePanic(n, c, resolve, opts) })
 }
 
 // Evaluate folds an expression tree to a float64. Operators fold via the frozen
@@ -312,6 +389,13 @@ func evaluatePanic(node Node, ctx interface{}, resolve Resolve) float64 {
 // Ln/Log10 of ≤0, Sqrt of <0, a malformed node, an unresolvable leaf) is
 // returned as an error.
 func Evaluate(node Node, ctx interface{}, resolve Resolve) (result float64, err error) {
+	return EvaluateWithOptions(node, ctx, resolve, nil)
+}
+
+// EvaluateWithOptions is Evaluate with the ordered-comparison evaluation
+// context (closures + identity-leaf resolution). opts is only consulted when an
+// IsAtLeast / Dominates node is reached; nil is valid for trees without them.
+func EvaluateWithOptions(node Node, ctx interface{}, resolve Resolve, opts *Options) (result float64, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			if e, ok := r.(*Error); ok {
@@ -321,5 +405,115 @@ func Evaluate(node Node, ctx interface{}, resolve Resolve) (result float64, err 
 			panic(r)
 		}
 	}()
-	return evaluatePanic(node, ctx, resolve), nil
+	return evaluatePanic(node, ctx, resolve, opts), nil
+}
+
+// TraceNode is one node of an evaluation trace — the verdict tree Explain
+// returns. It mirrors the expression: Type is the node's type URI, Value its
+// result (1/0 for booleans), Children the operand traces in evaluation order.
+// A short-circuited operand is simply ABSENT from Children — the trace is
+// truthful about what ran. Ordered comparisons carry their resolved operand
+// identities as LeftRef/RightRef instead of children. This is a runtime return
+// shape, not an ontology class.
+type TraceNode struct {
+	Type     string
+	Value    float64
+	Children []*TraceNode
+	LeftRef  string
+	RightRef string
+}
+
+// explainPanic is the traced fold; it panics with *Error on domain violations.
+func explainPanic(node Node, ctx interface{}, resolve Resolve, opts *Options) *TraceNode {
+	// Numeric recursion for subtrees the caller's resolve re-enters: those folds
+	// happen inside the caller and are invisible to the trace. Only
+	// kernel-visited nodes appear.
+	recurseValue := func(n Node, c interface{}) float64 { return evaluatePanic(n, c, resolve, opts) }
+
+	if ar, ok := operatorArity[node.Type()]; ok {
+		switch ar.kind {
+		case "unary":
+			x := explainPanic(operand(node, ar.op), ctx, resolve, opts)
+			return &TraceNode{Type: node.Type(), Value: unaryPrim[node.Type()](x.Value), Children: []*TraceNode{x}}
+		case "binary":
+			a := explainPanic(operand(node, ar.left), ctx, resolve, opts)
+			b := explainPanic(operand(node, ar.right), ctx, resolve, opts)
+			return &TraceNode{Type: node.Type(), Value: binaryPrim[node.Type()](a.Value, b.Value), Children: []*TraceNode{a, b}}
+		case "nary":
+			items, ok := node[ar.op].([]interface{})
+			if !ok {
+				raise("%s expects an '%s' list", node.Type(), ar.op)
+			}
+			isAnd := node.Type() == tx+"/And"
+			children := []*TraceNode{}
+			for _, item := range items {
+				m, ok := item.(map[string]interface{})
+				if !ok {
+					if n, ok2 := item.(Node); ok2 {
+						m = map[string]interface{}(n)
+					} else {
+						raise("%s operand is not a node", node.Type())
+					}
+				}
+				child := explainPanic(Node(m), ctx, resolve, opts)
+				children = append(children, child)
+				v := truthy(child.Value)
+				// Same short-circuit as Evaluate: operands after the deciding one
+				// are never evaluated and never appear in the trace.
+				if isAnd && !v {
+					return &TraceNode{Type: node.Type(), Value: 0, Children: children}
+				}
+				if !isAnd && v {
+					return &TraceNode{Type: node.Type(), Value: 1, Children: children}
+				}
+			}
+			return &TraceNode{Type: node.Type(), Value: boolNum(isAnd), Children: children}
+		case "ternary":
+			v := explainPanic(operand(node, ar.a), ctx, resolve, opts)
+			lo := explainPanic(operand(node, ar.b), ctx, resolve, opts)
+			hi := explainPanic(operand(node, ar.c), ctx, resolve, opts)
+			return &TraceNode{
+				Type:     node.Type(),
+				Value:    math.Min(math.Max(v.Value, lo.Value), hi.Value),
+				Children: []*TraceNode{v, lo, hi},
+			}
+		}
+	}
+
+	if node.Type() == tx+"/Not" {
+		x := explainPanic(operand(node, "operand"), ctx, resolve, opts)
+		return &TraceNode{Type: node.Type(), Value: boolNum(!truthy(x.Value)), Children: []*TraceNode{x}}
+	}
+
+	if node.Type() == tx+"/IsAtLeast" || node.Type() == tx+"/Dominates" {
+		v, left, right := foldOrdered(node, ctx, opts)
+		return &TraceNode{Type: node.Type(), Value: v, Children: []*TraceNode{}, LeftRef: left, RightRef: right}
+	}
+
+	if lit, ok := literalValue(node); ok {
+		return &TraceNode{Type: node.Type(), Value: lit, Children: []*TraceNode{}}
+	}
+
+	v := resolve(node, ctx, recurseValue)
+	return &TraceNode{Type: node.Type(), Value: v, Children: []*TraceNode{}}
+}
+
+// Explain evaluates an expression tree and returns the verdict tree — every
+// evaluated node, its own result, and (for ordered comparisons) the identities
+// it compared. The root's Value is exactly what Evaluate returns for the same
+// inputs; the conformance suite runs every vector through both and requires
+// agreement, so the two entry points cannot drift. Kept separate from Evaluate
+// so the hot path never pays for trace allocation. Errors propagate exactly as
+// in Evaluate — a failed evaluation yields an error, not a partial trace.
+func Explain(node Node, ctx interface{}, resolve Resolve, opts *Options) (trace *TraceNode, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if e, ok := r.(*Error); ok {
+				err = e
+				return
+			}
+			panic(r)
+		}
+	}()
+	return explainPanic(node, ctx, resolve, opts), nil
 }
