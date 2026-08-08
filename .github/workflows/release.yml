@@ -26,6 +26,13 @@ on:
         description: "Publish to the public registries (false = test only)"
         type: boolean
         default: false
+  # Continuous verification (issue #18 hardening): the published surface is
+  # re-audited on a schedule, not only at release time — so a PENDING that
+  # never got confirmed, a yanked/deleted artifact, or any registry state
+  # drifting from the committed manifests is caught without anyone remembering
+  # to re-run. Publish jobs stay gated (inputs.publish is empty on schedule).
+  schedule:
+    - cron: "23 8 * * 1"
 
 permissions:
   id-token: write        # OIDC: PyPI / crates.io / npm provenance / NuGet trusted publishing
@@ -418,6 +425,11 @@ jobs:
       - name: tag go modules (skip existing — proxy-cached tags are immutable)
         run: |
           python3 -m pip install --quiet pyyaml
+          retry() { local n=$1 s=$2; shift 2; local i
+            for i in $(seq 1 "$n"); do "$@" && return 0; [ "$i" -lt "$n" ] && sleep "$s"; done
+            return 1
+          }
+          drift=0
           for m in canonical codec expression wire; do
             ver=$(python3 -c "import yaml; print(yaml.safe_load(open('release-targets.yml'))['meta']['go_module_versions']['$m'])")
             tag="kanonak-$m/go/v$ver"
@@ -434,14 +446,14 @@ jobs:
               # Compare the SUBTREE object hash — path-scoped, so releasing one
               # member never false-positives on the others, whose tags legitimately
               # point at older commits.
-              if git fetch --quiet --depth 1 origin "refs/tags/$tag" 2>/dev/null; then
+              if retry 3 15 git fetch --quiet --depth 1 origin "refs/tags/$tag"; then
                 tagged=$(git rev-parse "FETCH_HEAD:kanonak-$m/go" 2>/dev/null || true)
                 current=$(git rev-parse "HEAD:kanonak-$m/go" 2>/dev/null || true)
                 if [ -n "$tagged" ] && [ -n "$current" ] && [ "$tagged" != "$current" ]; then
-                  echo "::warning::kanonak-$m/go has CHANGED since $tag (tree $tagged -> $current) but go_module_versions.$m is still $ver — those changes will NOT reach Go consumers. Bump it in release-targets.yml and re-run."
+                  echo "::error::DRIFT kanonak-$m/go has CHANGED since $tag (tree $tagged -> $current) but go_module_versions.$m is still $ver — those changes will NOT reach Go consumers. A publish run with unreleased drift is a partial release (issue #18): bump it in release-targets.yml and re-run."; drift=1
                 fi
               else
-                echo "::warning::could not fetch $tag to check for drift in kanonak-$m/go — skipping the drift check only; the tag itself is untouched"
+                echo "::error::could not fetch $tag to check kanonak-$m/go for drift after retries — refusing to ASSUME the tag matches the tree (issue #18); the tag itself is untouched. Re-run when origin is reachable."; drift=1
               fi
             else
               git tag "$tag" "$GITHUB_SHA"
@@ -449,6 +461,7 @@ jobs:
               echo "pushed $tag @ $GITHUB_SHA"
             fi
           done
+          exit $drift
 
   # Swift has NO registry: A RELEASE IS THE ROOT GIT TAG `v<swift_package_version>`
   # (SwiftPM resolves ONLY root semver tags against the repo URL; the per-member
@@ -485,13 +498,17 @@ jobs:
             # run would have skipped the tag and release-audit would have
             # reported OK with two products unreleasable. Every Swift source
             # path is compared, so any change without a bump is surfaced.
-            if git fetch --quiet --depth 1 origin "refs/tags/$tag" 2>/dev/null; then
+            fetched=0
+            for i in 1 2 3; do git fetch --quiet --depth 1 origin "refs/tags/$tag" && { fetched=1; break; }; [ "$i" -lt 3 ] && sleep 15; done
+            if [ "$fetched" = "1" ]; then
               if ! git diff --quiet FETCH_HEAD HEAD -- Package.swift kanonak-*/swift 2>/dev/null; then
-                echo "::warning::Swift sources have CHANGED since $tag but swift_package_version is still $ver — those changes will NOT reach SwiftPM consumers (a resolved tag is cached by revision and must never be moved). Bump it in release-targets.yml and re-run."
+                echo "::error::DRIFT Swift sources have CHANGED since $tag but swift_package_version is still $ver — those changes will NOT reach SwiftPM consumers (a resolved tag is cached by revision and must never be moved). A publish run with unreleased drift is a partial release (issue #18): bump it in release-targets.yml and re-run."
                 git diff --stat FETCH_HEAD HEAD -- Package.swift kanonak-*/swift || true
+                exit 1
               fi
             else
-              echo "::warning::could not fetch $tag to check for Swift drift — skipping the drift check only; the tag itself is untouched"
+              echo "::error::could not fetch $tag to check for Swift drift after retries — refusing to ASSUME the tag matches the tree (issue #18); the tag itself is untouched. Re-run when origin is reachable."
+              exit 1
             fi
           else
             # NOTE: this tag matches `on.push.tags: ["v*"]`. It does not retrigger
@@ -587,7 +604,7 @@ jobs:
   #     the workflow later (fully idempotent) to see the audit go all-OK.
   release-audit:
     needs: [publish-python, publish-rust, publish-typescript, publish-csharp, publish-java, publish-go, publish-wasm, publish-swift]
-    if: ${{ always() && (github.event_name == 'push' || inputs.publish) }}
+    if: ${{ always() && (github.event_name == 'push' || github.event_name == 'schedule' || inputs.publish) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -656,6 +673,33 @@ jobs:
             else
               echo "::error::MISSING Go tag kanonak-$m/go/v$go_ver — publish-go should have pushed it; check that job's log"; fail=1
             fi
+
+            # PUBLIC LATEST vs DECLARED (issue #18 hardening). Existence says
+            # the declared version reached the registry; it does NOT say the
+            # registry agrees it is the NEWEST. Ahead-of-manifests means the
+            # repo state is behind the public registry (a reverted manifest or
+            # an out-of-band publish) — publishing from that state silently
+            # regresses consumers, so it is a hard error. Behind is index lag
+            # (PENDING). Unreadable is a hard error: refusing to assume is the
+            # point.
+            newest() { printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1; }
+            check_latest() { local reg=$1 dec=$2 pub=$3
+              if [ -z "$pub" ] || [ "$pub" = "null" ]; then
+                echo "::error::LATEST-UNKNOWN $reg kanonak-$m — could not read the registry's public latest after retries; refusing to assume it matches. Re-run when reachable."; fail=1
+              elif [ "$pub" = "$dec" ]; then
+                echo "OK       $reg(latest)  kanonak-$m $pub"
+              elif [ "$(newest "$pub" "$dec")" = "$dec" ]; then
+                echo "::notice::PENDING-LATEST $reg kanonak-$m — public latest $pub is behind declared $dec (index lag); re-run later to confirm"; pend=1
+              else
+                echo "::error::PUBLIC-AHEAD $reg kanonak-$m — the registry's latest is $pub but the committed manifest declares $dec. The repo is BEHIND the public registry (reverted manifest or out-of-band publish); reconcile the manifests before any publish."; fail=1
+              fi
+            }
+            check_latest PyPI   "$py_ver" "$(retry 3 15 curl -sf "https://pypi.org/pypi/kanonak-$m/json" | jq -r '.info.version // empty')"
+            check_latest crates "$rs_ver" "$(retry 3 15 curl -sf -A "kanonak-release-audit (https://github.com/kanonak-protocol/runtime)" "https://crates.io/api/v1/crates/kanonak-$m" | jq -r '.crate.max_version // empty')"
+            check_latest npm    "$ts_ver" "$(retry 3 15 curl -sf "https://registry.npmjs.org/@kanonak-protocol%2f$m" | jq -r '."dist-tags".latest // empty')"
+            check_latest NuGet  "$cs_ver" "$(retry 3 15 curl -sf "https://api.nuget.org/v3-flatcontainer/kanonak.$m/index.json" | jq -r '.versions[-1] // empty')"
+            check_latest Maven  "$jv_ver" "$(retry 3 15 curl -sf "https://repo1.maven.org/maven2/org/kanonak/kanonak-$m/maven-metadata.xml" | sed -n 's/.*<release>\(.*\)<\/release>.*/\1/p')"
+            check_latest GoTag  "$go_ver" "$(git ls-remote --tags origin "refs/tags/kanonak-$m/go/v*" | sed -E 's#.*/go/v##' | sort -V | tail -1)"
           done
 
           # GHCR (the codec wasm component) — AUTHORITATIVE registry API, and
