@@ -13,7 +13,11 @@ meta:
   homepage: https://kanonak.org
   license: Apache-2.0
   # Per-member versions live in each member's committed manifests (the
-  # release-audit source of truth) and diverge per registry as patches ship;
+  # release-audit source of truth) and MUST MATCH across every registry: a
+  # member releases at ONE version everywhere. A partial bump reads as all-OK
+  # to a per-registry audit while every generated SDK — which declares ONE
+  # version of a member across all languages — hard-fails to resolve in the
+  # ecosystems left behind (issue #18; release-audit enforces the parity).
   # go_module_versions below tracks the Go tags per member.
   canonical_form_version: "1"                     # frozen content-address rules
   expression_runtime_version: "1"                 # frozen expression-evaluation rules
@@ -26,7 +30,7 @@ meta:
   # and re-run the workflow; existing tags are never touched or moved.
   go_module_versions:
     canonical: "0.2.1"
-    codec: "0.4.0"
+    codec: "0.4.1"
     expression: "0.2.0"
     wire: "0.1.0"
   # Swift package version — the ROOT `v<ver>` tag (SwiftPM resolves ONLY root

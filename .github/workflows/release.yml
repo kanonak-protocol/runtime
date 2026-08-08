@@ -608,6 +608,19 @@ jobs:
             jv_ver=$(grep -m1 '<version>' "kanonak-$m/java/pom.xml" | sed -E 's/.*<version>(.*)<\/version>.*/\1/')
             go_ver=$(python3 -c "import yaml; print(yaml.safe_load(open('release-targets.yml'))['meta']['go_module_versions']['$m'])")
 
+            # CROSS-REGISTRY PARITY (issue #18): a member releases at ONE
+            # version on EVERY registry. Each per-registry check below verifies
+            # declared == published against that registry's OWN manifest, so a
+            # partial bump (codec 0.4.1 on npm/crates/NuGet, 0.4.0 on
+            # PyPI/Maven/Go) read as all-OK — while every generated SDK, which
+            # declares ONE version of a member across all its language
+            # bindings, hard-failed to resolve in the ecosystems left behind.
+            # Skew is caught here, from the committed manifests alone, before
+            # any network check can bless it.
+            if [ "$(printf '%s\n' "$py_ver" "$rs_ver" "$ts_ver" "$cs_ver" "$jv_ver" "$go_ver" | sort -u | wc -l)" != "1" ]; then
+              echo "::error::VERSION SKEW kanonak-$m — python=$py_ver rust=$rs_ver npm=$ts_ver nuget=$cs_ver maven=$jv_ver go=$go_ver. A member releases at ONE version on every registry (issue #18); align the committed manifests and re-run."; fail=1
+            fi
+
             if retry 3 15 curl -sf -o /dev/null "https://pypi.org/pypi/kanonak-$m/$py_ver/json"; then
               echo "OK       PyPI          kanonak-$m $py_ver"
             else
@@ -650,6 +663,12 @@ jobs:
           # party with no auth can `wkg oci pull` it. Hard-fails until the
           # one-time public-visibility flip on the org package is done.
           wasm_ver=$(grep -m1 '^version = ' kanonak-codec/wasm/Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          # The wasm component is the codec's 7th language — same parity rule:
+          # its GHCR tag tracks the codec version (issue #18).
+          codec_ver=$(grep -m1 '^version' kanonak-codec/rust/Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          if [ "$wasm_ver" != "$codec_ver" ]; then
+            echo "::error::VERSION SKEW kanonak-codec wasm component — wasm crate $wasm_ver vs codec $codec_ver. The GHCR tag tracks the codec version (issue #18); align kanonak-codec/wasm/Cargo.toml and re-run."; fail=1
+          fi
           tok=$(curl -sf "https://ghcr.io/token?scope=repository:kanonak-protocol/codec:pull" | jq -r .token)
           if retry 3 15 curl -sf -o /dev/null -H "Authorization: Bearer $tok" -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json" "https://ghcr.io/v2/kanonak-protocol/codec/manifests/$wasm_ver"; then
             echo "OK       GHCR          ghcr.io/kanonak-protocol/codec:$wasm_ver (wasm component, anonymously pullable)"
