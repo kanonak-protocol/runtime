@@ -246,7 +246,7 @@ namespace Kanonak.Codec
                     (raw == null ? "null" : raw.GetType().Name));
             }
 
-            Carrier? carrier = CarrierMap.CarrierOf(EntityUri.Parse(prop.Datatype));
+            Carrier? carrier = CarrierMap.CarrierOf(prop.Datatype);
             if (carrier == null) return new RawScalar(Lexical(raw));
             return new TypedScalar(carrier.Value, Lexical(raw));
         }
