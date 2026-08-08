@@ -149,6 +149,16 @@ class Program
             if (got == expected) pass++;
             else { fail++; Console.WriteLine($"  FAIL [{id}] expected '{expected ?? "null"}', got '{got ?? "null"}'"); }
         }
+        foreach (var v in doc.RootElement.GetProperty("displayNameVectors").EnumerateArray())
+        {
+            total++;
+            string id = v.GetProperty("id").GetString();
+            string input = v.GetProperty("input").GetString();
+            string expected = v.GetProperty("expected").GetString();
+            string got = Coordinate.DisplayName(input);
+            if (got == expected) pass++;
+            else { fail++; Console.WriteLine($"  FAIL [{id}] expected '{expected}', got '{got}'"); }
+        }
         Console.WriteLine($"coordinate-vectors: {pass}/{total} pass, {fail} fail");
         return fail;
     }

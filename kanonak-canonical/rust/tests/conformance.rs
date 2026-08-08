@@ -141,6 +141,16 @@ fn coordinate_vectors() {
             eprintln!("FAIL [{}] expected {:?} got {:?}", id, expected, got);
         }
     }
+    for v in doc["displayNameVectors"].as_array().unwrap() {
+        let id = v["id"].as_str().unwrap();
+        let input = v["input"].as_str().unwrap();
+        let expected = v["expected"].as_str().unwrap();
+        let got = display_name(input);
+        if got != expected {
+            fails += 1;
+            eprintln!("FAIL [{}] expected {:?} got {:?}", id, expected, got);
+        }
+    }
     assert_eq!(fails, 0, "{} coordinate vector(s) failed", fails);
 }
 

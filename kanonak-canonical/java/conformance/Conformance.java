@@ -129,6 +129,15 @@ public final class Conformance {
             if (expected == null ? got == null : expected.equals(got)) pass++;
             else { fail++; System.out.println("  FAIL [" + id + "] expected '" + expected + "', got '" + got + "'"); }
         }
+        for (Object o : (List<Object>) doc.get("displayNameVectors")) {
+            Map<String, Object> v = (Map<String, Object>) o;
+            total++;
+            String id = (String) v.get("id");
+            String expected = (String) v.get("expected");
+            String got = Coordinate.displayName((String) v.get("input"));
+            if (expected.equals(got)) pass++;
+            else { fail++; System.out.println("  FAIL [" + id + "] expected '" + expected + "', got '" + got + "'"); }
+        }
         System.out.println("coordinate-vectors: " + pass + "/" + total + " pass, " + fail + " fail");
         return fail;
     }

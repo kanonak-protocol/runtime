@@ -104,6 +104,18 @@ final class CoordinateVectorTests: XCTestCase {
             XCTAssertEqual(lenientVersionlessKey(input), expected, "[\(id)]")
         }
     }
+
+    func testDisplayNameVectors() throws {
+        let doc = try loadJSON("coordinate-vectors.json")
+        let vectors = doc["displayNameVectors"] as! [[String: Any]]
+        XCTAssertFalse(vectors.isEmpty)
+        for v in vectors {
+            let id = v["id"] as! String
+            let input = v["input"] as! String
+            let expected = v["expected"] as! String
+            XCTAssertEqual(displayName(input), expected, "[\(id)]")
+        }
+    }
 }
 
 private func decodeSubjects(_ input: [String: Any]) -> Package {

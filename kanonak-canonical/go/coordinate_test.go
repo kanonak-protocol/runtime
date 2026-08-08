@@ -68,3 +68,16 @@ func TestCoordinateLenientKeyVectors(t *testing.T) {
 		}
 	}
 }
+
+func TestCoordinateDisplayNameVectors(t *testing.T) {
+	doc := readVectors(t, "coordinate-vectors.json")
+	for _, raw := range doc["displayNameVectors"].([]interface{}) {
+		v := raw.(map[string]interface{})
+		id := v["id"].(string)
+		input := v["input"].(string)
+		expected := v["expected"].(string)
+		if got := DisplayName(input); got != expected {
+			t.Errorf("[%s] expected %q, got %q", id, expected, got)
+		}
+	}
+}

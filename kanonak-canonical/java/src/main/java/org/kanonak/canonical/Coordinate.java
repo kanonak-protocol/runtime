@@ -94,6 +94,25 @@ public record Coordinate(String publisher, String packageName, String name, Vers
     }
 
     /**
+     * The TOTAL display accessor — for rendering a coordinate to a human (an
+     * evaluation trace, an error message, a form label), where the string may
+     * not be one the caller constructed and a throw is strictly worse than
+     * showing the raw URI. A valid coordinate displays as its local name;
+     * anything else is returned VERBATIM — never a best-effort tail, so a
+     * full URI where a short name was expected is an honest signal of
+     * upstream malformation. Display uses the STRICT grammar: only a full
+     * parse earns a shortened name (an input the lenient carrier key would
+     * route still displays verbatim).
+     */
+    public static String displayName(String uri) {
+        try {
+            return parse(uri).name;
+        } catch (IllegalArgumentException e) {
+            return uri;
+        }
+    }
+
+    /**
      * Total structural reduction to the versionless key, for carrier routing:
      * three non-empty {@code '/'}-segments required, everything from the first
      * {@code '@'} in the middle segment discarded WITHOUT validating it (the

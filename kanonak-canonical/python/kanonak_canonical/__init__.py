@@ -105,6 +105,22 @@ def local_name(uri: str) -> str:
     return parse_coordinate(uri).name
 
 
+def display_name(uri: str) -> str:
+    """The TOTAL display accessor - for rendering a coordinate to a human (an
+    evaluation trace, an error message, a form label), where the string may
+    not be one the caller constructed and an exception is strictly worse than
+    showing the raw URI. A valid coordinate displays as its local name;
+    anything else is returned VERBATIM - never a best-effort tail, so a full
+    URI where a short name was expected is an honest signal of upstream
+    malformation. Display uses the STRICT grammar: only a full parse earns a
+    shortened name (an input the lenient carrier key would route still
+    displays verbatim)."""
+    try:
+        return parse_coordinate(uri).name
+    except ValueError:
+        return uri
+
+
 def lenient_versionless_key(uri: str) -> Optional[str]:
     """Total structural reduction to the versionless key, for carrier routing.
 

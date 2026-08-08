@@ -22,13 +22,14 @@ ordering, or wire layout requires a NEW version, never an edit in place.
   over the language-neutral typed-value input model.
 - `vectors/coordinate-vectors.json` — coordinate parsing (issue #17): the strict
   `parseCoordinate` grammar (`publisher/package[@major.minor.patch]/name`, throw
-  on malformed — never a plausible tail) and the total lenient versionless key
-  that carrier routing uses.
+  on malformed — never a plausible tail), the total lenient versionless key
+  that carrier routing uses, and the total `displayName` accessor (valid →
+  local name; anything else → the input verbatim, never a throw).
 
 ## Ports
 
 All seven ports pass 100% of the golden vectors (64 lexical + 10 full-form +
-46 coordinate).
+79 coordinate).
 
 | Language | Path | Status | Conformance command |
 |---|---|---|---|
@@ -66,9 +67,13 @@ the codec consume it (it is no longer bundled inside the SDK).
    malformed input throws rather than returning a plausible-looking tail.
    Carrier routing uses the total, non-throwing lenient variant (structure
    only, version content not validated) so an unparseable datatype URI routes
-   to no carrier — the raw token is preserved, never guessed. Deliberately NO
-   ordering / range / compatibility API: runtime consumers compare coordinates
-   for equality only; version math stays in the SDK.
+   to no carrier — the raw token is preserved, never guessed. For rendering a
+   coordinate to a human there is the total **`displayName`** accessor: a
+   valid coordinate displays as its local name, anything else is returned
+   verbatim (never a throw, never a best-effort tail — a renderer must not
+   fail on a string it did not construct). Deliberately NO ordering / range /
+   compatibility API: runtime consumers compare coordinates for equality
+   only; version math stays in the SDK.
 
 The `ephemeral` namespace-neutralization for EphemeralPackage body hashes is a
 *caller* concern (the producer/codec), not part of `canonicalForm` itself.

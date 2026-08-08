@@ -10,6 +10,7 @@ import {
   parseCoordinate,
   versionlessKey,
   localName,
+  displayName,
   lenientVersionlessKey,
 } from './Coordinate.js';
 
@@ -94,7 +95,17 @@ for (const v of co.lenientKeyVectors) {
   if (got === v.expected) cpass++;
   else { fails++; console.error(`coordinate ${v.id}: expected ${JSON.stringify(v.expected)} got ${JSON.stringify(got)}`); }
 }
-console.log(`coordinate-vectors: ${cpass}/${co.parseVectors.length + co.lenientKeyVectors.length} pass`);
+for (const v of co.displayNameVectors) {
+  let got: string;
+  try {
+    got = displayName(v.input);
+  } catch (e) {
+    fails++; console.error(`coordinate ${v.id}: displayName must be total, threw ${(e as Error).message}`); continue;
+  }
+  if (got === v.expected) cpass++;
+  else { fails++; console.error(`coordinate ${v.id}: expected ${JSON.stringify(v.expected)} got ${JSON.stringify(got)}`); }
+}
+console.log(`coordinate-vectors: ${cpass}/${co.parseVectors.length + co.lenientKeyVectors.length + co.displayNameVectors.length} pass`);
 
 if (fails > 0) { console.error(`\n${fails} FAILURES`); process.exit(1); }
 console.log('\nALL VECTORS PASS');

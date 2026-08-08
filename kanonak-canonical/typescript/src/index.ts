@@ -14,6 +14,7 @@ export {
   parseCoordinate,
   versionlessKey,
   localName,
+  displayName,
   lenientVersionlessKey,
 } from './Coordinate.js';
 export type { Coordinate, CoordinateVersion } from './Coordinate.js';

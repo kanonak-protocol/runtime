@@ -22,6 +22,7 @@ from kanonak_canonical import (
     canonical_hash,
     canonical_scalar_lexical,
     carrier_of,
+    display_name,
     lenient_versionless_key,
     local_name,
     parse_coordinate,
@@ -140,6 +141,14 @@ def run_coordinate(path):
     for v in doc["lenientKeyVectors"]:
         total += 1
         got = lenient_versionless_key(v["input"])
+        if got == v["expected"]:
+            pas += 1
+        else:
+            fail += 1
+            print(f"  FAIL [{v['id']}] expected {v['expected']!r}, got {got!r}")
+    for v in doc["displayNameVectors"]:
+        total += 1
+        got = display_name(v["input"])
         if got == v["expected"]:
             pas += 1
         else:

@@ -131,6 +131,23 @@ func LocalName(uri string) (string, error) {
 	return c.Name, nil
 }
 
+// DisplayName is the TOTAL display accessor — for rendering a coordinate to a
+// human (an evaluation trace, an error message, a form label), where the
+// string may not be one the caller constructed and an error is strictly worse
+// than showing the raw URI. A valid coordinate displays as its local name;
+// anything else is returned VERBATIM — never a best-effort tail, so a full
+// URI where a short name was expected is an honest signal of upstream
+// malformation. Display uses the STRICT grammar: only a full parse earns a
+// shortened name (an input the lenient carrier key would route still
+// displays verbatim).
+func DisplayName(uri string) string {
+	c, err := ParseCoordinate(uri)
+	if err != nil {
+		return uri
+	}
+	return c.Name
+}
+
 // LenientVersionlessKey is the total structural reduction to the versionless
 // key, for carrier routing: three non-empty '/'-segments required, everything
 // from the first '@' in the middle segment discarded WITHOUT validating it

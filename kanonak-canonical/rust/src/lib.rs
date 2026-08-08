@@ -12,7 +12,8 @@ use unicode_normalization::UnicodeNormalization;
 
 pub mod coordinate;
 pub use coordinate::{
-    lenient_versionless_key, local_name, parse_coordinate, versionless_key, Coordinate,
+    display_name, lenient_versionless_key, local_name, parse_coordinate, versionless_key,
+    Coordinate,
     CoordinateVersion,
 };
 

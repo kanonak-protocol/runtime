@@ -115,6 +115,24 @@ export function localName(uri: string): string {
 }
 
 /**
+ * The TOTAL display accessor — for rendering a coordinate to a human (an
+ * evaluation trace, an error message, a form label), where the string may not
+ * be one the caller constructed and a throw is strictly worse than showing
+ * the raw URI. A valid coordinate displays as its local name; anything else
+ * is returned VERBATIM — never a best-effort tail, so a full URI where a
+ * short name was expected is an honest signal of upstream malformation.
+ * Display uses the STRICT grammar: only a full parse earns a shortened name
+ * (an input the lenient carrier key would route still displays verbatim).
+ */
+export function displayName(uri: string): string {
+  try {
+    return parseCoordinate(uri).name;
+  } catch {
+    return uri;
+  }
+}
+
+/**
  * Total structural reduction to the versionless key, for carrier routing:
  * three non-empty `/`-segments required, everything from the first `@` in the
  * middle segment discarded WITHOUT validating it (the part before the `@`
