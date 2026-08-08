@@ -9,6 +9,7 @@ from pathlib import Path
 
 from kanonak_canonical import (
     Carrier,
+    CoordinateVersion,
     Embedded,
     KList,
     Package,
@@ -21,6 +22,10 @@ from kanonak_canonical import (
     canonical_hash,
     canonical_scalar_lexical,
     carrier_of,
+    lenient_versionless_key,
+    local_name,
+    parse_coordinate,
+    versionless_key,
 )
 
 
@@ -101,10 +106,54 @@ def run_full_form(path):
     return fail
 
 
+def run_coordinate(path):
+    doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    total = pas = fail = 0
+    for v in doc["parseVectors"]:
+        total += 1
+        vid, inp = v["id"], v["input"]
+        if v.get("expectError", False):
+            try:
+                got = parse_coordinate(inp)
+                fail += 1
+                print(f"  FAIL [{vid}] expected error, got {got}")
+            except Exception:  # noqa: BLE001
+                pas += 1
+            continue
+        e = v["expected"]
+        try:
+            got = parse_coordinate(inp)
+            ev = e["version"]
+            want_version = None if ev is None else CoordinateVersion(ev["major"], ev["minor"], ev["patch"])
+            want_key = f"{e['publisher']}/{e['package']}/{e['name']}"
+            ok = (got.publisher == e["publisher"] and got.package == e["package"]
+                  and got.name == e["name"] and got.version == want_version
+                  and versionless_key(inp) == want_key and local_name(inp) == e["name"])
+            if ok:
+                pas += 1
+            else:
+                fail += 1
+                print(f"  FAIL [{vid}] expected {e}, got {got}")
+        except Exception as ex:  # noqa: BLE001
+            fail += 1
+            print(f"  FAIL [{vid}] threw: {ex}")
+    for v in doc["lenientKeyVectors"]:
+        total += 1
+        got = lenient_versionless_key(v["input"])
+        if got == v["expected"]:
+            pas += 1
+        else:
+            fail += 1
+            print(f"  FAIL [{v['id']}] expected {v['expected']!r}, got {got!r}")
+    print(f"coordinate-vectors: {pas}/{total} pass, {fail} fail")
+    return fail
+
+
 def main():
     vdir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / "vectors"
     fails = run_lexical(vdir / "lexical-vectors.json")
     fails += run_full_form(vdir / "full-form-vectors.json")
+    fails += run_coordinate(vdir / "coordinate-vectors.json")
     print("\nALL VECTORS PASS" if fails == 0 else f"\n{fails} VECTOR(S) FAILED")
     sys.exit(0 if fails == 0 else 1)
 

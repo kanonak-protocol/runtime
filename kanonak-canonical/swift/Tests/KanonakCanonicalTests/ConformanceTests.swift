@@ -61,6 +61,51 @@ final class FullFormVectorTests: XCTestCase {
     }
 }
 
+final class CoordinateVectorTests: XCTestCase {
+    func testParseVectors() throws {
+        let doc = try loadJSON("coordinate-vectors.json")
+        let vectors = doc["parseVectors"] as! [[String: Any]]
+        XCTAssertFalse(vectors.isEmpty)
+        for v in vectors {
+            let id = v["id"] as! String
+            let input = v["input"] as! String
+            let expectError = v["expectError"] as? Bool ?? false
+            if expectError {
+                XCTAssertThrowsError(try parseCoordinate(input), "[\(id)] expected error")
+                continue
+            }
+            let e = v["expected"] as! [String: Any]
+            let publisher = e["publisher"] as! String
+            let pkg = e["package"] as! String
+            let name = e["name"] as! String
+            let version = (e["version"] as? [String: Any]).map { ev in
+                CoordinateVersion(major: ev["major"] as! Int,
+                                  minor: ev["minor"] as! Int,
+                                  patch: ev["patch"] as! Int)
+            }
+            let got = try parseCoordinate(input)
+            XCTAssertEqual(got, Coordinate(publisher: publisher, package: pkg,
+                                           name: name, version: version), "[\(id)]")
+            XCTAssertEqual(try versionlessKey(input), "\(publisher)/\(pkg)/\(name)", "[\(id)] key")
+            XCTAssertEqual(try localName(input), name, "[\(id)] localName")
+        }
+    }
+
+    func testLenientKeyVectors() throws {
+        let doc = try loadJSON("coordinate-vectors.json")
+        let vectors = doc["lenientKeyVectors"] as! [[String: Any]]
+        XCTAssertFalse(vectors.isEmpty)
+        for v in vectors {
+            let id = v["id"] as! String
+            let input = v["input"] as! String
+            // JSON null decodes as NSNull; `as? String` maps it to nil, matching
+            // the lenient variant's no-key return.
+            let expected = v["expected"] as? String
+            XCTAssertEqual(lenientVersionlessKey(input), expected, "[\(id)]")
+        }
+    }
+}
+
 private func decodeSubjects(_ input: [String: Any]) -> Package {
     let subjects = (input["subjects"] as! [[String: Any]]).map { sm in
         Subject(uri: sm["uri"] as! String, statements: decodeStatements(sm))

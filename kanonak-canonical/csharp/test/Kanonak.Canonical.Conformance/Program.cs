@@ -22,6 +22,7 @@ class Program
         int failures = 0;
         failures += RunLexical(Path.Combine(vectorsDir, "lexical-vectors.json"));
         failures += RunFullForm(Path.Combine(vectorsDir, "full-form-vectors.json"));
+        failures += RunCoordinate(Path.Combine(vectorsDir, "coordinate-vectors.json"));
 
         Console.WriteLine(failures == 0
             ? "\nALL VECTORS PASS"
@@ -94,6 +95,64 @@ class Program
         return fail;
     }
 
+    static int RunCoordinate(string path)
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllText(path));
+        int total = 0, pass = 0, fail = 0;
+        foreach (var v in doc.RootElement.GetProperty("parseVectors").EnumerateArray())
+        {
+            total++;
+            string id = v.GetProperty("id").GetString();
+            string input = v.GetProperty("input").GetString();
+            bool expectError = v.TryGetProperty("expectError", out var ee) && ee.GetBoolean();
+            try
+            {
+                Coordinate got = Coordinate.Parse(input);
+                if (expectError)
+                {
+                    fail++; Console.WriteLine($"  FAIL [{id}] expected error, got '{got.Publisher}/{got.Package}/{got.Name}'");
+                    continue;
+                }
+                var e = v.GetProperty("expected");
+                string publisher = e.GetProperty("publisher").GetString();
+                string package = e.GetProperty("package").GetString();
+                string name = e.GetProperty("name").GetString();
+                var ev = e.GetProperty("version");
+                bool versionOk = ev.ValueKind == JsonValueKind.Null
+                    ? !got.Version.HasValue
+                    : got.Version.HasValue
+                        && got.Version.Value.Major == ev.GetProperty("major").GetInt32()
+                        && got.Version.Value.Minor == ev.GetProperty("minor").GetInt32()
+                        && got.Version.Value.Patch == ev.GetProperty("patch").GetInt32();
+                string expectedKey = publisher + "/" + package + "/" + name;
+                bool ok = got.Publisher == publisher && got.Package == package && got.Name == name
+                    && versionOk
+                    && Coordinate.VersionlessKey(input) == expectedKey
+                    && Coordinate.LocalName(input) == name;
+                if (ok) pass++;
+                else { fail++; Console.WriteLine($"  FAIL [{id}] parsed parts mismatch for '{input}'"); }
+            }
+            catch (Exception ex)
+            {
+                if (expectError) pass++;
+                else { fail++; Console.WriteLine($"  FAIL [{id}] threw: {ex.Message}"); }
+            }
+        }
+        foreach (var v in doc.RootElement.GetProperty("lenientKeyVectors").EnumerateArray())
+        {
+            total++;
+            string id = v.GetProperty("id").GetString();
+            string input = v.GetProperty("input").GetString();
+            var e = v.GetProperty("expected");
+            string expected = e.ValueKind == JsonValueKind.Null ? null : e.GetString();
+            string got = Coordinate.LenientVersionlessKey(input);
+            if (got == expected) pass++;
+            else { fail++; Console.WriteLine($"  FAIL [{id}] expected '{expected ?? "null"}', got '{got ?? "null"}'"); }
+        }
+        Console.WriteLine($"coordinate-vectors: {pass}/{total} pass, {fail} fail");
+        return fail;
+    }
+
     // -- Input-model decoder (mirrors decode.mjs) ------------------------------
 
     static Package DecodeSubjects(JsonElement input)
@@ -127,7 +186,7 @@ class Program
         if (v.TryGetProperty("lit", out var lit))
         {
             string lexical = lit.GetString();
-            Carrier? carrier = CarrierMap.CarrierOf(EntityUri.Parse(v.GetProperty("datatype").GetString()));
+            Carrier? carrier = CarrierMap.CarrierOf(v.GetProperty("datatype").GetString());
             return carrier.HasValue ? (CanonicalValue)new TypedScalar(carrier.Value, lexical) : new RawScalar(lexical);
         }
         if (v.TryGetProperty("raw", out var raw)) return new RawScalar(raw.GetString());

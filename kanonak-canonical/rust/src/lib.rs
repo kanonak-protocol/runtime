@@ -10,6 +10,12 @@ use regex::Regex;
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
+pub mod coordinate;
+pub use coordinate::{
+    lenient_versionless_key, local_name, parse_coordinate, versionless_key, Coordinate,
+    CoordinateVersion,
+};
+
 pub const CANONICAL_FORM_VERSION: &str = "1";
 
 // ===========================================================================
@@ -72,22 +78,11 @@ impl Carrier {
     }
 }
 
-/// `publisher/package/name` carrier key from a datatype URI
-/// (`publisher/package@ver/name` or `publisher/package/name`).
-pub fn carrier_key(uri: &str) -> String {
-    let idx = uri.rfind('/').unwrap();
-    let name = &uri[idx + 1..];
-    let head = &uri[..idx];
-    let slash = head.find('/').unwrap();
-    let publisher = &head[..slash];
-    let pkg_full = &head[slash + 1..];
-    let pkg = pkg_full.split('@').next().unwrap();
-    format!("{}/{}/{}", publisher, pkg, name)
-}
-
 /// Carrier for a datatype URI, or `None` (out-of-set → raw-token tier).
+/// Routing is total: a structurally unparseable URI has no carrier and its
+/// raw token is preserved — never a guess, never a panic.
 pub fn carrier_of(datatype_uri: &str) -> Option<Carrier> {
-    let key = carrier_key(datatype_uri);
+    let key = lenient_versionless_key(datatype_uri)?;
     if key == "kanonak.org/core-rdf/langString" {
         return Some(Carrier::LangString);
     }

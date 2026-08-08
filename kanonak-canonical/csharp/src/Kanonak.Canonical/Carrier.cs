@@ -69,23 +69,6 @@ namespace Kanonak.Canonical
 
         /// <summary>The carrier-lookup key: <c>publisher/package/name</c> (version-independent).</summary>
         public string Key => Publisher + "/" + Package + "/" + Name;
-
-        /// <summary>
-        /// Parse <c>publisher/package@ver/name</c> or <c>publisher/package/name</c>.
-        /// Mirrors the vector decoder's <c>entityUri</c>.
-        /// </summary>
-        public static EntityUri Parse(string uri)
-        {
-            int idx = uri.LastIndexOf('/');
-            string name = uri.Substring(idx + 1);
-            string head = uri.Substring(0, idx); // publisher/package@ver
-            int slash = head.IndexOf('/');
-            string publisher = head.Substring(0, slash);
-            string pkg = head.Substring(slash + 1);
-            int at = pkg.IndexOf('@');
-            if (at >= 0) pkg = pkg.Substring(0, at);
-            return new EntityUri(publisher, pkg, name);
-        }
     }
 
     /// <summary>
@@ -146,6 +129,22 @@ namespace Kanonak.Canonical
         public static Carrier? CarrierOf(EntityUri datatype)
         {
             string key = datatype.Key;
+            if (key == LangStringKey) return Carrier.LangString;
+            return ByUri.TryGetValue(key, out var c) ? c : (Carrier?)null;
+        }
+
+        /// <summary>
+        /// The carrier for a datatype URI string, or <c>null</c> if outside the v1
+        /// set OR structurally unparseable — which is why the routing key comes
+        /// from the total <see cref="Coordinate.LenientVersionlessKey"/>, not the
+        /// throwing parser (pinned by the lenientKeyVectors in
+        /// coordinate-vectors.json). An unroutable datatype is canonicalized as a
+        /// byte-preserved raw token, never guessed into a carrier.
+        /// </summary>
+        public static Carrier? CarrierOf(string datatypeUri)
+        {
+            string key = Coordinate.LenientVersionlessKey(datatypeUri);
+            if (key == null) return null;
             if (key == LangStringKey) return Carrier.LangString;
             return ByUri.TryGetValue(key, out var c) ? c : (Carrier?)null;
         }

@@ -35,21 +35,14 @@ private let xsdCarrier: [String: Carrier] = [
     "base64Binary": .base64Binary,
 ]
 
-/// `publisher/package/name` carrier key from a datatype URI.
-private func carrierKey(_ uri: String) -> String {
-    guard let idx = uri.lastIndex(of: "/") else { return uri }
-    let name = String(uri[uri.index(after: idx)...])
-    let head = String(uri[..<idx])
-    guard let slash = head.firstIndex(of: "/") else { return uri }
-    let publisher = String(head[..<slash])
-    var pkg = String(head[head.index(after: slash)...])
-    if let at = pkg.firstIndex(of: "@") { pkg = String(pkg[..<at]) }
-    return "\(publisher)/\(pkg)/\(name)"
-}
 
 /// Carrier for a datatype URI, or nil (out-of-set → raw-token tier).
 public func carrierOf(_ datatypeUri: String) -> Carrier? {
-    let key = carrierKey(datatypeUri)
+    // Routing key comes from the total `lenientVersionlessKey`, not the throwing
+    // parser (pinned by the lenientKeyVectors in coordinate-vectors.json): a
+    // structurally unparseable datatype routes to no carrier — raw token
+    // preserved, never guessed.
+    guard let key = lenientVersionlessKey(datatypeUri) else { return nil }
     if key == "kanonak.org/core-rdf/langString" { return .langString }
     let prefix = "kanonak.org/core-xsd/"
     guard key.hasPrefix(prefix) else { return nil }

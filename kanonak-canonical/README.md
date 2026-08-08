@@ -20,10 +20,15 @@ ordering, or wire layout requires a NEW version, never an edit in place.
   lexical` (or `expectError`).
 - `vectors/full-form-vectors.json` — `input → exact canonical-form bytes → hash`,
   over the language-neutral typed-value input model.
+- `vectors/coordinate-vectors.json` — coordinate parsing (issue #17): the strict
+  `parseCoordinate` grammar (`publisher/package[@major.minor.patch]/name`, throw
+  on malformed — never a plausible tail) and the total lenient versionless key
+  that carrier routing uses.
 
 ## Ports
 
-All seven ports pass 100% of the golden vectors (64 lexical + 9 full-form).
+All seven ports pass 100% of the golden vectors (64 lexical + 10 full-form +
+46 coordinate).
 
 | Language | Path | Status | Conformance command |
 |---|---|---|---|
@@ -54,6 +59,16 @@ the codec consume it (it is no longer bundled inside the SDK).
    stability (the `same-predicate-tie-order` vector enforces it). Compact JSON
    with RFC 8785 escaping and a fixed per-blob field order; the typed scalar
    blob `{type,carrier,value}`. SHA-256 of the UTF-8 bytes, prefixed `sha256:`.
+
+4. **Coordinate parsing** (issue #17) — `parseCoordinate` over
+   `publisher/package[@major.minor.patch]/name`, plus the derived
+   **versionless key** (`publisher/package/name`) and **local name**. Strict:
+   malformed input throws rather than returning a plausible-looking tail.
+   Carrier routing uses the total, non-throwing lenient variant (structure
+   only, version content not validated) so an unparseable datatype URI routes
+   to no carrier — the raw token is preserved, never guessed. Deliberately NO
+   ordering / range / compatibility API: runtime consumers compare coordinates
+   for equality only; version math stays in the SDK.
 
 The `ephemeral` namespace-neutralization for EphemeralPackage body hashes is a
 *caller* concern (the producer/codec), not part of `canonicalForm` itself.

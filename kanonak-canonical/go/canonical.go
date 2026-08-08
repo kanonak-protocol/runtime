@@ -54,23 +54,13 @@ var xsdCarrier = map[string]Carrier{
 	"base64Binary": CarrierBase64Binary,
 }
 
-// carrierKey returns publisher/package/name from a datatype URI.
-func carrierKey(uri string) string {
-	idx := strings.LastIndex(uri, "/")
-	name := uri[idx+1:]
-	head := uri[:idx]
-	slash := strings.Index(head, "/")
-	publisher := head[:slash]
-	pkg := head[slash+1:]
-	if at := strings.Index(pkg, "@"); at >= 0 {
-		pkg = pkg[:at]
-	}
-	return publisher + "/" + pkg + "/" + name
-}
-
 // CarrierOf returns the carrier for a datatype URI, or ok=false (out-of-set).
+// A URI without the three-segment coordinate shape routes to no carrier.
 func CarrierOf(uri string) (Carrier, bool) {
-	key := carrierKey(uri)
+	key, ok := LenientVersionlessKey(uri)
+	if !ok {
+		return "", false
+	}
 	if key == "kanonak.org/core-rdf/langString" {
 		return CarrierLangString, true
 	}

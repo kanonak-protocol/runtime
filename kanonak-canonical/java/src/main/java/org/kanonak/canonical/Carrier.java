@@ -63,17 +63,10 @@ public enum Carrier {
      * or null if outside the v1 canonicalized set (the untyped/raw-token tier).
      */
     public static Carrier of(String datatypeUri) {
-        int idx = datatypeUri.lastIndexOf('/');
-        String name = datatypeUri.substring(idx + 1);
-        String head = datatypeUri.substring(0, idx);
-        int slash = head.indexOf('/');
-        String publisher = head.substring(0, slash);
-        String pkg = head.substring(slash + 1);
-        int at = pkg.indexOf('@');
-        if (at >= 0) pkg = pkg.substring(0, at);
-        String key = publisher + "/" + pkg + "/" + name;
+        String key = Coordinate.lenientVersionlessKey(datatypeUri);
+        if (key == null) return null;
         if (key.equals("kanonak.org/core-rdf/langString")) return LANG_STRING;
         if (!key.startsWith("kanonak.org/core-xsd/")) return null;
-        return BY_XSD_NAME.get(name);
+        return BY_XSD_NAME.get(key.substring("kanonak.org/core-xsd/".length()));
     }
 }

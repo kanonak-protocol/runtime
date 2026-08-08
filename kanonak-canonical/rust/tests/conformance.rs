@@ -80,6 +80,70 @@ fn full_form_vectors() {
     assert_eq!(fails, 0, "{} full-form vector(s) failed", fails);
 }
 
+#[test]
+fn coordinate_vectors() {
+    let doc = read("coordinate-vectors.json");
+    let mut fails = 0;
+    for v in doc["parseVectors"].as_array().unwrap() {
+        let id = v["id"].as_str().unwrap();
+        let input = v["input"].as_str().unwrap();
+        let expect_error = v
+            .get("expectError")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
+        match parse_coordinate(input) {
+            Ok(got) => {
+                if expect_error {
+                    fails += 1;
+                    eprintln!("FAIL [{}] expected error, got {:?}", id, got);
+                    continue;
+                }
+                let e = &v["expected"];
+                let publisher = e["publisher"].as_str().unwrap();
+                let package = e["package"].as_str().unwrap();
+                let name = e["name"].as_str().unwrap();
+                let version = if e["version"].is_null() {
+                    None
+                } else {
+                    Some(CoordinateVersion {
+                        major: e["version"]["major"].as_u64().unwrap(),
+                        minor: e["version"]["minor"].as_u64().unwrap(),
+                        patch: e["version"]["patch"].as_u64().unwrap(),
+                    })
+                };
+                let key = format!("{}/{}/{}", publisher, package, name);
+                let ok = got.publisher == publisher
+                    && got.package == package
+                    && got.name == name
+                    && got.version == version
+                    && versionless_key(input).map_or(false, |k| k == key)
+                    && local_name(input).map_or(false, |n| n == name);
+                if !ok {
+                    fails += 1;
+                    eprintln!("FAIL [{}] expected {} got {:?}", id, e, got);
+                }
+            }
+            Err(e) => {
+                if !expect_error {
+                    fails += 1;
+                    eprintln!("FAIL [{}] threw: {}", id, e.0);
+                }
+            }
+        }
+    }
+    for v in doc["lenientKeyVectors"].as_array().unwrap() {
+        let id = v["id"].as_str().unwrap();
+        let input = v["input"].as_str().unwrap();
+        let expected = v["expected"].as_str();
+        let got = lenient_versionless_key(input);
+        if got.as_deref() != expected {
+            fails += 1;
+            eprintln!("FAIL [{}] expected {:?} got {:?}", id, expected, got);
+        }
+    }
+    assert_eq!(fails, 0, "{} coordinate vector(s) failed", fails);
+}
+
 fn decode_subjects(input: &J) -> Package {
     let subjects = input["subjects"]
         .as_array()

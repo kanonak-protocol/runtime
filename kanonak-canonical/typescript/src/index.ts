@@ -10,6 +10,13 @@
  */
 export { canonicalForm, canonicalHash, CANONICAL_FORM_VERSION } from './CanonicalForm.js';
 export { Carrier, carrierOf } from './Datatypes.js';
+export {
+  parseCoordinate,
+  versionlessKey,
+  localName,
+  lenientVersionlessKey,
+} from './Coordinate.js';
+export type { Coordinate, CoordinateVersion } from './Coordinate.js';
 export type {
   CanonicalInput,
   CanonicalInputSubject,

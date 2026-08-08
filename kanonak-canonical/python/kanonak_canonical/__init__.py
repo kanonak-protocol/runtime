@@ -22,6 +22,109 @@ from typing import List, Optional
 CANONICAL_FORM_VERSION = "1"
 
 # ===========================================================================
+# Coordinates — publisher/package[@version]/name (issue #17)
+# ===========================================================================
+#
+# Two strictness levels, both pinned by ``vectors/coordinate-vectors.json``:
+# ``parse_coordinate`` (with the ``versionless_key`` / ``local_name``
+# conveniences) is STRICT and raises rather than returning a plausible-looking
+# tail; ``lenient_versionless_key`` is the total, non-raising structural
+# variant that carrier routing uses, so ``carrier_of`` stays total and
+# byte-identical under canonicalFormVersion "1" — an unparseable datatype URI
+# routes to no carrier (raw token preserved), never to a guess. No ordering
+# API on purpose: runtime consumers compare coordinates for equality only.
+# ``#`` is reserved for embedded resources and rejected by the strict parser.
+
+
+@dataclass(frozen=True)
+class CoordinateVersion:
+    major: int
+    minor: int
+    patch: int
+
+
+@dataclass(frozen=True)
+class Coordinate:
+    publisher: str
+    package: str
+    name: str
+    version: Optional[CoordinateVersion] = None  # None for the versionless form
+
+
+_VERSION_PART = re.compile(r"0|[1-9][0-9]*")  # exactly 0, or no leading zero
+_WHITESPACE = re.compile(r"\s")
+
+
+def _invalid_coordinate(uri: str, reason: str) -> ValueError:
+    return ValueError(
+        f"parse_coordinate: '{uri}' is not a valid Kanonak coordinate ({reason}); "
+        f"expected publisher/package[@major.minor.patch]/name"
+    )
+
+
+def parse_coordinate(uri: str) -> Coordinate:
+    """Parse ``publisher/package[@version]/name``. Strict: raises on malformed input."""
+    if uri == "":
+        raise _invalid_coordinate(uri, "empty string")
+    if _WHITESPACE.search(uri):
+        raise _invalid_coordinate(uri, "whitespace is not allowed")
+    if "#" in uri:
+        raise _invalid_coordinate(uri, "'#' is reserved for embedded resources")
+    segments = uri.split("/")
+    if len(segments) != 3:
+        raise _invalid_coordinate(uri, f"expected exactly 3 '/'-separated segments, got {len(segments)}")
+    publisher, middle, name = segments
+    if not publisher or not middle or not name:
+        raise _invalid_coordinate(uri, "empty segment")
+    if "@" in publisher or "@" in name:
+        raise _invalid_coordinate(uri, "'@' is only valid after the package name")
+    if "@" not in middle:
+        return Coordinate(publisher, middle, name)
+    package, version_part = middle.split("@", 1)
+    if not package:
+        raise _invalid_coordinate(uri, "empty package name before @")
+    if "@" in version_part:
+        raise _invalid_coordinate(uri, "more than one '@'")
+    parts = version_part.split(".")
+    if len(parts) != 3 or not all(_VERSION_PART.fullmatch(p) for p in parts):
+        raise _invalid_coordinate(
+            uri, f"version '{version_part}' is not exactly major.minor.patch (digits, no leading zeros)"
+        )
+    return Coordinate(publisher, package, name,
+                      CoordinateVersion(int(parts[0]), int(parts[1]), int(parts[2])))
+
+
+def versionless_key(uri: str) -> str:
+    """The versionless key ``publisher/package/name``. Strict: raises on malformed input."""
+    c = parse_coordinate(uri)
+    return f"{c.publisher}/{c.package}/{c.name}"
+
+
+def local_name(uri: str) -> str:
+    """The local name of a coordinate. Strict: raises on malformed input."""
+    return parse_coordinate(uri).name
+
+
+def lenient_versionless_key(uri: str) -> Optional[str]:
+    """Total structural reduction to the versionless key, for carrier routing.
+
+    Three non-empty ``/``-segments required; everything from the first ``@`` in
+    the middle segment is discarded WITHOUT validating it (the part before the
+    ``@`` must be non-empty). Returns ``None`` for anything else — never raises.
+    """
+    segments = uri.split("/")
+    if len(segments) != 3:
+        return None
+    publisher, middle, name = segments
+    if not publisher or not middle or not name:
+        return None
+    pkg = middle.split("@", 1)[0]
+    if not pkg:
+        return None
+    return f"{publisher}/{pkg}/{name}"
+
+
+# ===========================================================================
 # Carriers
 # ===========================================================================
 
@@ -59,20 +162,15 @@ _XSD_CARRIER.update({
 })
 
 
-def carrier_key(uri: str) -> str:
-    """``publisher/package/name`` carrier key from a datatype URI."""
-    idx = uri.rfind("/")
-    name = uri[idx + 1:]
-    head = uri[:idx]
-    slash = head.find("/")
-    publisher = head[:slash]
-    pkg = head[slash + 1:].split("@", 1)[0]
-    return f"{publisher}/{pkg}/{name}"
-
-
 def carrier_of(datatype_uri: str) -> Optional[Carrier]:
-    """Carrier for a datatype URI, or ``None`` (out-of-set → raw-token tier)."""
-    key = carrier_key(datatype_uri)
+    """Carrier for a datatype URI, or ``None`` (out-of-set → raw-token tier).
+
+    Routes on the total ``lenient_versionless_key``, not the raising parser —
+    a structurally unparseable datatype URI is a raw token, never a guess.
+    """
+    key = lenient_versionless_key(datatype_uri)
+    if key is None:
+        return None
     if key == "kanonak.org/core-rdf/langString":
         return Carrier.LANG_STRING
     prefix = "kanonak.org/core-xsd/"

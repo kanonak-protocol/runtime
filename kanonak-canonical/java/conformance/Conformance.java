@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.kanonak.canonical.Carrier;
+import org.kanonak.canonical.Coordinate;
 import org.kanonak.canonical.Datatypes;
 import org.kanonak.canonical.CanonicalForm;
 import org.kanonak.canonical.CanonicalForm.Package;
@@ -21,6 +22,7 @@ public final class Conformance {
         int fails = 0;
         fails += runLexical(Paths.get(vdir, "lexical-vectors.json"));
         fails += runFullForm(Paths.get(vdir, "full-form-vectors.json"));
+        fails += runCoordinate(Paths.get(vdir, "coordinate-vectors.json"));
         System.out.println(fails == 0 ? "\nALL VECTORS PASS" : "\n" + fails + " VECTOR(S) FAILED");
         System.exit(fails == 0 ? 0 : 1);
     }
@@ -80,6 +82,54 @@ public final class Conformance {
             }
         }
         System.out.println("full-form-vectors: " + pass + "/" + total + " pass, " + fail + " fail");
+        return fail;
+    }
+
+    @SuppressWarnings("unchecked")
+    static int runCoordinate(Path path) throws Exception {
+        Map<String, Object> doc = (Map<String, Object>) Json.parse(Files.readString(path, StandardCharsets.UTF_8));
+        int total = 0, pass = 0, fail = 0;
+        for (Object o : (List<Object>) doc.get("parseVectors")) {
+            Map<String, Object> v = (Map<String, Object>) o;
+            total++;
+            String id = (String) v.get("id");
+            String input = (String) v.get("input");
+            boolean expectError = Boolean.TRUE.equals(v.get("expectError"));
+            try {
+                Coordinate got = Coordinate.parse(input);
+                if (expectError) { fail++; System.out.println("  FAIL [" + id + "] expected error, got " + got); continue; }
+                Map<String, Object> e = (Map<String, Object>) v.get("expected");
+                Map<String, Object> ev = (Map<String, Object>) e.get("version");
+                boolean versionOk = ev == null
+                    ? got.version() == null
+                    : got.version() != null
+                        && got.version().major() == ((Double) ev.get("major")).intValue()
+                        && got.version().minor() == ((Double) ev.get("minor")).intValue()
+                        && got.version().patch() == ((Double) ev.get("patch")).intValue();
+                String expectedKey = e.get("publisher") + "/" + e.get("package") + "/" + e.get("name");
+                boolean ok = got.publisher().equals(e.get("publisher"))
+                    && got.packageName().equals(e.get("package"))
+                    && got.name().equals(e.get("name"))
+                    && versionOk
+                    && Coordinate.versionlessKey(input).equals(expectedKey)
+                    && Coordinate.localName(input).equals(e.get("name"));
+                if (ok) pass++;
+                else { fail++; System.out.println("  FAIL [" + id + "] expected " + e + ", got " + got); }
+            } catch (RuntimeException ex) {
+                if (expectError) pass++;
+                else { fail++; System.out.println("  FAIL [" + id + "] threw: " + ex.getMessage()); }
+            }
+        }
+        for (Object o : (List<Object>) doc.get("lenientKeyVectors")) {
+            Map<String, Object> v = (Map<String, Object>) o;
+            total++;
+            String id = (String) v.get("id");
+            String expected = (String) v.get("expected");
+            String got = Coordinate.lenientVersionlessKey((String) v.get("input"));
+            if (expected == null ? got == null : expected.equals(got)) pass++;
+            else { fail++; System.out.println("  FAIL [" + id + "] expected '" + expected + "', got '" + got + "'"); }
+        }
+        System.out.println("coordinate-vectors: " + pass + "/" + total + " pass, " + fail + " fail");
         return fail;
     }
 

@@ -6,6 +6,12 @@
 import { readFileSync } from 'node:fs';
 import { canonicalForm, canonicalHash } from './index.js';
 import { canonicalScalarLexical, type Carrier } from './Datatypes.js';
+import {
+  parseCoordinate,
+  versionlessKey,
+  localName,
+  lenientVersionlessKey,
+} from './Coordinate.js';
 
 const vdir = new URL('../../vectors/', import.meta.url);
 const read = (f: string): any => JSON.parse(readFileSync(new URL(f, vdir), 'utf8'));
@@ -50,6 +56,45 @@ for (const v of ff.vectors) {
   }
 }
 console.log(`full-form-vectors: ${fpass}/${ff.vectors.length} pass`);
+
+const co = read('coordinate-vectors.json');
+let cpass = 0;
+for (const v of co.parseVectors) {
+  if (v.expectError) {
+    try {
+      const got = parseCoordinate(v.input);
+      fails++; console.error(`coordinate ${v.id}: expected an error, got ${JSON.stringify(got)}`);
+    } catch { cpass++; }
+    continue;
+  }
+  try {
+    const got = parseCoordinate(v.input);
+    const e = v.expected;
+    const versionOk = e.version === null
+      ? got.version === undefined
+      : got.version !== undefined
+        && got.version.major === e.version.major
+        && got.version.minor === e.version.minor
+        && got.version.patch === e.version.patch;
+    const expectedKey = `${e.publisher}/${e.package}/${e.name}`;
+    const ok = got.publisher === e.publisher
+      && got.package_ === e.package
+      && got.name === e.name
+      && versionOk
+      && versionlessKey(v.input) === expectedKey
+      && localName(v.input) === e.name;
+    if (ok) cpass++;
+    else { fails++; console.error(`coordinate ${v.id}: expected ${JSON.stringify(e)} got ${JSON.stringify(got)}`); }
+  } catch (e) {
+    fails++; console.error(`coordinate ${v.id}: threw ${(e as Error).message}`);
+  }
+}
+for (const v of co.lenientKeyVectors) {
+  const got = lenientVersionlessKey(v.input) ?? null;
+  if (got === v.expected) cpass++;
+  else { fails++; console.error(`coordinate ${v.id}: expected ${JSON.stringify(v.expected)} got ${JSON.stringify(got)}`); }
+}
+console.log(`coordinate-vectors: ${cpass}/${co.parseVectors.length + co.lenientKeyVectors.length} pass`);
 
 if (fails > 0) { console.error(`\n${fails} FAILURES`); process.exit(1); }
 console.log('\nALL VECTORS PASS');

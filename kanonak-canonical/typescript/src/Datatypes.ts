@@ -12,8 +12,11 @@
  *
  * STABILITY CONTRACT: this module is FROZEN to `canonicalFormVersion` "1" — its
  * output bytes are permanent content addresses. Changing any rule below means a
- * NEW canonical-form version, never an edit in place. Self-contained on purpose.
+ * NEW canonical-form version, never an edit in place. Depends only on the
+ * coordinate module (pure functions, vector-pinned) — no parser, no object
+ * model, no runtime numeric coercion.
  */
+import { lenientVersionlessKey } from './Coordinate.js';
 
 /** The closed set of canonical-form carriers (v1). */
 export enum Carrier {
@@ -30,17 +33,6 @@ export enum Carrier {
   Time = 'time',
   HexBinary = 'hexBinary',
   Base64Binary = 'base64Binary',
-}
-
-/** `publisher/package/name` key from a datatype URI (version stripped). */
-function datatypeKey(uri: string): string {
-  const lastSlash = uri.lastIndexOf('/');
-  const name = uri.slice(lastSlash + 1);
-  const head = uri.slice(0, lastSlash); // publisher/package@version
-  const firstSlash = head.indexOf('/');
-  const publisher = head.slice(0, firstSlash);
-  const pkg = head.slice(firstSlash + 1).split('@', 1)[0];
-  return `${publisher}/${pkg}/${name}`;
 }
 
 /**
@@ -77,11 +69,14 @@ const LANG_STRING_KEY = 'kanonak.org/core-rdf/langString';
 
 /**
  * The carrier for a datatype URI, or `undefined` if outside the v1 set. An
- * out-of-set datatype is canonicalized as a byte-preserved raw token, never
- * guessed into a carrier.
+ * out-of-set OR structurally unparseable datatype is canonicalized as a
+ * byte-preserved raw token, never guessed into a carrier — which is why the
+ * routing key comes from the total `lenientVersionlessKey`, not the throwing
+ * parser (pinned by the lenientKeyVectors in coordinate-vectors.json).
  */
 export function carrierOf(datatypeUri: string): Carrier | undefined {
-  const key = datatypeKey(datatypeUri);
+  const key = lenientVersionlessKey(datatypeUri);
+  if (key === undefined) return undefined;
   if (key === LANG_STRING_KEY) return Carrier.LangString;
   return CARRIER_BY_URI.get(key);
 }
