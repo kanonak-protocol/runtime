@@ -591,6 +591,46 @@
       "expectError": true
     },
     {
+      "id": "matches-astral-length-counts-code-points",
+      "description": "PINNED counting unit: an astral character (surrogate pair in UTF-16 hosts) is ONE code point — 'a🧬b' is exactly 3 under .{3}. A port counting code units sees 4 and must fail this vector, not the tenant.",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "a🧬b" },
+        "pattern": "(?s)^.{3}$"
+      },
+      "expected": 1
+    },
+    {
+      "id": "matches-astral-single-dot",
+      "description": "One astral character matches a single `.`",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "🧬" },
+        "pattern": "^.$"
+      },
+      "expected": 1
+    },
+    {
+      "id": "matches-astral-min-length-lowering",
+      "description": "The minLength lowering shape over astral input: 3 code points satisfies minLength 3 in every port",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "a🧬b" },
+        "pattern": "(?s)^.{4,}$"
+      },
+      "expected": 0
+    },
+    {
+      "id": "matches-bare-literal-brace-outside-subset",
+      "description": "A bare `{` that is not a quantifier is engine-divergent (lenient-literal in some, error in others) — the subset requires escaping it",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "a{b" },
+        "pattern": "a{b"
+      },
+      "expectError": true
+    },
+    {
       "id": "matches-non-string-source-errors",
       "expr": {
         "type": "kanonak.org/transformations/Matches",

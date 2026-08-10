@@ -411,26 +411,45 @@ const LIST_FOLDS: Record<string, ListFold> = {
  * LOUD error, the same discipline as Round/Modulo; WIDENING the subset later
  * (an error becoming a defined result) is additive within v2.
  *
+ * COUNTING UNIT — pinned: `.` and quantifiers count Unicode CODE POINTS, in
+ * every port. An astral-plane character (a surrogate pair in UTF-16 hosts)
+ * is ONE `.`, and `.{3}` matches exactly three code points — matching RE2's
+ * rune model and Python's, and what SHACL/SPARQL string length means. The
+ * UTF-16 engines must opt in (this port compiles with the `u` flag; Java
+ * and C# ports normalize equivalently) — without the pin, `.{m,n}` counts
+ * different units across exactly these seven targets, and the length
+ * lowering (`(?s)^.{m,}$`) would judge astral input differently per
+ * language. The astral vectors gate this: a port that counts code units
+ * fails conformance, not the tenant.
+ *
  * Allowed: literals; `.`; anchors `^` `$`; alternation `|`; groups `(...)`,
  * `(?:...)`; a WHOLE-PATTERN flag prefix over `i`/`m`/`s` (`(?i)` at position
  * 0 only — each port translates it to its host flag mechanism); quantifiers
  * `*` `+` `?` `{m}` `{m,}` `{m,n}`; character classes with ranges and
- * negation; escapes `\d \D \w \W \s \S \b \B \n \r \t \f \v \xHH` and
- * escaped punctuation.
+ * negation; escapes `\d \D \w \W \s \S \b \B \n \r \t \f \v \xHH`, escaped
+ * syntax punctuation (`\.` `\*` `\+` `\?` `\(` `\)` `\[` `\]` `\{` `\}`
+ * `\|` `\^` `\$` `\\` `\/`), and `\-` inside character classes.
  *
  * Rejected (divergent or unsafe across engines): lookahead/lookbehind, named
  * groups, backreferences (`\1`…, `\k`), MID-pattern flag groups (`(?i:…)` —
  * not portable to the JS and Python engines), `\p{…}`/`\P{…}` unicode
  * property classes, POSIX classes (`[[:alpha:]]`), class intersection
- * (`&&`), atomic groups, conditionals, comments, octal/`\u`/`\x{…}` escapes.
+ * (`&&`), atomic groups, conditionals, comments, octal/`\u`/`\x{…}` escapes,
+ * escaped space (`\ `), `\-` outside a class, and a bare unescaped `{` that
+ * is not a quantifier (literal braces must be escaped — engines disagree on
+ * the lenient reading, so the subset requires the explicit form).
  */
 export function validateMatchesPattern(pattern: string): void {
   const fail = (what: string): never => {
     throw new ExpressionError(`Matches pattern is outside the pinned regex subset (${what}): ${pattern}`);
   };
+  // The u-legal intersection: character-class escapes, control escapes,
+  // \xHH, and escaped SYNTAX punctuation. `\-` is legal only INSIDE a class;
+  // `\ ` (escaped space) is not legal at all — both are Annex-B leniencies
+  // the code-point mode (and other engines) reject.
   const ALLOWED_ESCAPES = new Set([
     'd', 'D', 'w', 'W', 's', 'S', 'b', 'B', 'n', 'r', 't', 'f', 'v',
-    '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|', '^', '$', '\\', '/', '-', ' ',
+    '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|', '^', '$', '\\', '/',
   ]);
   let inClass = false;
   for (let i = 0; i < pattern.length; i++) {
@@ -450,6 +469,11 @@ export function validateMatchesPattern(pattern: string): void {
       if (e === 'p' || e === 'P') fail(`unicode property class \\${e}{…}`);
       if (e === 'k') fail('named backreference \\k');
       if (e === 'u') fail('\\u escape');
+      if (e === '-') {
+        if (!inClass) fail('\\- outside a character class');
+        i++;
+        continue;
+      }
       if (!ALLOWED_ESCAPES.has(e!)) fail(`escape \\${e}`);
       i++;
       continue;
@@ -484,13 +508,17 @@ function splitFlagPrefix(pattern: string): { flags: string; body: string } {
 /** Compile + test under fn:matches semantics: UNANCHORED (substring) — authors
  * write `^…$` for a whole-string match. The flag prefix splits off first
  * (translated to host RegExp flags), then the body is subset-validated, so
- * the host engine only ever sees portable constructs. */
+ * the host engine only ever sees portable constructs. Always compiled with
+ * `u` — the pinned CODE-POINT counting unit (an astral character is one `.`;
+ * `.{m,n}` counts code points, matching RE2/Python and SHACL string length).
+ * `u` also rejects a bare literal `{`, turning an engine-divergent lenient
+ * reading into the subset's loud error. */
 function matchesPattern(input: string, pattern: string): boolean {
   const { flags, body } = splitFlagPrefix(pattern);
   validateMatchesPattern(body);
   let re: RegExp;
   try {
-    re = new RegExp(body, flags);
+    re = new RegExp(body, flags + 'u');
   } catch {
     throw new ExpressionError(`Matches pattern does not compile: ${pattern}`);
   }

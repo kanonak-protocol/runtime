@@ -173,16 +173,29 @@ same pattern to the same language, and ReDoS-safe (no catastrophic
 backtracking — a requirement for a predicate that may gate on adversarial
 input, not a nicety).
 
+**Counting unit — pinned: code points.** `.` and quantifiers count Unicode
+code points in every port: an astral-plane character (a surrogate pair in
+UTF-16 hosts) is ONE `.`, and `.{3}` matches exactly three code points. This
+matches RE2's rune model, Python, and what SHACL/SPARQL string length means —
+and it is why the `minLength`/`maxLength` lowering (`(?s)^.{m,}$`) is safe to
+express as regex cardinality. UTF-16 engines opt in explicitly (the JS port
+compiles with the `u` flag; Java/C# ports normalize equivalently); the astral
+vectors gate it, so a port that counts code units fails conformance, not the
+tenant.
+
 - **Allowed**: literals; `.`; `^` `$`; `|`; `(...)`, `(?:...)`; a
   whole-pattern flag prefix `(?i)` / `(?m)` / `(?s)` (position 0 only; each
   port translates to its host flag mechanism); `*` `+` `?` `{m}` `{m,}`
   `{m,n}`; character classes with ranges and negation; escapes
-  `\d \D \w \W \s \S \b \B \n \r \t \f \v \xHH` and escaped punctuation.
+  `\d \D \w \W \s \S \b \B \n \r \t \f \v \xHH`, escaped syntax punctuation,
+  and `\-` inside character classes.
 - **Rejected, loud error**: lookahead/lookbehind, named groups,
   backreferences, mid-pattern flag groups (`(?i:…)` — not portable to the JS
   and Python engines), `\p{…}`/`\P{…}`, POSIX classes (`[[:alpha:]]`), class
   intersection (`&&`), atomic groups, conditionals, comments,
-  octal/`\u`/`\x{…}` escapes.
+  octal/`\u`/`\x{…}` escapes, escaped space, `\-` outside a class, and a
+  bare unescaped `{` that is not a quantifier (engines disagree on the
+  lenient literal reading — the subset requires `\{`).
 
 Out-of-subset patterns error at evaluation — the same fail-closed discipline
 as `Round`/`Modulo` — and the adversarial vectors probe exactly the
