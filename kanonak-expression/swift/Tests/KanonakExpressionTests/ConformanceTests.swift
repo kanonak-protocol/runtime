@@ -1,11 +1,10 @@
-// Conformance: drive the Swift port with the shared expression parity vectors.
-// Each vector's `expr` is evaluated with a `resolve` hook that binds `tx.VarRef`
-// names from the vector's `env` — the demonstration that variable binding lives
-// in the caller, not the runtime. Ordered-comparison vectors additionally supply
-// `closures` (the ClosureTable) and `refEnv` (identity bindings for the
-// resolveRef hook). Every vector also runs through `explain` and its root value
-// must agree with `evaluate`; vectors with a `trace` assert the verdict tree
-// structurally.
+// Conformance: drive the Swift port with the shared expression parity vectors —
+// BOTH files: expression-vectors.json (v1 — passes UNCHANGED under the v2
+// kernel; the numeric-regression gate) and expression-vectors-2.json (the
+// value-domain extension). env bindings and expected are Values (numbers,
+// strings, arrays, {"ref": …} objects). Every vector runs through `evaluate`
+// AND `explain` and their values must agree; vectors with a `trace` assert the
+// verdict tree structurally.
 
 import Foundation
 import XCTest
@@ -32,9 +31,28 @@ private func loadJSON(_ name: String) throws -> [String: Any] {
     return doc
 }
 
-/// The conformance context: numeric bindings (env) plus identity bindings (refEnv).
+/// JSON -> Value, the vector-file encoding. Booleans normalize to 1/0.
+/// (JSONSerialization surfaces booleans as NSNumber; the CFBoolean check keeps
+/// true/false from being read as 1.0/0.0 numbers by accident — which is in
+/// fact exactly the normalization the domain wants, so both paths agree.)
+private func valueOf(_ v: Any) throws -> EvalValue {
+    if let b = v as? Bool, v is NSNumber, CFGetTypeID(v as CFTypeRef) == CFBooleanGetTypeID() {
+        return .num(b ? 1 : 0)
+    }
+    if let n = v as? NSNumber { return .num(n.doubleValue) }
+    if let s = v as? String { return .str(s) }
+    if let arr = v as? [Any] { return .list(try arr.map(valueOf)) }
+    if let obj = v as? [String: Any], let r = obj["ref"] as? String { return .ref(r) }
+    throw ExpressionError("unrepresentable vector value: \(v)")
+}
+
+/// Deep Value equality — the vector-comparison rule (lists structural; EvalValue
+/// is Equatable with exactly these semantics).
+private func deepEqual(_ a: EvalValue, _ b: EvalValue) -> Bool { a == b }
+
+/// The conformance context: value bindings (env) plus identity bindings (refEnv).
 private struct Ctx {
-    let env: [String: Double]
+    let env: [String: EvalValue]
     let refEnv: [String: String]
 }
 
@@ -52,8 +70,7 @@ private let resolve: Resolve<Ctx> = { node, ctx, _ in
     return bound
 }
 
-/// The identity-domain mirror: tx.VarRef -> refEnv member URI. Same division as
-/// `resolve` — the kernel owns UriLiteral, the caller owns bindings.
+/// The identity-domain mirror: tx.VarRef -> refEnv member URI.
 private let resolveRef: ResolveRef<Ctx> = { node, ctx in
     guard node["type"] as? String == varRef else {
         throw ExpressionError("No reference resolver for leaf '\(node["type"] as? String ?? "")'")
@@ -67,79 +84,113 @@ private let resolveRef: ResolveRef<Ctx> = { node, ctx in
     return bound
 }
 
-/// Structural equality of a produced verdict tree against the vector's expected
-/// JSON tree, including absent-vs-present refs.
-private func traceMatches(_ got: TraceNode, _ want: [String: Any]) -> Bool {
-    guard got.type == want["type"] as? String else { return false }
-    guard got.value == (want["value"] as? NSNumber)?.doubleValue else { return false }
-    guard got.leftRef == want["leftRef"] as? String else { return false }
-    guard got.rightRef == want["rightRef"] as? String else { return false }
+private func closuresOf(_ v: [String: Any]) -> ClosureTable? {
+    guard let raw = v["closures"] as? [String: Any] else { return nil }
+    var table: ClosureTable = [:]
+    for (prop, members) in raw {
+        var inner: [String: [String]] = [:]
+        if let m = members as? [String: Any] {
+            for (from, reach) in m {
+                inner[from] = (reach as? [Any])?.compactMap { $0 as? String } ?? []
+            }
+        }
+        table[prop] = inner
+    }
+    return table
+}
+
+/// Structural equality of a verdict tree against the vector's expected JSON tree.
+private func traceMatches(_ got: TraceNode, _ want: [String: Any]) throws -> Bool {
+    guard want["type"] as? String == got.type else { return false }
+    guard let wantValue = want["value"], deepEqual(got.value, try valueOf(wantValue)) else { return false }
+    if want["leftRef"] as? String != got.leftRef { return false }
+    if want["rightRef"] as? String != got.rightRef { return false }
     let wantChildren = want["children"] as? [[String: Any]] ?? []
-    guard got.children.count == wantChildren.count else { return false }
-    return zip(got.children, wantChildren).allSatisfy { pair in traceMatches(pair.0, pair.1) }
+    guard wantChildren.count == got.children.count else { return false }
+    for (g, w) in zip(got.children, wantChildren) {
+        if !(try traceMatches(g, w)) { return false }
+    }
+    return true
 }
 
 final class ExpressionVectorTests: XCTestCase {
-    func testExpressionVectors() throws {
-        let doc = try loadJSON("expression-vectors.json")
-        XCTAssertEqual(doc["expressionRuntimeVersion"] as? String, expressionRuntimeVersion)
+    private func runFile(_ name: String) throws {
+        let doc = try loadJSON(name)
+        guard let vectors = doc["vectors"] as? [[String: Any]], !vectors.isEmpty else {
+            XCTFail("\(name): no vectors loaded — refusing to report a passing gate")
+            return
+        }
 
-        let vectors = doc["vectors"] as! [[String: Any]]
-        XCTAssertFalse(vectors.isEmpty)
-
-        // Every vector must be REACHED, not merely not-failed: an empty or
-        // short-circuited loop would otherwise pass silently.
-        var evaluated = 0
-
+        var pass = 0
         for v in vectors {
-            let id = v["id"] as! String
-            let expr = v["expr"] as! ExprNode
-
-            // `env` values arrive as JSON numbers; the resolve hook binds Doubles.
-            var env: [String: Double] = [:]
-            for (name, raw) in (v["env"] as? [String: Any] ?? [:]) {
-                env[name] = (raw as? NSNumber)?.doubleValue
+            let id = v["id"] as? String ?? "(no id)"
+            guard let expr = v["expr"] as? [String: Any] else {
+                XCTFail("[\(name)/\(id)] missing expr")
+                continue
             }
-            let refEnv = v["refEnv"] as? [String: String] ?? [:]
+            var env: [String: EvalValue] = [:]
+            for (k, x) in (v["env"] as? [String: Any] ?? [:]) {
+                env[k] = try valueOf(x)
+            }
+            let refEnv = (v["refEnv"] as? [String: String]) ?? [:]
             let ctx = Ctx(env: env, refEnv: refEnv)
+            let options = EvalOptions<Ctx>(closures: closuresOf(v), resolveRef: resolveRef)
 
-            var closures: ClosureTable? = nil
-            if let raw = v["closures"] as? [String: Any] {
-                var table: ClosureTable = [:]
-                for (prop, members) in raw {
-                    var inner: [String: [String]] = [:]
-                    for (from, reachable) in (members as? [String: Any] ?? [:]) {
-                        inner[from] = (reachable as? [Any])?.compactMap { $0 as? String } ?? []
-                    }
-                    table[prop] = inner
-                }
-                closures = table
-            }
-            let options = EvalOptions<Ctx>(closures: closures, resolveRef: resolveRef)
-
-            if v["expectError"] as? Bool ?? false {
-                XCTAssertThrowsError(try evaluate(expr, ctx, resolve, options), "[\(id)] expected an error from evaluate")
-                XCTAssertThrowsError(try explain(expr, ctx, resolve, options), "[\(id)] expected an error from explain")
-                evaluated += 1
+            let expectError = v["expectError"] as? Bool ?? false
+            if expectError {
+                var evalThrew = false
+                var explainThrew = false
+                do { _ = try evaluate(expr, ctx, resolve, options: options) } catch { evalThrew = true }
+                do { _ = try explain(expr, ctx, resolve, options: options) } catch { explainThrew = true }
+                if evalThrew && explainThrew { pass += 1 }
+                else { XCTFail("[\(name)/\(id)] expected an error from evaluate AND explain") }
                 continue
             }
 
-            let expected = (v["expected"] as! NSNumber).doubleValue
-            let got = try evaluate(expr, ctx, resolve, options)
-            let trace = try explain(expr, ctx, resolve, options)
-            if let tolerance = (v["tolerance"] as? NSNumber)?.doubleValue {
-                XCTAssertEqual(got, expected, accuracy: tolerance, "[\(id)]")
-            } else {
-                XCTAssertEqual(got, expected, "[\(id)]")
+            let got: EvalValue
+            let traced: TraceNode
+            do {
+                got = try evaluate(expr, ctx, resolve, options: options)
+                traced = try explain(expr, ctx, resolve, options: options)
+            } catch {
+                XCTFail("[\(name)/\(id)] threw: \(error)")
+                continue
             }
-            XCTAssertEqual(trace.value, got, "[\(id)] explain value must equal evaluate value")
-            if let wantTrace = v["trace"] as? [String: Any] {
-                XCTAssertTrue(traceMatches(trace, wantTrace), "[\(id)] trace mismatch")
-            }
-            evaluated += 1
-        }
 
-        XCTAssertEqual(evaluated, vectors.count, "every vector must be evaluated")
-        print("expression-vectors: \(evaluated)/\(vectors.count) evaluated")
+            let expected = try valueOf(v["expected"] ?? NSNull())
+            let ok: Bool
+            if let tol = (v["tolerance"] as? NSNumber)?.doubleValue {
+                if case let .num(g) = got, case let .num(e) = expected {
+                    ok = abs(g - e) <= tol
+                } else {
+                    ok = false
+                }
+            } else {
+                ok = deepEqual(got, expected)
+            }
+            guard ok else {
+                XCTFail("[\(name)/\(id)] expected \(expected), got \(got)")
+                continue
+            }
+            guard deepEqual(traced.value, got) else {
+                XCTFail("[\(name)/\(id)] explain value \(traced.value) != evaluate value \(got)")
+                continue
+            }
+            if let wantTrace = v["trace"] as? [String: Any] {
+                guard try traceMatches(traced, wantTrace) else {
+                    XCTFail("[\(name)/\(id)] trace mismatch")
+                    continue
+                }
+            }
+            pass += 1
+        }
+        print("\(name): \(pass)/\(vectors.count) pass")
+        XCTAssertEqual(pass, vectors.count, "\(name): \(vectors.count - pass) vector(s) failed")
+    }
+
+    func testExpressionVectors() throws {
+        // v1 vectors are the regression gate: every one passes unchanged under v2.
+        try runFile("expression-vectors.json")
+        try runFile("expression-vectors-2.json")
     }
 }

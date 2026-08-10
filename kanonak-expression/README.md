@@ -16,20 +16,34 @@ differences.
 
 ## Ports
 
-Version 2 lands in the TypeScript reference kernel first; the remaining ports
-follow under the conformance-vector discipline. Every port ALWAYS passes the
-v1 vector file (the numeric core is unchanged); a port is v2-complete when it
-also passes `expression-vectors-2.json`.
+Every port passes BOTH vector files: `expression-vectors.json` (v1 — the
+numeric-regression gate, unchanged) and `expression-vectors-2.json` (the v2
+value-domain surface).
 
 | Language | Path | v1 vectors | v2 vectors | Conformance command |
 |---|---|---|---|---|
 | TypeScript | [`typescript/`](./typescript) | ✅ | ✅ | `npm run conformance` |
-| Rust | [`rust/`](./rust) | ✅ | ⏳ | `cargo test` |
-| Python | [`python/`](./python) | ✅ | ⏳ | `python conformance.py ../vectors` |
-| Go | [`go/`](./go) | ✅ | ⏳ | `go test ./...` |
-| Java | [`java/`](./java) | ✅ | ⏳ | `javac -d out src/main/java/org/kanonak/expression/*.java conformance/Conformance.java && java -cp out Conformance ../vectors` |
-| C# | [`csharp/`](./csharp) | ✅ | ⏳ | `cd csharp && dotnet run --project test/Kanonak.Expression.Conformance -- ../vectors` |
-| Swift | [`swift/`](./swift) | ✅ | ⏳ | `swift test --filter ExpressionVectorTests` (at the repo root) |
+| Rust | [`rust/`](./rust) | ✅ | ✅ | `cargo test` |
+| Python | [`python/`](./python) | ✅ | ✅ | `python conformance.py ../vectors` |
+| Go | [`go/`](./go) | ✅ | ✅ | `go test ./...` (or `go run ./cmd/conformance`) |
+| Java | [`java/`](./java) | ✅ | ✅ | `javac -d out src/main/java/org/kanonak/expression/*.java conformance/Conformance.java && java -cp out Conformance ../vectors` |
+| C# | [`csharp/`](./csharp) | ✅ | ✅ | `cd csharp && dotnet run --project test/Kanonak.Expression.Conformance -- ../vectors` |
+| Swift | [`swift/`](./swift) | ✅ | ✅† | `swift test --filter ExpressionVectorTests` (at the repo root) |
+
+† The Swift port is written against the same contract and vectors but is
+verified in CI (no local Swift toolchain on the development host) — it is not
+release-ready until its CI conformance run is green.
+
+Version 2 dialect notes per engine: RE2-family (Rust/Go) is the subset's home
+— code points and ASCII `` native. JS compiles with `u` and translates
+non-dotAll `.` to `[^
+]`. Java translates ``→`` and non-dotAll `.`,
+and adds `UNICODE_CASE`. Python expands ``/`\B` to ASCII lookarounds
+(`re.ASCII` would disable the pinned Unicode case folding). C# owes the most:
+surrogate-pair-aware `.` (its Regex counts UTF-16 code units) and lookaround
+``/`\B`. Swift/ICU mirrors Java plus lookaround ``/`\B`. Every
+translation is gated by the astral / ``-dot / VT / case-fold / shorthand
+vectors.
 
 ## The three layers
 
