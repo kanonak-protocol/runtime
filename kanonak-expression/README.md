@@ -183,19 +183,33 @@ compiles with the `u` flag; Java/C# ports normalize equivalently); the astral
 vectors gate it, so a port that counts code units fails conformance, not the
 tenant.
 
+**Shorthand classes — pinned: ASCII, by textual expansion.** The native
+shorthands diverge across exactly our targets (Rust/Python `\d` matches
+Arabic-Indic digits; JS `\s` matches NBSP; `\b` is Unicode in Rust/Python,
+ASCII in JS/RE2). The dialect therefore DEFINES them by expansion — `\d` ≡
+`[0-9]`, `\w` ≡ `[0-9A-Za-z_]`, `\s` ≡ ASCII whitespace (` \t\n\r\f\x0B`),
+negations likewise outside classes — and every port applies the expansion
+textually before compiling (including the JS port, whose native `\s` is
+wider than the pin). `\b`/`\B` are ASCII word boundaries (native in JS/RE2;
+Rust uses `(?-u:\b)`, Python compiles with `re.ASCII`). Negated shorthands
+inside a class (`[\D]`) are rejected — inexpressible as fragments. The
+Arabic-digit / NBSP / `\bé` vectors gate all of this per port.
+
 - **Allowed**: literals; `.`; `^` `$`; `|`; `(...)`, `(?:...)`; a
   whole-pattern flag prefix `(?i)` / `(?m)` / `(?s)` (position 0 only; each
   port translates to its host flag mechanism); `*` `+` `?` `{m}` `{m,}`
   `{m,n}`; character classes with ranges and negation; escapes
-  `\d \D \w \W \s \S \b \B \n \r \t \f \v \xHH`, escaped syntax punctuation,
-  and `\-` inside character classes.
+  `\d \D \w \W \s \S \b \B \n \r \t \f \v \xHH` (per the pinned ASCII
+  semantics above), escaped syntax punctuation, and `\-` inside character
+  classes.
 - **Rejected, loud error**: lookahead/lookbehind, named groups,
   backreferences, mid-pattern flag groups (`(?i:…)` — not portable to the JS
   and Python engines), `\p{…}`/`\P{…}`, POSIX classes (`[[:alpha:]]`), class
   intersection (`&&`), atomic groups, conditionals, comments,
-  octal/`\u`/`\x{…}` escapes, escaped space, `\-` outside a class, and a
-  bare unescaped `{` that is not a quantifier (engines disagree on the
-  lenient literal reading — the subset requires `\{`).
+  octal/`\u`/`\x{…}` escapes, escaped space, `\-` outside a class,
+  `\b`/`\B`/`\D`/`\W`/`\S` inside a class, and a bare unescaped `{` that is
+  not a quantifier (engines disagree on the lenient literal reading — the
+  subset requires `\{`).
 
 Out-of-subset patterns error at evaluation — the same fail-closed discipline
 as `Round`/`Modulo` — and the adversarial vectors probe exactly the
