@@ -1,0 +1,680 @@
+{
+  "expressionRuntimeVersion": "2",
+  "description": "Behavior parity vectors for expressionRuntimeVersion 2 — the value-domain extension (number | string | ref | list), the list/aggregate/membership family, polymorphic Equals, kind predicates, lambda binding (Filter/ListMap/ForEach), and Matches over the pinned RE2-compatible XSD-regex subset. Runs IN ADDITION to expression-vectors.json (v1), every vector of which must pass unchanged under a v2 kernel — that file is the numeric-regression gate. `expected` and `env` values are Values: JSON numbers, strings, arrays (lists), and {\"ref\": \"publisher/package/name\"} objects (refs). Normative list-family semantics are the SDK reference engine's: Sum on empty = 0; Min/Max/Average on empty = loud error; Count type-agnostic; absence is the empty list; predicates fail closed on type-confused operands, computations fail loud.",
+  "vectors": [
+    {
+      "id": "string-literal",
+      "expr": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "hello" },
+      "expected": "hello"
+    },
+    {
+      "id": "uri-literal-as-value",
+      "description": "UriLiteral is a kernel-known literal in v2: it evaluates to its ref identity",
+      "expr": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org/colors/red" },
+      "expected": { "ref": "example.org/colors/red" }
+    },
+    {
+      "id": "var-ref-binds-list",
+      "description": "The caller's resolve may return any Value — here a list",
+      "expr": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+      "env": { "xs": [1, 2, 3] },
+      "expected": [1, 2, 3]
+    },
+    {
+      "id": "count-basic",
+      "expr": {
+        "type": "kanonak.org/transformations/Count",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [1, 2, 3] },
+      "expected": 3
+    },
+    {
+      "id": "count-empty-is-zero",
+      "description": "Absence is the empty list; Count of absence is 0",
+      "expr": {
+        "type": "kanonak.org/transformations/Count",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [] },
+      "expected": 0
+    },
+    {
+      "id": "count-is-type-agnostic",
+      "expr": {
+        "type": "kanonak.org/transformations/Count",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [1, "a", { "ref": "example.org/p/x" }] },
+      "expected": 3
+    },
+    {
+      "id": "count-scalar-promotes",
+      "description": "A scalar source promotes to a one-element list (the reference-engine rule)",
+      "expr": {
+        "type": "kanonak.org/transformations/Count",
+        "source": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 5 }
+      },
+      "expected": 1
+    },
+    {
+      "id": "sum-basic",
+      "expr": {
+        "type": "kanonak.org/transformations/Sum",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [1, 2.5, 3] },
+      "expected": 6.5
+    },
+    {
+      "id": "sum-empty-is-zero",
+      "expr": {
+        "type": "kanonak.org/transformations/Sum",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [] },
+      "expected": 0
+    },
+    {
+      "id": "sum-non-numeric-errors",
+      "expr": {
+        "type": "kanonak.org/transformations/Sum",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [1, "two"] },
+      "expectError": true
+    },
+    {
+      "id": "min-basic",
+      "expr": {
+        "type": "kanonak.org/transformations/Min",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [3, 1, 2] },
+      "expected": 1
+    },
+    {
+      "id": "max-basic",
+      "expr": {
+        "type": "kanonak.org/transformations/Max",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [3, 1, 2] },
+      "expected": 3
+    },
+    {
+      "id": "average-basic",
+      "expr": {
+        "type": "kanonak.org/transformations/Average",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [1, 2, 3, 4] },
+      "expected": 2.5
+    },
+    {
+      "id": "min-empty-errors",
+      "expr": {
+        "type": "kanonak.org/transformations/Min",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [] },
+      "expectError": true
+    },
+    {
+      "id": "average-empty-errors",
+      "expr": {
+        "type": "kanonak.org/transformations/Average",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [] },
+      "expectError": true
+    },
+    {
+      "id": "max-non-numeric-errors",
+      "expr": {
+        "type": "kanonak.org/transformations/Max",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": ["a"] },
+      "expectError": true
+    },
+    {
+      "id": "join-basic",
+      "expr": {
+        "type": "kanonak.org/transformations/Join",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "separator": ", "
+      },
+      "env": { "xs": ["a", "b", "c"] },
+      "expected": "a, b, c"
+    },
+    {
+      "id": "join-empty-is-empty-string",
+      "expr": {
+        "type": "kanonak.org/transformations/Join",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "separator": ","
+      },
+      "env": { "xs": [] },
+      "expected": ""
+    },
+    {
+      "id": "join-numbers-ecmascript-tostring",
+      "description": "Numbers stringify per the ECMAScript rule RFC 8785 pins (1 not 1.0; 2.5 stays 2.5)",
+      "expr": {
+        "type": "kanonak.org/transformations/Join",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "separator": "-"
+      },
+      "env": { "xs": [1, 2.5, 100] },
+      "expected": "1-2.5-100"
+    },
+    {
+      "id": "join-refs-use-local-name",
+      "expr": {
+        "type": "kanonak.org/transformations/Join",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "separator": "+"
+      },
+      "env": { "xs": [{ "ref": "example.org/colors/red" }, { "ref": "example.org/colors/blue" }] },
+      "expected": "red+blue"
+    },
+    {
+      "id": "join-nested-list-errors",
+      "expr": {
+        "type": "kanonak.org/transformations/Join",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "separator": ","
+      },
+      "env": { "xs": ["a", ["b", "c"]] },
+      "expectError": true
+    },
+    {
+      "id": "contains-string-hit",
+      "expr": {
+        "type": "kanonak.org/transformations/Contains",
+        "haystack": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "needle": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "b" }
+      },
+      "env": { "xs": ["a", "b", "c"] },
+      "expected": 1
+    },
+    {
+      "id": "contains-miss",
+      "expr": {
+        "type": "kanonak.org/transformations/Contains",
+        "haystack": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "needle": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "z" }
+      },
+      "env": { "xs": ["a", "b", "c"] },
+      "expected": 0
+    },
+    {
+      "id": "contains-ref-identity",
+      "description": "Refs compare by canonical versionless URI identity — the tx.Equals rule",
+      "expr": {
+        "type": "kanonak.org/transformations/Contains",
+        "haystack": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "needle": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org/colors/blue" }
+      },
+      "env": { "xs": [{ "ref": "example.org/colors/red" }, { "ref": "example.org/colors/blue" }] },
+      "expected": 1
+    },
+    {
+      "id": "contains-cross-kind-is-false",
+      "description": "The string \"1\" is not the number 1 — cross-kind equality is false, never an error",
+      "expr": {
+        "type": "kanonak.org/transformations/Contains",
+        "haystack": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "needle": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "1" }
+      },
+      "env": { "xs": [1, 2, 3] },
+      "expected": 0
+    },
+    {
+      "id": "contains-empty-haystack",
+      "expr": {
+        "type": "kanonak.org/transformations/Contains",
+        "haystack": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "needle": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 1 }
+      },
+      "env": { "xs": [] },
+      "expected": 0
+    },
+    {
+      "id": "equals-strings",
+      "expr": {
+        "type": "kanonak.org/transformations/Equals",
+        "compareLeft": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "abc" },
+        "compareRight": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "abc" }
+      },
+      "expected": 1
+    },
+    {
+      "id": "equals-strings-differ",
+      "expr": {
+        "type": "kanonak.org/transformations/Equals",
+        "compareLeft": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "abc" },
+        "compareRight": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "abd" }
+      },
+      "expected": 0
+    },
+    {
+      "id": "equals-cross-kind-string-number",
+      "expr": {
+        "type": "kanonak.org/transformations/Equals",
+        "compareLeft": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "1" },
+        "compareRight": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 1 }
+      },
+      "expected": 0
+    },
+    {
+      "id": "equals-refs-same-identity",
+      "expr": {
+        "type": "kanonak.org/transformations/Equals",
+        "compareLeft": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org/colors/red" },
+        "compareRight": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org/colors/red" }
+      },
+      "expected": 1
+    },
+    {
+      "id": "equals-refs-differ",
+      "expr": {
+        "type": "kanonak.org/transformations/Equals",
+        "compareLeft": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org/colors/red" },
+        "compareRight": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org/colors/blue" }
+      },
+      "expected": 0
+    },
+    {
+      "id": "equals-ref-vs-string-is-false",
+      "description": "A URI is never equal to the string spelling of it",
+      "expr": {
+        "type": "kanonak.org/transformations/Equals",
+        "compareLeft": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org/colors/red" },
+        "compareRight": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "example.org/colors/red" }
+      },
+      "expected": 0
+    },
+    {
+      "id": "equals-lists-never-equal",
+      "description": "A list is a container, not a comparable value",
+      "expr": {
+        "type": "kanonak.org/transformations/Equals",
+        "compareLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "compareRight": { "type": "kanonak.org/transformations/VarRef", "varName": "ys" }
+      },
+      "env": { "xs": [1, 2], "ys": [1, 2] },
+      "expected": 0
+    },
+    {
+      "id": "isset-empty-list-is-unset",
+      "expr": {
+        "type": "kanonak.org/transformations/IsSet",
+        "checkExpr": { "type": "kanonak.org/transformations/VarRef", "varName": "x" }
+      },
+      "env": { "x": [] },
+      "expected": 0
+    },
+    {
+      "id": "isset-empty-string-is-unset",
+      "expr": {
+        "type": "kanonak.org/transformations/IsSet",
+        "checkExpr": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "" }
+      },
+      "expected": 0
+    },
+    {
+      "id": "isset-zero-is-set",
+      "description": "0 is a value, not absence",
+      "expr": {
+        "type": "kanonak.org/transformations/IsSet",
+        "checkExpr": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 0 }
+      },
+      "expected": 1
+    },
+    {
+      "id": "isset-nonempty-list-is-set",
+      "expr": {
+        "type": "kanonak.org/transformations/IsSet",
+        "checkExpr": { "type": "kanonak.org/transformations/VarRef", "varName": "x" }
+      },
+      "env": { "x": ["a"] },
+      "expected": 1
+    },
+    {
+      "id": "kind-predicates-hit",
+      "description": "IsString/IsNumber/IsReference/IsList each recognize their own kind",
+      "expr": {
+        "type": "kanonak.org/transformations/And",
+        "operands": [
+          { "type": "kanonak.org/transformations/IsString", "kindCheck": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "s" } },
+          { "type": "kanonak.org/transformations/IsNumber", "kindCheck": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 7 } },
+          { "type": "kanonak.org/transformations/IsReference", "kindCheck": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org/p/x" } },
+          { "type": "kanonak.org/transformations/IsList", "kindCheck": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" } }
+        ]
+      },
+      "env": { "xs": [1] },
+      "expected": 1
+    },
+    {
+      "id": "kind-predicates-miss",
+      "description": "No kind predicate accepts a foreign kind",
+      "expr": {
+        "type": "kanonak.org/transformations/Or",
+        "operands": [
+          { "type": "kanonak.org/transformations/IsString", "kindCheck": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 7 } },
+          { "type": "kanonak.org/transformations/IsNumber", "kindCheck": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "7" } },
+          { "type": "kanonak.org/transformations/IsReference", "kindCheck": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" } },
+          { "type": "kanonak.org/transformations/IsList", "kindCheck": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org/p/x" } }
+        ]
+      },
+      "env": { "xs": [1] },
+      "expected": 0
+    },
+    {
+      "id": "filter-basic",
+      "expr": {
+        "type": "kanonak.org/transformations/Filter",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "loopVar": "x",
+        "predicate": {
+          "type": "kanonak.org/transformations/GreaterThan",
+          "compareLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "x" },
+          "compareRight": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 2 }
+        }
+      },
+      "env": { "xs": [1, 2, 3, 4] },
+      "expected": [3, 4]
+    },
+    {
+      "id": "list-map-basic",
+      "expr": {
+        "type": "kanonak.org/transformations/ListMap",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "loopVar": "x",
+        "mapBody": {
+          "type": "kanonak.org/transformations/Add",
+          "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "x" },
+          "arithRight": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 1 }
+        }
+      },
+      "env": { "xs": [1, 2, 3] },
+      "expected": [2, 3, 4]
+    },
+    {
+      "id": "for-each-flattens-one-level",
+      "description": "A body list flattens; an empty body list contributes nothing (absence = skip)",
+      "expr": {
+        "type": "kanonak.org/transformations/ForEach",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "loopVar": "x",
+        "emit": { "type": "kanonak.org/transformations/VarRef", "varName": "x" }
+      },
+      "env": { "xs": [[1, 2], [], [3]] },
+      "expected": [1, 2, 3]
+    },
+    {
+      "id": "lambda-shadowing-innermost-wins",
+      "expr": {
+        "type": "kanonak.org/transformations/ListMap",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "loopVar": "x",
+        "mapBody": {
+          "type": "kanonak.org/transformations/Sum",
+          "source": {
+            "type": "kanonak.org/transformations/ListMap",
+            "source": { "type": "kanonak.org/transformations/VarRef", "varName": "ys" },
+            "loopVar": "x",
+            "mapBody": { "type": "kanonak.org/transformations/VarRef", "varName": "x" }
+          }
+        }
+      },
+      "env": { "xs": [100, 200], "ys": [1, 2] },
+      "expected": [3, 3]
+    },
+    {
+      "id": "lambda-free-variable-falls-through",
+      "description": "A VarRef naming anything but an enclosing loopVar is still the caller's leaf",
+      "expr": {
+        "type": "kanonak.org/transformations/ListMap",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "loopVar": "x",
+        "mapBody": {
+          "type": "kanonak.org/transformations/Multiply",
+          "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "x" },
+          "arithRight": { "type": "kanonak.org/transformations/VarRef", "varName": "scale" }
+        }
+      },
+      "env": { "xs": [1, 2], "scale": 10 },
+      "expected": [10, 20]
+    },
+    {
+      "id": "reverse-basic",
+      "expr": {
+        "type": "kanonak.org/transformations/Reverse",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [1, 2, 3] },
+      "expected": [3, 2, 1]
+    },
+    {
+      "id": "list-item-at-basic",
+      "expr": {
+        "type": "kanonak.org/transformations/ListItemAt",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "itemIndex": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 1 }
+      },
+      "env": { "xs": [10, 20, 30] },
+      "expected": 20
+    },
+    {
+      "id": "list-item-at-past-end-is-absence",
+      "expr": {
+        "type": "kanonak.org/transformations/ListItemAt",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "itemIndex": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 9 }
+      },
+      "env": { "xs": [10, 20] },
+      "expected": []
+    },
+    {
+      "id": "list-item-at-negative-errors",
+      "expr": {
+        "type": "kanonak.org/transformations/ListItemAt",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "itemIndex": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": -1 }
+      },
+      "env": { "xs": [10, 20] },
+      "expectError": true
+    },
+    {
+      "id": "matches-anchored-hit",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "E-1002" },
+        "pattern": "^E-\\d+$"
+      },
+      "expected": 1
+    },
+    {
+      "id": "matches-unanchored-substring",
+      "description": "fn:matches semantics — unanchored; authors write ^…$ for whole-string",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "abc123def" },
+        "pattern": "\\d+"
+      },
+      "expected": 1
+    },
+    {
+      "id": "matches-miss",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "hello" },
+        "pattern": "^\\d+$"
+      },
+      "expected": 0
+    },
+    {
+      "id": "matches-prefix-case-fold",
+      "description": "Flag prefix (?i) at position 0 — the only flag mechanism in the subset",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "ABC" },
+        "pattern": "(?i)abc"
+      },
+      "expected": 1
+    },
+    {
+      "id": "matches-mid-pattern-flag-group-outside-subset",
+      "description": "Mid-pattern flag groups are not portable (JS/Python engines) — out of subset",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "ABC" },
+        "pattern": "x(?i:abc)"
+      },
+      "expectError": true
+    },
+    {
+      "id": "matches-class-range-and-quantifier",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "kanonak-2" },
+        "pattern": "^[a-z][a-z0-9-]{2,15}$"
+      },
+      "expected": 1
+    },
+    {
+      "id": "matches-lookahead-outside-subset",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "abc" },
+        "pattern": "a(?=b)"
+      },
+      "expectError": true
+    },
+    {
+      "id": "matches-backreference-outside-subset",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "abab" },
+        "pattern": "(ab)\\1"
+      },
+      "expectError": true
+    },
+    {
+      "id": "matches-unicode-property-outside-subset",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "a" },
+        "pattern": "\\p{L}"
+      },
+      "expectError": true
+    },
+    {
+      "id": "matches-posix-class-outside-subset",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "a" },
+        "pattern": "[[:alpha:]]"
+      },
+      "expectError": true
+    },
+    {
+      "id": "matches-lookbehind-outside-subset",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "ab" },
+        "pattern": "(?<=a)b"
+      },
+      "expectError": true
+    },
+    {
+      "id": "matches-non-string-source-errors",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 5 },
+        "pattern": "\\d"
+      },
+      "expectError": true
+    },
+    {
+      "id": "order-comparison-fails-closed-on-string",
+      "description": "Ordering comparisons are predicates: non-numeric operands yield 0, never an error",
+      "expr": {
+        "type": "kanonak.org/transformations/GreaterThan",
+        "compareLeft": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "10" },
+        "compareRight": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 5 }
+      },
+      "expected": 0
+    },
+    {
+      "id": "arithmetic-fails-loud-on-string",
+      "description": "Computations fail loud: Add of a string is a type error, never a coercion",
+      "expr": {
+        "type": "kanonak.org/transformations/Add",
+        "arithLeft": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "1" },
+        "arithRight": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 2 }
+      },
+      "expectError": true
+    },
+    {
+      "id": "shacl-min-count-shape",
+      "description": "The sh:minCount lowering shape: Count(values) >= 1",
+      "expr": {
+        "type": "kanonak.org/transformations/GreaterThanOrEqual",
+        "compareLeft": {
+          "type": "kanonak.org/transformations/Count",
+          "source": { "type": "kanonak.org/transformations/VarRef", "varName": "values" }
+        },
+        "compareRight": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 1 }
+      },
+      "env": { "values": [] },
+      "expected": 0
+    },
+    {
+      "id": "shacl-in-shape",
+      "description": "The sh:in lowering shape: every value a member of the closed set (Filter misses = 0)",
+      "expr": {
+        "type": "kanonak.org/transformations/Equals",
+        "compareLeft": {
+          "type": "kanonak.org/transformations/Count",
+          "source": {
+            "type": "kanonak.org/transformations/Filter",
+            "source": { "type": "kanonak.org/transformations/VarRef", "varName": "values" },
+            "loopVar": "v",
+            "predicate": {
+              "type": "kanonak.org/transformations/Not",
+              "operand": {
+                "type": "kanonak.org/transformations/Contains",
+                "haystack": { "type": "kanonak.org/transformations/VarRef", "varName": "allowed" },
+                "needle": { "type": "kanonak.org/transformations/VarRef", "varName": "v" }
+              }
+            }
+          }
+        },
+        "compareRight": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 0 }
+      },
+      "env": { "values": ["draft", "active"], "allowed": ["draft", "active", "done"] },
+      "expected": 1
+    },
+    {
+      "id": "count-trace",
+      "description": "explain() over a list operator: children = the source trace",
+      "expr": {
+        "type": "kanonak.org/transformations/Count",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": ["a", "b"] },
+      "expected": 2,
+      "trace": {
+        "type": "kanonak.org/transformations/Count",
+        "value": 2,
+        "children": [
+          { "type": "kanonak.org/transformations/VarRef", "value": ["a", "b"], "children": [] }
+        ]
+      }
+    }
+  ]
+}

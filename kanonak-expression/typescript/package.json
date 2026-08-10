@@ -1,7 +1,7 @@
 {
   "name": "@kanonak-protocol/expression",
-  "version": "0.2.0",
-  "description": "The Kanonak expression runtime (expressionRuntimeVersion \"1\") — a deterministic tree-walker that folds a kanonak.org/transformations + kanonak.org/math expression to a number, verified against the shared parity vectors. The behavior every generated SDK evaluates through.",
+  "version": "0.3.0",
+  "description": "The Kanonak expression runtime (expressionRuntimeVersion \"2\") — a deterministic tree-walker that folds a kanonak.org/transformations + kanonak.org/math expression to a value (number | string | ref | list), verified against the shared parity vectors. The behavior every generated SDK evaluates through.",
   "license": "Apache-2.0",
   "homepage": "https://kanonak.org",
   "author": "Kanonak Maintainers (https://github.com/kanonak-protocol/runtime)",
