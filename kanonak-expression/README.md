@@ -35,15 +35,15 @@ verified in CI (no local Swift toolchain on the development host) — it is not
 release-ready until its CI conformance run is green.
 
 Version 2 dialect notes per engine: RE2-family (Rust/Go) is the subset's home
-— code points and ASCII `` native. JS compiles with `u` and translates
-non-dotAll `.` to `[^
-]`. Java translates ``→`` and non-dotAll `.`,
-and adds `UNICODE_CASE`. Python expands ``/`\B` to ASCII lookarounds
-(`re.ASCII` would disable the pinned Unicode case folding). C# owes the most:
-surrogate-pair-aware `.` (its Regex counts UTF-16 code units) and lookaround
-``/`\B`. Swift/ICU mirrors Java plus lookaround ``/`\B`. Every
-translation is gated by the astral / ``-dot / VT / case-fold / shorthand
-vectors.
+— code points and the ASCII word boundary native. JS compiles with `u` and
+translates non-dotAll `.` to a not-newline class. Java translates the
+vertical-tab escape to `\x0B` (its native form is a class) and non-dotAll
+`.`, and adds `UNICODE_CASE`. Python expands the word boundaries to ASCII
+lookarounds (`re.ASCII` would disable the pinned Unicode case folding). C#
+owes the most: a surrogate-pair-aware `.` (its Regex counts UTF-16 code
+units) and lookaround word boundaries. Swift/ICU mirrors Java plus the
+lookaround boundaries. Every translation is gated by the astral /
+carriage-return-dot / vertical-tab / case-fold / shorthand vectors.
 
 ## The three layers
 
