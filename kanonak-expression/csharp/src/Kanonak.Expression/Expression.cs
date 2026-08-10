@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Kanonak.Expression
 {
@@ -27,6 +29,18 @@ namespace Kanonak.Expression
         }
     }
 
+    /// <summary>A reference value — a member's canonical versionless URI identity.
+    /// Distinct from string so Equals holds the cross-kind-is-false rule.</summary>
+    public sealed class Ref : IEquatable<Ref>
+    {
+        public readonly string Uri;
+        public Ref(string uri) { Uri = uri; }
+        public bool Equals(Ref other) => other != null && other.Uri == Uri;
+        public override bool Equals(object o) => o is Ref r && Equals(r);
+        public override int GetHashCode() => Uri.GetHashCode();
+        public override string ToString() => "Ref(" + Uri + ")";
+    }
+
     /// <summary>An error raised by the expression runtime (domain/value violation).</summary>
     public sealed class ExpressionError : Exception
     {
@@ -35,31 +49,18 @@ namespace Kanonak.Expression
 
     /// <summary>
     /// Resolve any node the kernel does not recognise as an operator or literal — a
-    /// binding (<c>tx.VarRef</c>, a domain's typed <c>refersTo</c> VarRef) or a domain
-    /// leaf (<c>Step</c>, <c>Time</c>, <c>Smooth</c>…) — to a number. <c>ctx</c> is
-    /// opaque caller state; <c>evaluate</c> is handed back so a domain leaf containing
-    /// sub-expressions can recurse into the kernel.
+    /// binding (<c>tx.VarRef</c>), a host graph read (a property-read leaf returning a
+    /// list), or a domain leaf — to a value (<c>double | string | Ref | List&lt;object&gt;</c>).
+    /// <c>ctx</c> is opaque caller state; <c>evaluate</c> is handed back so a domain leaf
+    /// containing sub-expressions can recurse into the kernel (WITHOUT lambda frames —
+    /// the caller's subtrees are the caller's scope).
     /// </summary>
-    public delegate double Resolve(ExprNode node, object ctx, Func<ExprNode, object, double> evaluate);
+    public delegate object Resolve(ExprNode node, object ctx, Func<ExprNode, object, object> evaluate);
 
-    /// <summary>
-    /// Resolve an identity leaf inside an ordered comparison — any operand node that is
-    /// not a <c>tx.UriLiteral</c> — to a member's canonical versionless URI
-    /// (<c>publisher/package/name</c>). The identity-domain mirror of <see cref="Resolve"/>:
-    /// the kernel owns the constant leaf, the caller owns bindings.
-    /// </summary>
+    /// <summary>Resolve an identity leaf inside an ordered comparison.</summary>
     public delegate string ResolveRef(ExprNode node, object ctx);
 
-    /// <summary>
-    /// Optional evaluation context for the ordered comparisons (<c>IsAtLeast</c>,
-    /// <c>Dominates</c>). <see cref="Closures"/> is the transitive-closure data, keyed by
-    /// the ordering property's canonical URI, then by member:
-    /// <c>Closures[property][from]</c> is the set of members <c>from</c> reaches — flat,
-    /// already-closed data, typically the SDK reasoner's <c>prp-trp</c> saturation emitted
-    /// at code-generation time. The kernel does set membership only; it never computes a
-    /// closure, resolves a package, or reasons. Absent (or missing a needed entry), an
-    /// ordered comparison fails loudly — never a silent false from a missing table.
-    /// </summary>
+    /// <summary>Optional evaluation context for the ordered comparisons.</summary>
     public sealed class EvalOptions
     {
         public Dictionary<string, Dictionary<string, List<string>>> Closures;
@@ -68,425 +69,934 @@ namespace Kanonak.Expression
 
     /// <summary>
     /// One node of an evaluation trace — the verdict tree <c>Expr.Explain</c> returns.
-    /// Mirrors the expression: <see cref="Type"/> is the node's type URI, <see cref="Value"/>
-    /// its result (1/0 for booleans), <see cref="Children"/> the operand traces in evaluation
-    /// order. A short-circuited operand is simply ABSENT from Children — the trace is truthful
-    /// about what ran. Ordered comparisons carry their resolved operand identities as
-    /// <see cref="LeftRef"/>/<see cref="RightRef"/> (otherwise null) instead of children.
-    /// A runtime return shape, not an ontology class.
+    /// Short-circuited operands are ABSENT from Children; an iterating operator's children
+    /// are its source trace followed by one body trace per visited element. A runtime
+    /// return shape, not an ontology class.
     /// </summary>
     public sealed class TraceNode
     {
         public string Type;
-        public double Value;
+        public object Value;
         public List<TraceNode> Children = new List<TraceNode>();
         public string LeftRef;
         public string RightRef;
     }
 
     /// <summary>
-    /// The Kanonak expression runtime: a small, deterministic tree-walker that folds a
-    /// <c>kanonak.org/transformations</c> (<c>tx</c>) + <c>kanonak.org/math</c> expression
-    /// tree to a single number. Operators fold via the frozen dispatch + primitive tables;
-    /// literals yield their numeric value; everything else is delegated to <c>resolve</c>.
+    /// Kanonak expression runtime (expressionRuntimeVersion "2") — a small, deterministic
+    /// tree-walker that folds a <c>kanonak.org/transformations</c> + <c>kanonak.org/math</c>
+    /// expression tree to a VALUE. An independent conformant C# port of the reference
+    /// kernel, verified against the shared parity vectors.
     ///
-    /// <see cref="ExpressionRuntimeVersion"/> freezes the determinism contract; a change to
-    /// any primitive, value rule, or dispatch entry requires a NEW version, never an edit
-    /// in place.
+    /// <para>VALUE DOMAIN (v2): <c>double | string | Ref | List&lt;object&gt;</c>. Booleans
+    /// and comparison results remain 1/0; absence is the empty list — there is no null
+    /// value. The kernel NEVER touches a graph.</para>
+    ///
+    /// <para>ERROR CONTRACT: computations fail LOUD; predicates fail CLOSED (Equals
+    /// cross-kind and the ordering comparisons on non-numbers yield 0).</para>
+    ///
+    /// <para>MATCHES: the pinned RE2-compatible XSD-regex subset. .NET's Regex counts
+    /// UTF-16 CODE UNITS — the pinned unit is CODE POINTS — so this engine owes the
+    /// largest translations: <c>.</c> compiles to a surrogate-pair-aware alternation
+    /// (one astral character is one <c>.</c>), and <c>\b</c>/<c>\B</c> compile to
+    /// explicit ASCII-word-class lookarounds (.NET's native <c>\b</c> is Unicode).
+    /// The shorthand expansions are load-bearing (.NET's native <c>\d</c>/<c>\w</c>/<c>\s</c>
+    /// are Unicode); case folding pins to Unicode simple folding via
+    /// IgnoreCase|CultureInvariant. Host lookaround in the COMPILED form is fine — the
+    /// subset restriction is on what authors write.</para>
     /// </summary>
     public static class Expr
     {
         /// <summary>The frozen expression-runtime version (determinism contract). Not hashed.</summary>
-        public const string ExpressionRuntimeVersion = "1";
+        public const string ExpressionRuntimeVersion = "2";
 
-        private const string TX = "kanonak.org/transformations";
-        private const string MATH = "kanonak.org/math";
+        const string TX = "kanonak.org/transformations";
+        const string MATH = "kanonak.org/math";
 
-        // -- Dispatch — operand shape per operator, derived from the tx superclass hierarchy.
+        static ExpressionError Err(string msg) => new ExpressionError(msg);
 
-        private enum Kind { Unary, Binary, Nary, Ternary }
+        // -- helpers ----------------------------------------------------------
 
-        private struct Arity
+        static string KindOf(object v)
         {
-            public Kind Kind;
-            public string A;
-            public string B;
-            public string C;
+            if (v is double) return "number";
+            if (v is string) return "string";
+            if (v is Ref) return "ref";
+            if (v is List<object>) return "list";
+            return "unknown";
         }
 
-        private static Arity Un(string operand) => new Arity { Kind = Kind.Unary, A = operand };
-        private static Arity Bin(string left, string right) => new Arity { Kind = Kind.Binary, A = left, B = right };
-
-        private static readonly Arity ARITH = Bin("arithLeft", "arithRight");
-        private static readonly Arity COMPARE = Bin("compareLeft", "compareRight");
-        private static readonly Arity VALUE = Un("value");
-
-        private static readonly Dictionary<string, Arity> OperatorArity = BuildArity();
-
-        private static Dictionary<string, Arity> BuildArity()
+        static double RequireNum(object v, string op)
         {
-            var m = new Dictionary<string, Arity>
-            {
-                [$"{TX}/Add"] = ARITH,
-                [$"{TX}/Subtract"] = ARITH,
-                [$"{TX}/Multiply"] = ARITH,
-                [$"{TX}/Divide"] = ARITH,
-                [$"{MATH}/Power"] = ARITH,
-                [$"{MATH}/Modulo"] = ARITH,
-                [$"{MATH}/Minimum"] = ARITH,
-                [$"{MATH}/Maximum"] = ARITH,
-
-                [$"{TX}/Abs"] = VALUE,
-                [$"{TX}/Negate"] = VALUE,
-                [$"{MATH}/Exp"] = VALUE,
-                [$"{MATH}/Ln"] = VALUE,
-                [$"{MATH}/Log10"] = VALUE,
-                [$"{MATH}/Sqrt"] = VALUE,
-                [$"{MATH}/Floor"] = VALUE,
-                [$"{MATH}/Ceil"] = VALUE,
-                [$"{MATH}/Round"] = VALUE,
-                [$"{MATH}/Sign"] = VALUE,
-
-                [$"{TX}/Equals"] = COMPARE,
-                [$"{TX}/GreaterThan"] = COMPARE,
-                [$"{TX}/LessThan"] = COMPARE,
-                [$"{TX}/GreaterThanOrEqual"] = COMPARE,
-                [$"{TX}/LessThanOrEqual"] = COMPARE,
-
-                [$"{TX}/And"] = new Arity { Kind = Kind.Nary, A = "operands" },
-                [$"{TX}/Or"] = new Arity { Kind = Kind.Nary, A = "operands" },
-                // `Not` is a direct Expression subclass with boolean (not numeric-unary)
-                // semantics — handled explicitly in Evaluate, not via the numeric tables.
-
-                [$"{MATH}/Clip"] = new Arity { Kind = Kind.Ternary, A = "clipValue", B = "clipLower", C = "clipUpper" },
-            };
-            return m;
+            if (v is double d) return d;
+            throw Err(op + " requires a numeric operand, got " + KindOf(v));
         }
 
-        // -- Primitives — the authored, determinism-bearing tables, matched per language.
+        static bool Truthy(double n) => n != 0.0;
+        static double Bool(bool b) => b ? 1.0 : 0.0;
 
-        private static readonly Dictionary<string, Func<double, double>> Unary = BuildUnary();
-        private static readonly Dictionary<string, Func<double, double, double>> Binary = BuildBinary();
+        static void RequireDomain(bool ok, string msg) { if (!ok) throw Err(msg); }
 
-        private static Dictionary<string, Func<double, double>> BuildUnary()
+        static double FlooredMod(double a, double b)
         {
-            return new Dictionary<string, Func<double, double>>
-            {
-                [$"{TX}/Abs"] = x => Math.Abs(x),
-                [$"{TX}/Negate"] = x => -x,
-                [$"{MATH}/Exp"] = x => Math.Exp(x),
-                [$"{MATH}/Ln"] = x => { RequireDomain(x > 0, "Ln of a non-positive number"); return Math.Log(x); },
-                [$"{MATH}/Log10"] = x => { RequireDomain(x > 0, "Log10 of a non-positive number"); return Math.Log10(x); },
-                [$"{MATH}/Sqrt"] = x => { RequireDomain(x >= 0, "Sqrt of a negative number"); return Math.Sqrt(x); },
-                [$"{MATH}/Floor"] = x => Math.Floor(x),
-                [$"{MATH}/Ceil"] = x => Math.Ceiling(x),
-                [$"{MATH}/Round"] = RoundHalfAway,
-                [$"{MATH}/Sign"] = x => Math.Sign(x),
-            };
-        }
-
-        private static Dictionary<string, Func<double, double, double>> BuildBinary()
-        {
-            return new Dictionary<string, Func<double, double, double>>
-            {
-                [$"{TX}/Add"] = (a, b) => a + b,
-                [$"{TX}/Subtract"] = (a, b) => a - b,
-                [$"{TX}/Multiply"] = (a, b) => a * b,
-                [$"{TX}/Divide"] = (a, b) => { RequireDomain(b != 0, "Divide by zero"); return a / b; },
-                [$"{MATH}/Power"] = (a, b) => Math.Pow(a, b),
-                [$"{MATH}/Modulo"] = FlooredMod,
-                [$"{MATH}/Minimum"] = (a, b) => Math.Min(a, b),
-                [$"{MATH}/Maximum"] = (a, b) => Math.Max(a, b),
-                [$"{TX}/Equals"] = (a, b) => Bool(a == b),
-                [$"{TX}/GreaterThan"] = (a, b) => Bool(a > b),
-                [$"{TX}/LessThan"] = (a, b) => Bool(a < b),
-                [$"{TX}/GreaterThanOrEqual"] = (a, b) => Bool(a >= b),
-                [$"{TX}/LessThanOrEqual"] = (a, b) => Bool(a <= b),
-            };
-        }
-
-        /// <summary>Floored modulo (the host operator truncates toward zero): Modulo(-7,3) = 2.</summary>
-        private static double FlooredMod(double a, double b)
-        {
-            if (b == 0) throw new ExpressionError("Modulo by zero");
+            RequireDomain(b != 0.0, "Modulo by zero");
             return a - b * Math.Floor(a / b);
         }
 
-        /// <summary>Round half away from zero: Round(-2.5) = -3, Round(2.5) = 3.</summary>
-        private static double RoundHalfAway(double a)
+        static double RoundHalfAway(double a)
+            => a < 0 ? -Math.Floor(-a + 0.5) : Math.Floor(a + 0.5);
+
+        /// <summary>Polymorphic tx.Equals: scalars by value, refs by URI identity, lists
+        /// never equal, cross-kind false. Never errors.</summary>
+        static bool ValuesEqual(object a, object b)
         {
-            return a < 0 ? -Math.Floor(-a + 0.5) : Math.Floor(a + 0.5);
+            if (a is double x && b is double y) return x == y;
+            if (a is string s && b is string t) return s == t;
+            if (a is Ref r && b is Ref q) return r.Equals(q);
+            return false;
         }
 
-        private static bool Truthy(double n) => n != 0;
-        private static double Bool(bool b) => b ? 1.0 : 0.0;
-
-        private static void RequireDomain(bool ok, string msg)
+        static ExprNode Operand(ExprNode node, string key)
         {
-            if (!ok) throw new ExpressionError(msg);
+            if (node.Get(key) is ExprNode n) return n;
+            throw Err(node.Type + " is missing operand '" + key + "'");
         }
 
-        /// <summary>Numeric value of a literal node, or null if it is not a literal.</summary>
-        private static double? LiteralValue(ExprNode node)
+        static double ToNumber(object v)
+        {
+            if (v is double d) return d;
+            if (v is int i) return i;
+            if (v is long l) return l;
+            if (v is string s && double.TryParse(s, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var p)) return p;
+            throw Err("not a number: " + v);
+        }
+
+        /// <summary>A literal node's value, or null when not a literal (the domain has no
+        /// null values, so null is safe as the not-a-literal sentinel).</summary>
+        static object LiteralValue(ExprNode node)
         {
             switch (node.Type)
             {
                 case TX + "/IntegerLiteral": return ToNumber(node.Get("integerLiteral"));
                 case TX + "/DecimalLiteral": return ToNumber(node.Get("decimalLiteral"));
                 case TX + "/BooleanLiteral":
-                    {
-                        var raw = node.Get("booleanLiteral");
-                        bool t = (raw is bool b && b) || (raw is string s && s == "true");
-                        return Bool(t);
-                    }
+                {
+                    var b = node.Get("booleanLiteral");
+                    return Bool(true.Equals(b) || "true".Equals(b));
+                }
+                case TX + "/StringLiteral":
+                {
+                    if (node.Get("stringLiteral") is string s) return s;
+                    throw Err("StringLiteral is missing stringLiteral");
+                }
+                case TX + "/UriLiteral":
+                {
+                    if (node.Get("refTo") is string r && r.Length > 0) return new Ref(r);
+                    throw Err("UriLiteral is missing refTo");
+                }
                 default: return null;
             }
         }
 
-        private static double ToNumber(object o)
+        /// <summary>ECMAScript-style number-to-string (the RFC 8785 rule): integral
+        /// without a decimal point; else shortest round-trip.</summary>
+        static string FormatNumber(double n)
         {
-            switch (o)
+            if (n == Math.Floor(n) && Math.Abs(n) < 1e21)
+                return ((long)n).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return n.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        static string JoinElement(object v)
+        {
+            if (v is string s) return s;
+            if (v is double d) return FormatNumber(d);
+            if (v is Ref r)
             {
-                case null: throw new ExpressionError("literal is missing its value");
-                case double d: return d;
-                case float f: return f;
-                case int i: return i;
-                case long l: return l;
-                case decimal m: return (double)m;
-                case bool b: return b ? 1.0 : 0.0;
-                case string s: return double.Parse(s, System.Globalization.CultureInfo.InvariantCulture);
-                default: return Convert.ToDouble(o, System.Globalization.CultureInfo.InvariantCulture);
+                int i = r.Uri.LastIndexOf('/');
+                return i >= 0 ? r.Uri.Substring(i + 1) : r.Uri;
+            }
+            throw Err("Join cannot stringify a nested list");
+        }
+
+        static bool IsSetValue(object v)
+        {
+            if (v is string s) return s.Length > 0;
+            if (v is List<object> l) return l.Count > 0;
+            return true;
+        }
+
+        // -- dispatch ---------------------------------------------------------
+
+        struct Arity
+        {
+            public string Kind, A, B, C;
+            public Arity(string kind, string a, string b = null, string c = null)
+            { Kind = kind; A = a; B = b; C = c; }
+        }
+
+        static readonly Arity Arith = new Arity("binary", "arithLeft", "arithRight");
+        static readonly Arity Compare = new Arity("binary", "compareLeft", "compareRight");
+        static readonly Arity ValueA = new Arity("unary", "value");
+
+        static Arity? OperatorArity(string typ)
+        {
+            switch (typ)
+            {
+                case TX + "/Add": case TX + "/Subtract": case TX + "/Multiply": case TX + "/Divide":
+                case MATH + "/Power": case MATH + "/Modulo": case MATH + "/Minimum": case MATH + "/Maximum":
+                    return Arith;
+                case TX + "/Abs": case TX + "/Negate": case MATH + "/Exp": case MATH + "/Ln":
+                case MATH + "/Log10": case MATH + "/Sqrt": case MATH + "/Floor": case MATH + "/Ceil":
+                case MATH + "/Round": case MATH + "/Sign":
+                    return ValueA;
+                case TX + "/Equals": case TX + "/GreaterThan": case TX + "/LessThan":
+                case TX + "/GreaterThanOrEqual": case TX + "/LessThanOrEqual":
+                    return Compare;
+                case TX + "/And": case TX + "/Or":
+                    return new Arity("nary", "operands");
+                case MATH + "/Clip":
+                    return new Arity("ternary", "clipValue", "clipLower", "clipUpper");
+                default:
+                    return null;
             }
         }
 
-        /// <summary>
-        /// Evaluate an expression tree to a number. Operators fold via the frozen dispatch +
-        /// primitive tables; literals yield their numeric value; any other node is delegated
-        /// to <paramref name="resolve"/>.
-        /// </summary>
-        public static double Evaluate(ExprNode node, object ctx, Resolve resolve)
+        static double Unary(string typ, double x)
         {
-            return Evaluate(node, ctx, resolve, null);
+            switch (typ)
+            {
+                case TX + "/Abs": return Math.Abs(x);
+                case TX + "/Negate": return -x;
+                case MATH + "/Exp": return Math.Exp(x);
+                case MATH + "/Ln": RequireDomain(x > 0, "Ln of a non-positive number"); return Math.Log(x);
+                case MATH + "/Log10": RequireDomain(x > 0, "Log10 of a non-positive number"); return Math.Log10(x);
+                case MATH + "/Sqrt": RequireDomain(x >= 0, "Sqrt of a negative number"); return Math.Sqrt(x);
+                case MATH + "/Floor": return Math.Floor(x);
+                case MATH + "/Ceil": return Math.Ceiling(x);
+                case MATH + "/Round": return RoundHalfAway(x);
+                case MATH + "/Sign": return Math.Sign(x);
+                default: throw Err("No unary primitive for " + typ);
+            }
         }
 
-        /// <summary>
-        /// <see cref="Evaluate(ExprNode, object, Resolve)"/> with the ordered-comparison
-        /// evaluation context (closures + identity-leaf resolution). <paramref name="options"/>
-        /// is only consulted when an <c>IsAtLeast</c> / <c>Dominates</c> node is reached; null
-        /// is valid for trees without them.
-        /// </summary>
-        public static double Evaluate(ExprNode node, object ctx, Resolve resolve, EvalOptions options)
+        static double BinaryArith(string typ, double a, double b)
         {
-            Func<ExprNode, object, double> recurse = null;
-            recurse = (n, c) => Evaluate(n, c, resolve, options);
-
-            if (OperatorArity.TryGetValue(node.Type, out var arity))
+            switch (typ)
             {
-                switch (arity.Kind)
+                case TX + "/Add": return a + b;
+                case TX + "/Subtract": return a - b;
+                case TX + "/Multiply": return a * b;
+                case TX + "/Divide": RequireDomain(b != 0, "Divide by zero"); return a / b;
+                case MATH + "/Power": return Math.Pow(a, b);
+                case MATH + "/Modulo": return FlooredMod(a, b);
+                case MATH + "/Minimum": return Math.Min(a, b);
+                case MATH + "/Maximum": return Math.Max(a, b);
+                default: throw Err("No arithmetic primitive for " + typ);
+            }
+        }
+
+        static bool IsOrderComparison(string typ)
+            => typ == TX + "/GreaterThan" || typ == TX + "/LessThan"
+            || typ == TX + "/GreaterThanOrEqual" || typ == TX + "/LessThanOrEqual";
+
+        static double BinaryOrder(string typ, double a, double b)
+        {
+            switch (typ)
+            {
+                case TX + "/GreaterThan": return Bool(a > b);
+                case TX + "/LessThan": return Bool(a < b);
+                case TX + "/GreaterThanOrEqual": return Bool(a >= b);
+                case TX + "/LessThanOrEqual": return Bool(a <= b);
+                default: throw Err("No ordering primitive for " + typ);
+            }
+        }
+
+        static string IteratorBody(string typ)
+        {
+            switch (typ)
+            {
+                case TX + "/ForEach": return "emit";
+                case TX + "/ListMap": return "mapBody";
+                case TX + "/Filter": return "predicate";
+                default: return null;
+            }
+        }
+
+        static bool IsListFold(string typ)
+        {
+            switch (typ)
+            {
+                case TX + "/Count": case TX + "/Sum": case TX + "/Min": case TX + "/Max":
+                case TX + "/Average": case TX + "/Join": case TX + "/Reverse":
+                    return true;
+                default: return false;
+            }
+        }
+
+        static object ListFold(string typ, List<object> items, ExprNode node)
+        {
+            string name = typ.Substring(typ.LastIndexOf('/') + 1);
+            switch (typ)
+            {
+                case TX + "/Count": return (double)items.Count;
+                case TX + "/Sum":
                 {
-                    case Kind.Unary:
-                        {
-                            double x = recurse(Operand(node, arity.A), ctx);
-                            return Unary[node.Type](x);
-                        }
-                    case Kind.Binary:
-                        {
-                            double a = recurse(Operand(node, arity.A), ctx);
-                            double b = recurse(Operand(node, arity.B), ctx);
-                            return Binary[node.Type](a, b);
-                        }
-                    case Kind.Nary:
-                        {
-                            var items = node.Get(arity.A) as System.Collections.IEnumerable;
-                            if (items == null || node.Get(arity.A) is string)
-                                throw new ExpressionError($"{node.Type} expects an '{arity.A}' list");
-                            bool isAnd = node.Type == $"{TX}/And";
-                            // Short-circuit; empty And is vacuously true, empty Or vacuously false.
-                            foreach (var item in items)
-                            {
-                                bool v = Truthy(recurse(AsNode(item), ctx));
-                                if (isAnd && !v) return 0;
-                                if (!isAnd && v) return 1;
-                            }
-                            return Bool(isAnd);
-                        }
-                    case Kind.Ternary:
-                        {
-                            // Only Clip today: clamp clipValue into [clipLower, clipUpper].
-                            double v = recurse(Operand(node, arity.A), ctx);
-                            double lo = recurse(Operand(node, arity.B), ctx);
-                            double hi = recurse(Operand(node, arity.C), ctx);
-                            return Math.Min(Math.Max(v, lo), hi);
-                        }
+                    double total = 0;
+                    foreach (var el in items) total += RequireNum(el, "Sum");
+                    return total;
+                }
+                case TX + "/Min": case TX + "/Max":
+                {
+                    if (items.Count == 0) throw Err(name + " on an empty list is undefined; guard with IsSet");
+                    double best = RequireNum(items[0], name);
+                    for (int i = 1; i < items.Count; i++)
+                    {
+                        double v = RequireNum(items[i], name);
+                        if ((name == "Min" && v < best) || (name == "Max" && v > best)) best = v;
+                    }
+                    return best;
+                }
+                case TX + "/Average":
+                {
+                    if (items.Count == 0) throw Err("Average on an empty list is undefined; guard with IsSet");
+                    double total = 0;
+                    foreach (var el in items) total += RequireNum(el, "Average");
+                    return total / items.Count;
+                }
+                case TX + "/Join":
+                {
+                    string sep = node.Get("separator") as string ?? "";
+                    var sb = new StringBuilder();
+                    for (int i = 0; i < items.Count; i++)
+                    {
+                        if (i > 0) sb.Append(sep);
+                        sb.Append(JoinElement(items[i]));
+                    }
+                    return sb.ToString();
+                }
+                case TX + "/Reverse":
+                {
+                    var outList = new List<object>(items);
+                    outList.Reverse();
+                    return outList;
+                }
+                default: throw Err("No list fold for " + typ);
+            }
+        }
+
+        static bool IsKindPredicate(string typ)
+            => typ == TX + "/IsString" || typ == TX + "/IsNumber"
+            || typ == TX + "/IsReference" || typ == TX + "/IsList";
+
+        static double KindPredicate(string typ, object v)
+        {
+            switch (typ)
+            {
+                case TX + "/IsString": return Bool(v is string);
+                case TX + "/IsNumber": return Bool(v is double);
+                case TX + "/IsReference": return Bool(v is Ref);
+                case TX + "/IsList": return Bool(v is List<object>);
+                default: throw Err("No kind predicate for " + typ);
+            }
+        }
+
+        // -- Matches: the pinned RE2-compatible XSD-regex subset ---------------
+
+        static readonly Regex FlagPrefix = new Regex(@"^\(\?([ims]+)\)");
+        static readonly Regex Quantifier = new Regex(@"^\{\d+(,\d*)?\}");
+        const string AllowedEscapes = @"dDwWsSbBnrtfv.*+?()[]{}|^$\/";
+
+        // The ASCII word-boundary lookarounds — .NET's native \b is Unicode.
+        const string Word = "[0-9A-Za-z_]";
+        static readonly string BBoundary =
+            "(?:(?<=" + Word + ")(?!" + Word + ")|(?<!" + Word + ")(?=" + Word + "))";
+        static readonly string BNonBoundary =
+            "(?:(?<=" + Word + ")(?=" + Word + ")|(?<!" + Word + ")(?!" + Word + "))";
+
+        // Code-point `.` — one astral character (a surrogate pair) is ONE dot.
+        const string DotNoNewline = "(?:[\uD800-\uDBFF][\uDC00-\uDFFF]|[^\n\uD800-\uDFFF])";
+        const string DotAllPoints = "(?:[\uD800-\uDBFF][\uDC00-\uDFFF]|[^\uD800-\uDFFF])";
+
+        /// <summary>The same subset scanner as the reference kernel.</summary>
+        internal static void ValidateMatchesPattern(string pattern)
+        {
+            void Fail(string what)
+                => throw Err("Matches pattern is outside the pinned regex subset (" + what + "): " + pattern);
+
+            bool inClass = false;
+            int n = pattern.Length;
+            for (int i = 0; i < n; i++)
+            {
+                char c = pattern[i];
+                if (c == '\\')
+                {
+                    if (i + 1 >= n) Fail("trailing backslash");
+                    char e = pattern[i + 1];
+                    if (e == 'x')
+                    {
+                        if (i + 2 < n && pattern[i + 2] == '{') Fail(@"\x{…} escape");
+                        if (i + 3 >= n || !Uri.IsHexDigit(pattern[i + 2]) || !Uri.IsHexDigit(pattern[i + 3]))
+                            Fail(@"\x escape must be \xHH");
+                        i += 3;
+                        continue;
+                    }
+                    if (e >= '0' && e <= '9') Fail(@"backreference or octal escape \" + e);
+                    if (e == 'p' || e == 'P') Fail(@"unicode property class \" + e + "{…}");
+                    if (e == 'k') Fail(@"named backreference \k");
+                    if (e == 'u') Fail(@"\u escape");
+                    if (e == '-')
+                    {
+                        if (!inClass) Fail(@"\- outside a character class");
+                        i++;
+                        continue;
+                    }
+                    if ((e == 'b' || e == 'B' || e == 'D' || e == 'W' || e == 'S') && inClass)
+                        Fail(@"\" + e + " inside a character class");
+                    if (AllowedEscapes.IndexOf(e) < 0) Fail(@"escape \" + e);
+                    i++;
+                    continue;
+                }
+                if (inClass)
+                {
+                    if (c == ']') inClass = false;
+                    else if (c == '&' && i + 1 < n && pattern[i + 1] == '&') Fail("character-class intersection &&");
+                    else if (c == '[' && i + 1 < n && pattern[i + 1] == ':') Fail("POSIX class [[:…:]]");
+                    continue;
+                }
+                if (c == '[') { inClass = true; continue; }
+                if (c == '(' && i + 1 < n && pattern[i + 1] == '?')
+                {
+                    if (i + 2 >= n || pattern[i + 2] != ':') Fail("group construct (?");
+                    i += 2;
+                    continue;
+                }
+                if (c == '{')
+                {
+                    // A bare `{` must start a valid quantifier — the SCANNER enforces
+                    // this uniformly (a literal brace is written \{).
+                    if (!Quantifier.IsMatch(pattern.Substring(i)))
+                        Fail("bare '{' that is not a quantifier (write \\{)");
                 }
             }
-
-            if (node.Type == $"{TX}/Not")
-            {
-                return Bool(!Truthy(recurse(Operand(node, "operand"), ctx)));
-            }
-
-            if (node.Type == $"{TX}/IsAtLeast" || node.Type == $"{TX}/Dominates")
-            {
-                return FoldOrdered(node, ctx, options).Value;
-            }
-
-            double? lit = LiteralValue(node);
-            if (lit.HasValue) return lit.Value;
-
-            // Not an operator or literal — a binding or domain leaf. The caller owns it.
-            return resolve(node, ctx, recurse);
+            if (inClass) Fail("unterminated character class");
         }
 
-        /// <summary>The ordered fold's result: the verdict plus the resolved operand identities.</summary>
-        private struct Ordered
+        /// <summary>The pinned ASCII expansions plus THIS engine's owed translations:
+        /// `.` becomes the surrogate-pair-aware code-point alternation, and \b/\B become
+        /// the explicit ASCII-boundary lookarounds.</summary>
+        static string ExpandShorthandClasses(string body, bool dotAll)
         {
-            public double Value;
-            public string Left;
-            public string Right;
-        }
-
-        /// <summary>
-        /// The identity an ordered comparison compares — a member's canonical versionless URI.
-        /// <c>tx.UriLiteral</c> is the kernel-known constant leaf (its <c>refTo</c> IS the
-        /// identity, the way a literal's value is its number); every other node is the
-        /// caller's, through <c>options.ResolveRef</c>.
-        /// </summary>
-        private static string IdentityOf(ExprNode node, object ctx, EvalOptions options)
-        {
-            if (node.Type == $"{TX}/UriLiteral")
+            var sb = new StringBuilder(body.Length + 32);
+            bool inClass = false;
+            int n = body.Length;
+            for (int i = 0; i < n; i++)
             {
-                if (!(node.Get("refTo") is string s) || s.Length == 0)
-                    throw new ExpressionError("UriLiteral is missing refTo");
-                return s;
+                char c = body[i];
+                if (c == '\\')
+                {
+                    char e = body[i + 1]; // subset-validated: never trailing
+                    string expansion = null;
+                    if (inClass)
+                    {
+                        switch (e)
+                        {
+                            case 'd': expansion = "0-9"; break;
+                            case 'w': expansion = "0-9A-Za-z_"; break;
+                            case 's': expansion = @" \t\n\r\f\x0B"; break;
+                        }
+                    }
+                    else
+                    {
+                        switch (e)
+                        {
+                            case 'd': expansion = "[0-9]"; break;
+                            case 'D': expansion = "[^0-9]"; break;
+                            case 'w': expansion = "[0-9A-Za-z_]"; break;
+                            case 'W': expansion = "[^0-9A-Za-z_]"; break;
+                            case 's': expansion = @"[ \t\n\r\f\x0B]"; break;
+                            case 'S': expansion = @"[^ \t\n\r\f\x0B]"; break;
+                            case 'b': expansion = BBoundary; break;
+                            case 'B': expansion = BNonBoundary; break;
+                        }
+                    }
+                    if (expansion != null) sb.Append(expansion);
+                    else { sb.Append(c); sb.Append(e); }
+                    i++;
+                    continue;
+                }
+                if (!inClass && c == '.')
+                {
+                    sb.Append(dotAll ? DotAllPoints : DotNoNewline);
+                    continue;
+                }
+                if (!inClass && c == '[') inClass = true;
+                else if (inClass && c == ']') inClass = false;
+                sb.Append(c);
             }
-            if (options?.ResolveRef == null)
-                throw new ExpressionError($"No resolveRef supplied for identity leaf '{node.Type}'");
-            return options.ResolveRef(node, ctx);
+            return sb.ToString();
         }
 
-        /// <summary>
-        /// Fold an ordered comparison (<c>IsAtLeast</c> / <c>Dominates</c>) to 1/0 plus the
-        /// resolved operand identities. The ordering is the supplied closure for the node's
-        /// <c>viaProperty</c> — membership in already-closed data, nothing more. Identity is
-        /// canonical versionless URI string equality, matching <c>tx.Equals</c>' identity
-        /// rule. <c>IsAtLeast</c> folds reflexivity into the operator (same member → 1);
-        /// <c>Dominates</c> is strict (same member → 0). Two members with no path yield 0 —
-        /// fail-closed — but a MISSING closure table is a configuration failure and errors
-        /// loudly.
-        /// </summary>
-        private static Ordered FoldOrdered(ExprNode node, object ctx, EvalOptions options)
+        /// <summary>fn:matches semantics: UNANCHORED. Case folding pins to Unicode simple
+        /// folding via IgnoreCase|CultureInvariant.</summary>
+        static bool MatchesPattern(string input, string pattern)
         {
+            string flags = "";
+            string body = pattern;
+            var m = FlagPrefix.Match(pattern);
+            if (m.Success)
+            {
+                flags = m.Groups[1].Value;
+                body = pattern.Substring(m.Length);
+            }
+            ValidateMatchesPattern(body);
+            bool dotAll = flags.IndexOf('s') >= 0;
+            var opts = RegexOptions.None;
+            if (flags.IndexOf('i') >= 0) opts |= RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+            if (flags.IndexOf('m') >= 0) opts |= RegexOptions.Multiline;
+            // `s` (dotAll) rides the dot TRANSLATION, not RegexOptions.Singleline.
+            Regex compiled;
+            try
+            {
+                compiled = new Regex(ExpandShorthandClasses(body, dotAll), opts);
+            }
+            catch (ArgumentException)
+            {
+                throw Err("Matches pattern does not compile: " + pattern);
+            }
+            return compiled.IsMatch(input);
+        }
+
+        // -- ordered comparisons (unchanged from v1) ---------------------------
+
+        static string IdentityOf(ExprNode node, object ctx, EvalOptions opts)
+        {
+            if (node.Type == TX + "/UriLiteral")
+            {
+                if (node.Get("refTo") is string s && s.Length > 0) return s;
+                throw Err("UriLiteral is missing refTo");
+            }
+            if (opts?.ResolveRef == null)
+                throw Err("No resolveRef supplied for identity leaf '" + node.Type + "'");
+            return opts.ResolveRef(node, ctx);
+        }
+
+        static (double value, string left, string right) FoldOrdered(ExprNode node, object ctx, EvalOptions opts)
+        {
+            string typ = node.Type;
             if (!(node.Get("viaProperty") is string via) || via.Length == 0)
-                throw new ExpressionError($"{node.Type} is missing viaProperty");
-            string left = IdentityOf(Operand(node, "compareLeft"), ctx, options);
-            string right = IdentityOf(Operand(node, "compareRight"), ctx, options);
+                throw Err(typ + " is missing viaProperty");
+            string left = IdentityOf(Operand(node, "compareLeft"), ctx, opts);
+            string right = IdentityOf(Operand(node, "compareRight"), ctx, opts);
             Dictionary<string, List<string>> closure = null;
-            if (options?.Closures != null) options.Closures.TryGetValue(via, out closure);
-            if (closure == null)
-                throw new ExpressionError($"No closure supplied for ordering property '{via}'");
+            opts?.Closures?.TryGetValue(via, out closure);
+            if (closure == null) throw Err("No closure supplied for ordering property '" + via + "'");
             double value;
             if (left == right)
             {
-                value = Bool(node.Type == $"{TX}/IsAtLeast");
+                value = Bool(typ == TX + "/IsAtLeast");
             }
             else
             {
-                value = Bool(closure.TryGetValue(left, out var reachable) && reachable.Contains(right));
+                value = Bool(closure.TryGetValue(left, out var reach) && reach.Contains(right));
             }
-            return new Ordered { Value = value, Left = left, Right = right };
+            return (value, left, right);
         }
 
-        /// <summary>
-        /// Evaluate an expression tree and return the verdict tree — the regex-debugger view:
-        /// every evaluated node, its own result, and (for ordered comparisons) the identities
-        /// it compared. The root's <c>Value</c> is exactly what <c>Evaluate</c> returns for
-        /// the same inputs; the conformance suite runs every vector through both and requires
-        /// agreement, so the two entry points cannot drift. Kept separate from Evaluate so the
-        /// hot path never pays for trace allocation. Errors propagate exactly as in Evaluate —
-        /// a failed evaluation throws, never a partial trace.
-        /// </summary>
-        public static TraceNode Explain(ExprNode node, object ctx, Resolve resolve, EvalOptions options)
-        {
-            // Numeric recursion for subtrees the caller's resolve re-enters: those folds
-            // happen inside the caller and are invisible to the trace. Only kernel-visited
-            // nodes appear.
-            Func<ExprNode, object, double> recurseValue = (n, c) => Evaluate(n, c, resolve, options);
+        // -- the fold ----------------------------------------------------------
 
-            if (OperatorArity.TryGetValue(node.Type, out var arity))
+        readonly struct Frame
+        {
+            public readonly string Name;
+            public readonly object Value;
+            public Frame(string name, object value) { Name = name; Value = value; }
+        }
+
+        static object BoundValue(List<Frame> frames, string name)
+        {
+            for (int i = frames.Count - 1; i >= 0; i--)
             {
-                switch (arity.Kind)
+                if (frames[i].Name == name) return frames[i].Value;
+            }
+            return null;
+        }
+
+        /// <summary>Evaluate an expression tree to a value.</summary>
+        public static object Evaluate(ExprNode node, object ctx, Resolve resolve, EvalOptions options = null)
+            => Go(node, ctx, resolve, options, new List<Frame>());
+
+        static List<object> SourceList(ExprNode node, object ctx, Resolve resolve, EvalOptions options, List<Frame> frames)
+        {
+            var v = Go(Operand(node, "source"), ctx, resolve, options, frames);
+            if (v is List<object> l) return l;
+            return new List<object> { v };
+        }
+
+        static object Go(ExprNode node, object ctx, Resolve resolve, EvalOptions options, List<Frame> frames)
+        {
+            string typ = node.Type ?? throw Err("Expression node has no 'type'");
+
+            var ar = OperatorArity(typ);
+            if (ar.HasValue)
+            {
+                var a = ar.Value;
+                switch (a.Kind)
                 {
-                    case Kind.Unary:
+                    case "unary":
+                    {
+                        var x = Go(Operand(node, a.A), ctx, resolve, options, frames);
+                        return Unary(typ, RequireNum(x, typ));
+                    }
+                    case "binary":
+                    {
+                        var l = Go(Operand(node, a.A), ctx, resolve, options, frames);
+                        var r = Go(Operand(node, a.B), ctx, resolve, options, frames);
+                        if (typ == TX + "/Equals") return Bool(ValuesEqual(l, r));
+                        if (IsOrderComparison(typ))
                         {
-                            var x = Explain(Operand(node, arity.A), ctx, resolve, options);
-                            return new TraceNode { Type = node.Type, Value = Unary[node.Type](x.Value), Children = { x } };
+                            // Predicate: non-numeric operands fail CLOSED.
+                            if (!(l is double ld) || !(r is double rd)) return 0.0;
+                            return BinaryOrder(typ, ld, rd);
                         }
-                    case Kind.Binary:
+                        return BinaryArith(typ, RequireNum(l, typ), RequireNum(r, typ));
+                    }
+                    case "nary":
+                    {
+                        if (!(node.Get(a.A) is List<object> items))
+                            throw Err(typ + " expects an '" + a.A + "' list");
+                        bool isAnd = typ == TX + "/And";
+                        foreach (var item in items)
                         {
-                            var a = Explain(Operand(node, arity.A), ctx, resolve, options);
-                            var b = Explain(Operand(node, arity.B), ctx, resolve, options);
-                            return new TraceNode { Type = node.Type, Value = Binary[node.Type](a.Value, b.Value), Children = { a, b } };
+                            var sub = item as ExprNode ?? throw Err(typ + " operand is not a node");
+                            bool v = Truthy(RequireNum(Go(sub, ctx, resolve, options, frames), typ));
+                            if (isAnd && !v) return 0.0;
+                            if (!isAnd && v) return 1.0;
                         }
-                    case Kind.Nary:
-                        {
-                            var items = node.Get(arity.A) as System.Collections.IEnumerable;
-                            if (items == null || node.Get(arity.A) is string)
-                                throw new ExpressionError($"{node.Type} expects an '{arity.A}' list");
-                            bool isAnd = node.Type == $"{TX}/And";
-                            var children = new List<TraceNode>();
-                            foreach (var item in items)
-                            {
-                                var child = Explain(AsNode(item), ctx, resolve, options);
-                                children.Add(child);
-                                bool v = Truthy(child.Value);
-                                // Same short-circuit as Evaluate: operands after the deciding
-                                // one are never evaluated and never appear in the trace.
-                                if (isAnd && !v) return new TraceNode { Type = node.Type, Value = 0, Children = children };
-                                if (!isAnd && v) return new TraceNode { Type = node.Type, Value = 1, Children = children };
-                            }
-                            return new TraceNode { Type = node.Type, Value = Bool(isAnd), Children = children };
-                        }
-                    case Kind.Ternary:
-                        {
-                            var v = Explain(Operand(node, arity.A), ctx, resolve, options);
-                            var lo = Explain(Operand(node, arity.B), ctx, resolve, options);
-                            var hi = Explain(Operand(node, arity.C), ctx, resolve, options);
-                            double value = Math.Min(Math.Max(v.Value, lo.Value), hi.Value);
-                            return new TraceNode { Type = node.Type, Value = value, Children = { v, lo, hi } };
-                        }
+                        return Bool(isAnd);
+                    }
+                    default: // ternary — only Clip today.
+                    {
+                        double v = RequireNum(Go(Operand(node, a.A), ctx, resolve, options, frames), typ);
+                        double lo = RequireNum(Go(Operand(node, a.B), ctx, resolve, options, frames), typ);
+                        double hi = RequireNum(Go(Operand(node, a.C), ctx, resolve, options, frames), typ);
+                        return Math.Min(Math.Max(v, lo), hi);
+                    }
                 }
             }
 
-            if (node.Type == $"{TX}/Not")
+            if (typ == TX + "/Not")
             {
-                var x = Explain(Operand(node, "operand"), ctx, resolve, options);
-                return new TraceNode { Type = node.Type, Value = Bool(!Truthy(x.Value)), Children = { x } };
+                var x = Go(Operand(node, "operand"), ctx, resolve, options, frames);
+                return Bool(!Truthy(RequireNum(x, typ)));
             }
 
-            if (node.Type == $"{TX}/IsAtLeast" || node.Type == $"{TX}/Dominates")
+            if (typ == TX + "/IsAtLeast" || typ == TX + "/Dominates")
+            {
+                return FoldOrdered(node, ctx, options).value;
+            }
+
+            if (IsListFold(typ))
+            {
+                return ListFold(typ, SourceList(node, ctx, resolve, options, frames), node);
+            }
+
+            string bodyKey = IteratorBody(typ);
+            if (bodyKey != null)
+            {
+                if (!(node.Get("loopVar") is string loopVar) || loopVar.Length == 0)
+                    throw Err(typ + " is missing loopVar");
+                var items = SourceList(node, ctx, resolve, options, frames);
+                var body = Operand(node, bodyKey);
+                var outList = new List<object>();
+                foreach (var el in items)
+                {
+                    frames.Add(new Frame(loopVar, el));
+                    object v;
+                    try
+                    {
+                        v = Go(body, ctx, resolve, options, frames);
+                    }
+                    finally
+                    {
+                        frames.RemoveAt(frames.Count - 1);
+                    }
+                    if (typ == TX + "/Filter")
+                    {
+                        if (Truthy(RequireNum(v, "Filter predicate"))) outList.Add(el);
+                    }
+                    else if (typ == TX + "/ForEach")
+                    {
+                        // Flatten one level; an empty list contributes nothing.
+                        if (v is List<object> vl) outList.AddRange(vl);
+                        else outList.Add(v);
+                    }
+                    else
+                    {
+                        outList.Add(v);
+                    }
+                }
+                return outList;
+            }
+
+            if (typ == TX + "/Contains")
+            {
+                var hay = Go(Operand(node, "haystack"), ctx, resolve, options, frames);
+                var needle = Go(Operand(node, "needle"), ctx, resolve, options, frames);
+                var items = hay as List<object> ?? new List<object> { hay };
+                foreach (var el in items)
+                {
+                    if (ValuesEqual(el, needle)) return 1.0;
+                }
+                return 0.0;
+            }
+
+            if (typ == TX + "/IsSet")
+            {
+                return Bool(IsSetValue(Go(Operand(node, "checkExpr"), ctx, resolve, options, frames)));
+            }
+
+            if (typ == TX + "/ListItemAt")
+            {
+                var items = SourceList(node, ctx, resolve, options, frames);
+                var idx = Go(Operand(node, "itemIndex"), ctx, resolve, options, frames);
+                if (!(idx is double d) || d != Math.Floor(d) || d < 0)
+                    throw Err("ListItemAt itemIndex must be a non-negative integer");
+                int i = (int)d;
+                // Past the end is ABSENCE (the empty list); guard with IsSet.
+                return i < items.Count ? items[i] : new List<object>();
+            }
+
+            if (typ == TX + "/Matches")
+            {
+                var src = Go(Operand(node, "matchSource"), ctx, resolve, options, frames);
+                if (!(src is string s))
+                    throw Err("Matches requires a string matchSource, got " + KindOf(src));
+                if (!(node.Get("pattern") is string pattern))
+                    throw Err("Matches is missing pattern");
+                return Bool(MatchesPattern(s, pattern));
+            }
+
+            if (IsKindPredicate(typ))
+            {
+                var x = Go(Operand(node, "kindCheck"), ctx, resolve, options, frames);
+                return KindPredicate(typ, x);
+            }
+
+            var lit = LiteralValue(node);
+            if (lit != null) return lit;
+
+            // A VarRef naming a lexically-enclosing loopVar is the kernel's own
+            // bound variable — the ONLY leaf the kernel answers. Everything else
+            // is the caller's; recursion from inside resolve re-enters WITHOUT
+            // frames.
+            if (typ == TX + "/VarRef" && node.Get("varName") is string name)
+            {
+                var bound = BoundValue(frames, name);
+                if (bound != null) return bound;
+            }
+
+            return resolve(node, ctx, (n, c) => Go(n, c, resolve, options, new List<Frame>()));
+        }
+
+        // -- explain -----------------------------------------------------------
+
+        /// <summary>Evaluate and return the verdict tree. The root's Value is exactly what
+        /// <see cref="Evaluate"/> returns for the same inputs; the conformance suite runs
+        /// every vector through both and requires agreement.</summary>
+        public static TraceNode Explain(ExprNode node, object ctx, Resolve resolve, EvalOptions options = null)
+            => Trace(node, ctx, resolve, options, new List<Frame>());
+
+        static TraceNode Leaf(string typ, object value)
+            => new TraceNode { Type = typ, Value = value };
+
+        static TraceNode Parent(string typ, object value, params TraceNode[] children)
+        {
+            var t = new TraceNode { Type = typ, Value = value };
+            t.Children.AddRange(children);
+            return t;
+        }
+
+        static TraceNode Trace(ExprNode node, object ctx, Resolve resolve, EvalOptions options, List<Frame> frames)
+        {
+            string typ = node.Type ?? throw Err("Expression node has no 'type'");
+
+            var ar = OperatorArity(typ);
+            if (ar.HasValue)
+            {
+                var a = ar.Value;
+                switch (a.Kind)
+                {
+                    case "unary":
+                    {
+                        var x = Trace(Operand(node, a.A), ctx, resolve, options, frames);
+                        return Parent(typ, Unary(typ, RequireNum(x.Value, typ)), x);
+                    }
+                    case "binary":
+                    {
+                        var l = Trace(Operand(node, a.A), ctx, resolve, options, frames);
+                        var r = Trace(Operand(node, a.B), ctx, resolve, options, frames);
+                        object value;
+                        if (typ == TX + "/Equals") value = Bool(ValuesEqual(l.Value, r.Value));
+                        else if (IsOrderComparison(typ))
+                        {
+                            if (!(l.Value is double ld) || !(r.Value is double rd)) value = 0.0;
+                            else value = BinaryOrder(typ, ld, rd);
+                        }
+                        else value = BinaryArith(typ, RequireNum(l.Value, typ), RequireNum(r.Value, typ));
+                        return Parent(typ, value, l, r);
+                    }
+                    case "nary":
+                    {
+                        if (!(node.Get(a.A) is List<object> items))
+                            throw Err(typ + " expects an '" + a.A + "' list");
+                        bool isAnd = typ == TX + "/And";
+                        var t = new TraceNode { Type = typ };
+                        foreach (var item in items)
+                        {
+                            var sub = item as ExprNode ?? throw Err(typ + " operand is not a node");
+                            var child = Trace(sub, ctx, resolve, options, frames);
+                            t.Children.Add(child);
+                            bool v = Truthy(RequireNum(child.Value, typ));
+                            if (isAnd && !v) { t.Value = 0.0; return t; }
+                            if (!isAnd && v) { t.Value = 1.0; return t; }
+                        }
+                        t.Value = Bool(isAnd);
+                        return t;
+                    }
+                    default:
+                    {
+                        var tv = Trace(Operand(node, a.A), ctx, resolve, options, frames);
+                        var tlo = Trace(Operand(node, a.B), ctx, resolve, options, frames);
+                        var thi = Trace(Operand(node, a.C), ctx, resolve, options, frames);
+                        double v = RequireNum(tv.Value, typ);
+                        double lo = RequireNum(tlo.Value, typ);
+                        double hi = RequireNum(thi.Value, typ);
+                        return Parent(typ, Math.Min(Math.Max(v, lo), hi), tv, tlo, thi);
+                    }
+                }
+            }
+
+            if (typ == TX + "/Not")
+            {
+                var x = Trace(Operand(node, "operand"), ctx, resolve, options, frames);
+                return Parent(typ, Bool(!Truthy(RequireNum(x.Value, typ))), x);
+            }
+
+            if (typ == TX + "/IsAtLeast" || typ == TX + "/Dominates")
             {
                 var r = FoldOrdered(node, ctx, options);
-                return new TraceNode { Type = node.Type, Value = r.Value, LeftRef = r.Left, RightRef = r.Right };
+                return new TraceNode { Type = typ, Value = r.value, LeftRef = r.left, RightRef = r.right };
             }
 
-            double? lit = LiteralValue(node);
-            if (lit.HasValue) return new TraceNode { Type = node.Type, Value = lit.Value };
+            if (IsListFold(typ))
+            {
+                var src = Trace(Operand(node, "source"), ctx, resolve, options, frames);
+                var items = src.Value as List<object> ?? new List<object> { src.Value };
+                return Parent(typ, ListFold(typ, items, node), src);
+            }
 
-            return new TraceNode { Type = node.Type, Value = resolve(node, ctx, recurseValue) };
-        }
+            string bodyKey = IteratorBody(typ);
+            if (bodyKey != null)
+            {
+                if (!(node.Get("loopVar") is string loopVar) || loopVar.Length == 0)
+                    throw Err(typ + " is missing loopVar");
+                var src = Trace(Operand(node, "source"), ctx, resolve, options, frames);
+                var items = src.Value as List<object> ?? new List<object> { src.Value };
+                var body = Operand(node, bodyKey);
+                var t = new TraceNode { Type = typ };
+                t.Children.Add(src);
+                var outList = new List<object>();
+                foreach (var el in items)
+                {
+                    frames.Add(new Frame(loopVar, el));
+                    TraceNode bt;
+                    try
+                    {
+                        bt = Trace(body, ctx, resolve, options, frames);
+                    }
+                    finally
+                    {
+                        frames.RemoveAt(frames.Count - 1);
+                    }
+                    t.Children.Add(bt);
+                    var v = bt.Value;
+                    if (typ == TX + "/Filter")
+                    {
+                        if (Truthy(RequireNum(v, "Filter predicate"))) outList.Add(el);
+                    }
+                    else if (typ == TX + "/ForEach")
+                    {
+                        if (v is List<object> vl) outList.AddRange(vl);
+                        else outList.Add(v);
+                    }
+                    else
+                    {
+                        outList.Add(v);
+                    }
+                }
+                t.Value = outList;
+                return t;
+            }
 
-        private static ExprNode Operand(ExprNode node, string key)
-        {
-            object v = node.Get(key);
-            if (v == null) throw new ExpressionError($"{node.Type} is missing operand '{key}'");
-            return AsNode(v);
-        }
+            if (typ == TX + "/Contains")
+            {
+                var hay = Trace(Operand(node, "haystack"), ctx, resolve, options, frames);
+                var needle = Trace(Operand(node, "needle"), ctx, resolve, options, frames);
+                var items = hay.Value as List<object> ?? new List<object> { hay.Value };
+                double v = 0.0;
+                foreach (var el in items)
+                {
+                    if (ValuesEqual(el, needle.Value)) { v = 1.0; break; }
+                }
+                return Parent(typ, v, hay, needle);
+            }
 
-        private static ExprNode AsNode(object v)
-        {
-            if (v is ExprNode n) return n;
-            throw new ExpressionError("operand is not an expression node");
+            if (typ == TX + "/IsSet")
+            {
+                var x = Trace(Operand(node, "checkExpr"), ctx, resolve, options, frames);
+                return Parent(typ, Bool(IsSetValue(x.Value)), x);
+            }
+
+            if (typ == TX + "/ListItemAt")
+            {
+                var src = Trace(Operand(node, "source"), ctx, resolve, options, frames);
+                var idx = Trace(Operand(node, "itemIndex"), ctx, resolve, options, frames);
+                var items = src.Value as List<object> ?? new List<object> { src.Value };
+                if (!(idx.Value is double d) || d != Math.Floor(d) || d < 0)
+                    throw Err("ListItemAt itemIndex must be a non-negative integer");
+                int i = (int)d;
+                object value = i < items.Count ? items[i] : new List<object>();
+                return Parent(typ, value, src, idx);
+            }
+
+            if (typ == TX + "/Matches")
+            {
+                var src = Trace(Operand(node, "matchSource"), ctx, resolve, options, frames);
+                if (!(src.Value is string s))
+                    throw Err("Matches requires a string matchSource, got " + KindOf(src.Value));
+                if (!(node.Get("pattern") is string pattern))
+                    throw Err("Matches is missing pattern");
+                return Parent(typ, Bool(MatchesPattern(s, pattern)), src);
+            }
+
+            if (IsKindPredicate(typ))
+            {
+                var x = Trace(Operand(node, "kindCheck"), ctx, resolve, options, frames);
+                return Parent(typ, KindPredicate(typ, x.Value), x);
+            }
+
+            var lit = LiteralValue(node);
+            if (lit != null) return Leaf(typ, lit);
+
+            if (typ == TX + "/VarRef" && node.Get("varName") is string name)
+            {
+                var bound = BoundValue(frames, name);
+                if (bound != null) return Leaf(typ, bound);
+            }
+
+            var rv = resolve(node, ctx, (n, c) => Go(n, c, resolve, options, new List<Frame>()));
+            return Leaf(typ, rv);
         }
     }
 }
