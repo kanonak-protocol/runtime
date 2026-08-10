@@ -28,11 +28,10 @@ value-domain surface).
 | Go | [`go/`](./go) | ✅ | ✅ | `go test ./...` (or `go run ./cmd/conformance`) |
 | Java | [`java/`](./java) | ✅ | ✅ | `javac -d out src/main/java/org/kanonak/expression/*.java conformance/Conformance.java && java -cp out Conformance ../vectors` |
 | C# | [`csharp/`](./csharp) | ✅ | ✅ | `cd csharp && dotnet run --project test/Kanonak.Expression.Conformance -- ../vectors` |
-| Swift | [`swift/`](./swift) | ✅ | ✅† | `swift test --filter ExpressionVectorTests` (at the repo root) |
+| Swift | [`swift/`](./swift) | ✅ | ✅ | `swift test --filter ExpressionVectorTests` (at the repo root) |
 
-† The Swift port is written against the same contract and vectors but is
-verified in CI (no local Swift toolchain on the development host) — it is not
-release-ready until its CI conformance run is green.
+All seven ports are conformance-verified: six on the development host, Swift
+in CI (swift:6.1, run 31351227813 — no local Swift toolchain here).
 
 Version 2 dialect notes per engine: RE2-family (Rust/Go) is the subset's home
 — code points and the ASCII word boundary native. JS compiles with `u` and
