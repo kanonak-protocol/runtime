@@ -631,6 +631,65 @@
       "expectError": true
     },
     {
+      "id": "matches-digit-shorthand-is-ascii",
+      "description": "PINNED: \\d is [0-9] by textual expansion — Arabic-Indic digits do not match (Rust/Python native \\d would say yes; every port must expand)",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "١٢٣" },
+        "pattern": "^\\d+$"
+      },
+      "expected": 0
+    },
+    {
+      "id": "matches-space-shorthand-is-ascii",
+      "description": "PINNED: \\s is ASCII whitespace by textual expansion — NBSP does not match (native JS \\s would say yes; every port must expand)",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "\u00a0" },
+        "pattern": "^\\s$"
+      },
+      "expected": 0
+    },
+    {
+      "id": "matches-word-boundary-is-ascii",
+      "description": "PINNED: \\b is the ASCII word boundary — é is not a word character, so \\bé finds no boundary (Unicode \\b engines would match; Rust uses (?-u:\\b), Python re.ASCII)",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "a é b" },
+        "pattern": "\\bé"
+      },
+      "expected": 0
+    },
+    {
+      "id": "matches-shorthand-in-class-expands",
+      "description": "In-class shorthand splices as a fragment: [\\d-] is [0-9-]",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "12-34" },
+        "pattern": "^[\\d-]+$"
+      },
+      "expected": 1
+    },
+    {
+      "id": "matches-negated-shorthand-in-class-outside-subset",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "a" },
+        "pattern": "[\\D]"
+      },
+      "expectError": true
+    },
+    {
+      "id": "matches-class-b-escape-outside-subset",
+      "description": "In-class \\b is backspace in JS but an error in RE2-family engines — rejected",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "a" },
+        "pattern": "[\\b]"
+      },
+      "expectError": true
+    },
+    {
       "id": "matches-non-string-source-errors",
       "expr": {
         "type": "kanonak.org/transformations/Matches",

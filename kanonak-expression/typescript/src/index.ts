@@ -474,6 +474,17 @@ export function validateMatchesPattern(pattern: string): void {
         i++;
         continue;
       }
+      if ((e === 'b' || e === 'B') && inClass) {
+        // In-class \b is backspace in JS but an error in RE2-family engines —
+        // reject the divergent reading; word boundaries are outside-class only.
+        fail(`\\${e} inside a character class`);
+      }
+      if ((e === 'D' || e === 'W' || e === 'S') && inClass) {
+        // A negated shorthand inside a class is inexpressible as a textual
+        // fragment under the pinned ASCII expansion — reject rather than
+        // inherit each engine's own reading.
+        fail(`\\${e} inside a character class`);
+      }
       if (!ALLOWED_ESCAPES.has(e!)) fail(`escape \\${e}`);
       i++;
       continue;
@@ -505,6 +516,53 @@ function splitFlagPrefix(pattern: string): { flags: string; body: string } {
   return { flags: m[1]!, body: pattern.slice(m[0].length) };
 }
 
+/**
+ * The pinned ASCII expansions of the shorthand classes — the dialect defines
+ * `\d` `\w` `\s` BY these expansions, and every port applies them textually
+ * before compiling, because the native shorthands diverge across exactly our
+ * targets (Rust/Python `\d` matches Arabic-Indic digits; JS `\s` matches
+ * NBSP; `\b` is Unicode in Rust/Python, ASCII in JS/RE2). Outside a class
+ * the shorthand becomes a bracketed class; inside a class it splices as a
+ * fragment. `\b`/`\B` stay as-written — ASCII word boundaries, native in
+ * this engine (Rust: `(?-u:\b)`; Python: `re.ASCII`).
+ */
+const CLASS_EXPANSION_OUT: Record<string, string> = {
+  d: '[0-9]', D: '[^0-9]',
+  w: '[0-9A-Za-z_]', W: '[^0-9A-Za-z_]',
+  s: '[ \\t\\n\\r\\f\\x0B]', S: '[^ \\t\\n\\r\\f\\x0B]',
+};
+const CLASS_EXPANSION_IN: Record<string, string> = {
+  d: '0-9',
+  w: '0-9A-Za-z_',
+  s: ' \\t\\n\\r\\f\\x0B',
+};
+
+/** Apply the pinned ASCII expansions (subset-validated input, so every `\X`
+ * is a known escape and class boundaries are well-formed). */
+function expandShorthandClasses(body: string): string {
+  let out = '';
+  let inClass = false;
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i]!;
+    if (c === '\\') {
+      const e = body[i + 1]!;
+      const table = inClass ? CLASS_EXPANSION_IN : CLASS_EXPANSION_OUT;
+      const expansion = table[e];
+      if (expansion !== undefined) {
+        out += expansion;
+      } else {
+        out += c + e;
+      }
+      i++;
+      continue;
+    }
+    if (!inClass && c === '[') inClass = true;
+    else if (inClass && c === ']') inClass = false;
+    out += c;
+  }
+  return out;
+}
+
 /** Compile + test under fn:matches semantics: UNANCHORED (substring) — authors
  * write `^…$` for a whole-string match. The flag prefix splits off first
  * (translated to host RegExp flags), then the body is subset-validated, so
@@ -518,7 +576,7 @@ function matchesPattern(input: string, pattern: string): boolean {
   validateMatchesPattern(body);
   let re: RegExp;
   try {
-    re = new RegExp(body, flags + 'u');
+    re = new RegExp(expandShorthandClasses(body), flags + 'u');
   } catch {
     throw new ExpressionError(`Matches pattern does not compile: ${pattern}`);
   }
