@@ -1,9 +1,9 @@
 [package]
 name = "kanonak-expression"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["Kanonak Maintainers (https://github.com/kanonak-protocol/runtime)"]
-description = "Kanonak expression runtime (expressionRuntimeVersion 1). Deterministic tree-walker for kanonak.org/transformations + kanonak.org/math expressions, verified against the shared parity vectors."
+description = "Kanonak expression runtime (expressionRuntimeVersion 2). Deterministic tree-walker for kanonak.org/transformations + kanonak.org/math expressions, verified against the shared parity vectors."
 license = "Apache-2.0"
 readme = "README.md"
 homepage = "https://kanonak.org"
@@ -11,3 +11,4 @@ repository = "https://github.com/kanonak-protocol/runtime"
 
 [dependencies]
 serde_json = "1"
+regex = "1"
