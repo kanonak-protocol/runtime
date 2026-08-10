@@ -290,9 +290,22 @@ public final class Expression {
         return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
     }
 
+    // The ASCII word-boundary lookarounds. Java's native \b uses a UNICODE
+    // word definition on some JDKs (temurin-17 matched é as a word char while
+    // JDK 22 did not — the conformance vectors caught the JDK-version
+    // divergence), so \b/\B expand to explicit ASCII-word-class lookarounds,
+    // which are JDK-independent. Host lookaround in a port's COMPILED form is
+    // fine — the subset restriction is on what authors write.
+    private static final String WORD = "[0-9A-Za-z_]";
+    private static final String B_BOUNDARY =
+        "(?:(?<=" + WORD + ")(?!" + WORD + ")|(?<!" + WORD + ")(?=" + WORD + "))";
+    private static final String B_NON_BOUNDARY =
+        "(?:(?<=" + WORD + ")(?=" + WORD + ")|(?<!" + WORD + ")(?!" + WORD + "))";
+
     /** The pinned ASCII expansions, plus THIS engine's owed translations:
-     * {@code \v} → {@code \x0B} (Java's \v is a class), and non-dotAll {@code .} →
-     * {@code [^\n]} (Java's . excludes more line terminators than the pin). */
+     * {@code \v} → {@code \x0B} (Java's \v is a class), non-dotAll {@code .} →
+     * {@code [^\n]} (Java's . excludes more line terminators than the pin), and
+     * {@code \b}/{@code \B} → the ASCII-boundary lookarounds above. */
     private static String expandShorthandClasses(String body, boolean dotAll) {
         StringBuilder out = new StringBuilder(body.length() + 16);
         boolean inClass = false;
@@ -319,6 +332,8 @@ public final class Expression {
                         case 's': expansion = "[ \\t\\n\\r\\f\\x0B]"; break;
                         case 'S': expansion = "[^ \\t\\n\\r\\f\\x0B]"; break;
                         case 'v': expansion = "\\x0B"; break;
+                        case 'b': expansion = B_BOUNDARY; break;
+                        case 'B': expansion = B_NON_BOUNDARY; break;
                         default: break;
                     }
                 }

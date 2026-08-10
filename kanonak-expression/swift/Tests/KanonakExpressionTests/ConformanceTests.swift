@@ -31,14 +31,12 @@ private func loadJSON(_ name: String) throws -> [String: Any] {
     return doc
 }
 
-/// JSON -> Value, the vector-file encoding. Booleans normalize to 1/0.
-/// (JSONSerialization surfaces booleans as NSNumber; the CFBoolean check keeps
-/// true/false from being read as 1.0/0.0 numbers by accident — which is in
-/// fact exactly the normalization the domain wants, so both paths agree.)
+/// JSON -> Value, the vector-file encoding. Booleans normalize to 1/0 — and
+/// JSONSerialization surfaces them as NSNumber, whose doubleValue is already
+/// exactly that normalization, so no boolean special-case is needed (and the
+/// CoreFoundation type-id probe it would take is not portable to
+/// swift-corelibs-foundation on Linux).
 private func valueOf(_ v: Any) throws -> EvalValue {
-    if let b = v as? Bool, v is NSNumber, CFGetTypeID(v as CFTypeRef) == CFBooleanGetTypeID() {
-        return .num(b ? 1 : 0)
-    }
     if let n = v as? NSNumber { return .num(n.doubleValue) }
     if let s = v as? String { return .str(s) }
     if let arr = v as? [Any] { return .list(try arr.map(valueOf)) }
