@@ -610,6 +610,30 @@ fn validate_matches_pattern(pattern: &str) -> Result<(), ExpressionError> {
             i += 3;
             continue;
         }
+        if c == '{' {
+            // A bare `{` must start a valid quantifier — the SCANNER enforces
+            // this uniformly (a literal brace is written \{); engines disagree
+            // on the lenient literal reading.
+            let mut j = i + 1;
+            let digits = |k: &mut usize| {
+                let start = *k;
+                while *k < chars.len() && chars[*k].is_ascii_digit() {
+                    *k += 1;
+                }
+                *k > start
+            };
+            let mut ok = digits(&mut j);
+            if ok && chars.get(j) == Some(&',') {
+                j += 1;
+                while j < chars.len() && chars[j].is_ascii_digit() {
+                    j += 1;
+                }
+            }
+            ok = ok && chars.get(j) == Some(&'}');
+            if !ok {
+                return fail("bare '{' that is not a quantifier (write \\{)");
+            }
+        }
         i += 1;
     }
     if in_class {

@@ -503,6 +503,14 @@ export function validateMatchesPattern(pattern: string): void {
       i += 2; // resume after '?:'
       continue;
     }
+    if (c === '{') {
+      // A bare `{` must start a valid quantifier — engines disagree on the
+      // lenient literal reading, so the SCANNER enforces the rule uniformly
+      // (a literal brace is written \{), not each host's compile behavior.
+      if (!/^\{\d+(,\d*)?\}/.test(pattern.slice(i))) {
+        fail("bare '{' that is not a quantifier (write \\{)");
+      }
+    }
   }
   if (inClass) fail('unterminated character class');
 }
