@@ -1,160 +1,232 @@
+// Drives the shared parity vectors through the Go port — BOTH files:
+// expression-vectors.json (v1 — passes UNCHANGED under the v2 kernel; the
+// numeric-regression gate) and expression-vectors-2.json (the value-domain
+// extension). Every vector runs through Evaluate AND Explain and their values
+// must agree; env bindings and expected are Values (numbers, strings, arrays,
+// {"ref": …} objects); vectors with a trace assert the verdict tree
+// structurally.
 package expression
 
 import (
 	"encoding/json"
-	"math"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
-const varRef = "kanonak.org/transformations/VarRef"
-
-type traceExpect struct {
-	Type     string        `json:"type"`
-	Value    float64       `json:"value"`
-	Children []traceExpect `json:"children"`
-	LeftRef  string        `json:"leftRef"`
-	RightRef string        `json:"rightRef"`
+type vectorFile struct {
+	Vectors []map[string]interface{} `json:"vectors"`
 }
 
-type vector struct {
-	ID          string                 `json:"id"`
-	Expr        map[string]interface{} `json:"expr"`
-	Env         map[string]float64     `json:"env"`
-	RefEnv      map[string]string      `json:"refEnv"`
-	Closures    ClosureTable           `json:"closures"`
-	Expected    *float64               `json:"expected"`
-	Tolerance   *float64               `json:"tolerance"`
-	ExpectError bool                   `json:"expectError"`
-	Trace       *traceExpect           `json:"trace"`
-}
-
-type conformanceCtx struct {
-	env    map[string]float64
-	refEnv map[string]string
-}
-
-func readVectors(t *testing.T, name string) []vector {
-	data, err := os.ReadFile("../vectors/" + name)
-	if err != nil {
-		t.Fatalf("read %s: %v", name, err)
+// valueOf converts the vector-file JSON encoding into a kernel Value.
+func valueOf(v interface{}) Value {
+	switch e := v.(type) {
+	case bool:
+		return boolNum(e)
+	case float64:
+		return e
+	case string:
+		return e
+	case []interface{}:
+		out := make([]Value, len(e))
+		for i, x := range e {
+			out[i] = valueOf(x)
+		}
+		return out
+	case map[string]interface{}:
+		if r, ok := e["ref"].(string); ok {
+			return Ref{URI: r}
+		}
 	}
-	var doc struct {
-		Vectors []vector `json:"vectors"`
-	}
-	if err := json.Unmarshal(data, &doc); err != nil {
-		t.Fatalf("parse %s: %v", name, err)
-	}
-	return doc.Vectors
+	panic("unrepresentable vector value")
 }
 
-// resolve is the conformance hook: tx.VarRef -> env binding; any other leaf is
-// unbound here and raises. This is the demonstration that variable binding lives
-// in the caller, not the runtime.
-func conformanceResolve(node Node, ctx interface{}, _ func(Node, interface{}) float64) float64 {
-	if node.Type() == varRef {
-		name, _ := node["varName"].(string)
-		c, _ := ctx.(*conformanceCtx)
-		v, ok := c.env[name]
-		if !ok {
+func valuesDeepEqual(a, b Value) bool {
+	al, aok := a.([]Value)
+	bl, bok := b.([]Value)
+	if aok && bok {
+		if len(al) != len(bl) {
+			return false
+		}
+		for i := range al {
+			if !valuesDeepEqual(al[i], bl[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	if aok || bok {
+		return false
+	}
+	return valuesEqual(a, b)
+}
+
+func makeResolve(env map[string]Value) Resolve {
+	return func(node Node, _ interface{}, _ func(Node, interface{}) Value) Value {
+		if node.Type() == tx+"/VarRef" {
+			name, _ := node["varName"].(string)
+			if v, ok := env[name]; ok {
+				return v
+			}
 			raise("Unbound variable %q", name)
 		}
-		return v
+		raise("No resolver for leaf '%s'", node.Type())
+		return nil
 	}
-	raise("No resolver for leaf '%s'", node.Type())
-	return 0
 }
 
-// conformanceResolveRef is the identity-domain mirror: tx.VarRef -> refEnv
-// member URI. Same division as resolve — the kernel owns UriLiteral, the
-// caller owns bindings.
-func conformanceResolveRef(node Node, ctx interface{}) string {
-	if node.Type() == varRef {
-		name, _ := node["varName"].(string)
-		c, _ := ctx.(*conformanceCtx)
-		v, ok := c.refEnv[name]
-		if !ok {
+func makeResolveRef(refEnv map[string]string) ResolveRef {
+	return func(node Node, _ interface{}) string {
+		if node.Type() == tx+"/VarRef" {
+			name, _ := node["varName"].(string)
+			if v, ok := refEnv[name]; ok {
+				return v
+			}
 			raise("Unbound reference %q", name)
 		}
-		return v
+		raise("No reference resolver for leaf '%s'", node.Type())
+		return ""
 	}
-	raise("No reference resolver for leaf '%s'", node.Type())
-	return ""
 }
 
-// traceMatches compares a produced verdict tree against the vector's expected
-// tree structurally, including absent-vs-present refs.
-func traceMatches(got *TraceNode, want *traceExpect) bool {
-	if got.Type != want.Type || got.Value != want.Value {
+func traceMatches(got *TraceNode, want map[string]interface{}) bool {
+	if typ, _ := want["type"].(string); typ != got.Type {
 		return false
 	}
-	if got.LeftRef != want.LeftRef || got.RightRef != want.RightRef {
+	wantValue, ok := want["value"]
+	if !ok || !valuesDeepEqual(got.Value, valueOf(wantValue)) {
 		return false
 	}
-	if len(got.Children) != len(want.Children) {
+	wantLeft, _ := want["leftRef"].(string)
+	wantRight, _ := want["rightRef"].(string)
+	if wantLeft != got.LeftRef || wantRight != got.RightRef {
 		return false
 	}
-	for i, c := range got.Children {
-		if !traceMatches(c, &want.Children[i]) {
+	wantChildren, _ := want["children"].([]interface{})
+	if len(wantChildren) != len(got.Children) {
+		return false
+	}
+	for i, wc := range wantChildren {
+		w, _ := wc.(map[string]interface{})
+		if !traceMatches(got.Children[i], w) {
 			return false
 		}
 	}
 	return true
 }
 
-func TestExpressionVectors(t *testing.T) {
-	vectors := readVectors(t, "expression-vectors.json")
-	pass := 0
-	total := len(vectors)
-	for _, v := range vectors {
-		ctx := &conformanceCtx{env: v.Env, refEnv: v.RefEnv}
-		if ctx.env == nil {
-			ctx.env = map[string]float64{}
-		}
-		if ctx.refEnv == nil {
-			ctx.refEnv = map[string]string{}
-		}
-		opts := &Options{Closures: v.Closures, ResolveRef: conformanceResolveRef}
-		got, err := EvaluateWithOptions(Node(v.Expr), ctx, conformanceResolve, opts)
-		trace, terr := Explain(Node(v.Expr), ctx, conformanceResolve, opts)
+func runFile(t *testing.T, name string) {
+	raw, err := os.ReadFile(filepath.Join("..", "vectors", name))
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	var doc vectorFile
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse %s: %v", name, err)
+	}
 
-		if v.ExpectError {
-			if err == nil || terr == nil {
-				t.Errorf("%s: expected an error from Evaluate AND Explain", v.ID)
-				continue
+	pass := 0
+	for _, v := range doc.Vectors {
+		id, _ := v["id"].(string)
+		exprRaw, _ := v["expr"].(map[string]interface{})
+		expr := Node(exprRaw)
+
+		env := map[string]Value{}
+		if e, ok := v["env"].(map[string]interface{}); ok {
+			for k, x := range e {
+				env[k] = valueOf(x)
 			}
-			pass++
+		}
+		refEnv := map[string]string{}
+		if e, ok := v["refEnv"].(map[string]interface{}); ok {
+			for k, x := range e {
+				if s, ok := x.(string); ok {
+					refEnv[k] = s
+				}
+			}
+		}
+		var closures ClosureTable
+		if c, ok := v["closures"].(map[string]interface{}); ok {
+			closures = ClosureTable{}
+			for prop, members := range c {
+				inner := map[string][]string{}
+				if m, ok := members.(map[string]interface{}); ok {
+					for from, reach := range m {
+						var set []string
+						if arr, ok := reach.([]interface{}); ok {
+							for _, x := range arr {
+								if s, ok := x.(string); ok {
+									set = append(set, s)
+								}
+							}
+						}
+						inner[from] = set
+					}
+				}
+				closures[prop] = inner
+			}
+		}
+		opts := &Options{Closures: closures, ResolveRef: makeResolveRef(refEnv)}
+		resolve := makeResolve(env)
+
+		expectError, _ := v["expectError"].(bool)
+		got, evalErr := EvaluateWithOptions(expr, nil, resolve, opts)
+		trace, explainErr := Explain(expr, nil, resolve, opts)
+
+		if expectError {
+			if evalErr != nil && explainErr != nil {
+				pass++
+			} else {
+				t.Errorf("%s/%s: expected an error from Evaluate AND Explain", name, id)
+			}
 			continue
 		}
-		if err != nil {
-			t.Errorf("%s: threw %v", v.ID, err)
+		if evalErr != nil {
+			t.Errorf("%s/%s: raised %v", name, id, evalErr)
 			continue
 		}
-		if terr != nil {
-			t.Errorf("%s: Explain threw %v", v.ID, terr)
+		if explainErr != nil {
+			t.Errorf("%s/%s: explain raised %v", name, id, explainErr)
 			continue
 		}
-		exp := *v.Expected
-		ok := got == exp
-		if v.Tolerance != nil {
-			ok = math.Abs(got-exp) <= *v.Tolerance
+
+		expected := valueOf(v["expected"])
+		ok := false
+		if tol, hasTol := v["tolerance"].(float64); hasTol {
+			gn, gok := got.(float64)
+			en, eok := expected.(float64)
+			ok = gok && eok && abs(gn-en) <= tol
+		} else {
+			ok = valuesDeepEqual(got, expected)
 		}
 		if !ok {
-			t.Errorf("%s: expected %v got %v", v.ID, exp, got)
+			t.Errorf("%s/%s: expected %v got %v", name, id, expected, got)
 			continue
 		}
-		if trace.Value != got {
-			t.Errorf("%s: Explain value %v != Evaluate value %v", v.ID, trace.Value, got)
+		if !valuesDeepEqual(trace.Value, got) {
+			t.Errorf("%s/%s: explain value %v != evaluate value %v", name, id, trace.Value, got)
 			continue
 		}
-		if v.Trace != nil && !traceMatches(trace, v.Trace) {
-			t.Errorf("%s: trace mismatch", v.ID)
-			continue
+		if w, ok := v["trace"].(map[string]interface{}); ok {
+			if !traceMatches(trace, w) {
+				t.Errorf("%s/%s: trace mismatch", name, id)
+				continue
+			}
 		}
 		pass++
 	}
-	t.Logf("expression-vectors: %d/%d pass", pass, total)
-	if pass != total {
-		t.Fatalf("expression-vectors: %d/%d pass", pass, total)
+	t.Logf("%s: %d/%d pass", name, pass, len(doc.Vectors))
+}
+
+func abs(x float64) float64 {
+	if x < 0 {
+		return -x
 	}
+	return x
+}
+
+func TestExpressionVectors(t *testing.T) {
+	// v1 vectors are the regression gate: every one passes unchanged under v2.
+	runFile(t, "expression-vectors.json")
+	runFile(t, "expression-vectors-2.json")
 }
