@@ -20,7 +20,7 @@ meta:
   # ecosystems left behind (issue #18; release-audit enforces the parity).
   # go_module_versions below tracks the Go tags per member.
   canonical_form_version: "1"                     # frozen content-address rules
-  expression_runtime_version: "1"                 # frozen expression-evaluation rules
+  expression_runtime_version: "2"                 # frozen expression-evaluation rules
   wire_format_version: "1"                        # frozen wire-kernel rules
   publish_order: [canonical, codec, expression, wire]   # expression + wire have no cross-dep; order is loose for them
   # Go module versions â€” the Go "registry" is git tags (`kanonak-<member>/go/v<ver>`)
@@ -31,7 +31,7 @@ meta:
   go_module_versions:
     canonical: "0.2.1"
     codec: "0.4.1"
-    expression: "0.2.0"
+    expression: "0.3.0"
     wire: "0.1.0"
   # Swift package version — the ROOT `v<ver>` tag (SwiftPM resolves ONLY root
   # semver tags; ONE version covers all four products — KanonakCanonical,
@@ -49,7 +49,7 @@ meta:
   # + the lenient carrier-routing key) to KanonakCanonical (canonical 0.2.0 in
   # the per-member registries; runtime#17).
   # 0.8.1 adds the total displayName accessor (canonical 0.2.1; #17 reopening).
-  swift_package_version: "0.8.1"
+  swift_package_version: "0.9.0"
   # GitHub Actions OIDC (no stored token) is preferred where supported. A workflow
   # using OIDC needs:  permissions: { id-token: write, contents: read, attestations: write }
   # All PUBLISH jobs run in the `production` GitHub environment (required by NuGet trusted

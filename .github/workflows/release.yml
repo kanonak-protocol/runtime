@@ -173,8 +173,88 @@ jobs:
           npm run conformance
 
   # =============== PUBLISH (only on publish; gated by the production env) ===============
+  # ============ PREFLIGHT (desired-state consistency, BEFORE any publish) ============
+  # Run 31351406679's lesson: the drift guards inside publish-go/publish-swift
+  # and the parity check inside release-audit are all CORRECT — but they fire
+  # per job, AFTER other registries have already accepted a version. A
+  # half-bumped desired state (pyproject/Cargo.toml/package.json at the new
+  # version; pom/csproj/go_module_versions/swift_package_version still at the
+  # old) therefore published a PARTIAL release before anything refused. This
+  # job runs the same invariants from the committed manifests + existing tags
+  # alone — no registry mutations — and gates EVERY publish job, so an
+  # inconsistent desired state fails the run before the first registry is
+  # touched. release-audit remains the post-publish verification of the same
+  # invariants against the public registries.
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: desired-state consistency (manifest parity + tag drift) before any publish
+        run: |
+          python3 -m pip install --quiet pyyaml
+          retry() { local n=$1 s=$2; shift 2; local i
+            for i in $(seq 1 "$n"); do "$@" && return 0; [ "$i" -lt "$n" ] && sleep "$s"; done
+            return 1
+          }
+          fail=0
+          for m in canonical codec expression wire; do
+            # CROSS-REGISTRY PARITY (issue #18), checked BEFORE anything ships:
+            # a member releases at ONE version on every registry, and the six
+            # committed version sources must already agree.
+            py_ver=$(grep -m1 '^version' "kanonak-$m/python/pyproject.toml" | sed -E 's/.*"(.*)".*/\1/')
+            rs_ver=$(grep -m1 '^version' "kanonak-$m/rust/Cargo.toml" | sed -E 's/.*"(.*)".*/\1/')
+            ts_ver=$(jq -r .version "kanonak-$m/typescript/package.json")
+            cs_ver=$(grep -m1 -h '<Version>' kanonak-$m/csharp/src/*/*.csproj | sed -E 's/.*<Version>(.*)<\/Version>.*/\1/')
+            jv_ver=$(grep -m1 '<version>' "kanonak-$m/java/pom.xml" | sed -E 's/.*<version>(.*)<\/version>.*/\1/')
+            go_ver=$(python3 -c "import yaml; print(yaml.safe_load(open('release-targets.yml'))['meta']['go_module_versions']['$m'])")
+            if [ "$(printf '%s\n' "$py_ver" "$rs_ver" "$ts_ver" "$cs_ver" "$jv_ver" "$go_ver" | sort -u | wc -l)" != "1" ]; then
+              echo "::error::PREFLIGHT VERSION SKEW kanonak-$m — python=$py_ver rust=$rs_ver npm=$ts_ver nuget=$cs_ver maven=$jv_ver go=$go_ver. A member releases at ONE version on every registry (issue #18); align ALL committed manifests (incl. release-targets.yml) BEFORE publishing — nothing has been published."; fail=1
+            else
+              echo "OK       parity        kanonak-$m $py_ver across all six declared versions"
+            fi
+
+            # GO TAG DRIFT, checked before anything ships (same subtree rule
+            # as publish-go's own guard, which stays in place as defense in
+            # depth): if the member's go tree changed since its existing tag
+            # and go_module_versions was not bumped, the eventual skip would
+            # strand Go consumers while other registries move.
+            tag="kanonak-$m/go/v$go_ver"
+            if git ls-remote --tags origin "refs/tags/$tag" | grep -q .; then
+              if retry 3 15 git fetch --quiet --depth 1 origin "refs/tags/$tag"; then
+                tagged=$(git rev-parse "FETCH_HEAD:kanonak-$m/go" 2>/dev/null || true)
+                current=$(git rev-parse "HEAD:kanonak-$m/go" 2>/dev/null || true)
+                if [ -n "$tagged" ] && [ -n "$current" ] && [ "$tagged" != "$current" ]; then
+                  echo "::error::PREFLIGHT DRIFT kanonak-$m/go has CHANGED since $tag but go_module_versions.$m is still $go_ver — bump it in release-targets.yml. Nothing has been published."; fail=1
+                fi
+              else
+                echo "::error::PREFLIGHT could not fetch $tag to check for drift after retries — refusing to ASSUME (issue #18); re-run when origin is reachable."; fail=1
+              fi
+            fi
+          done
+
+          # WASM/CODEC PARITY (the GHCR tag tracks the codec version).
+          wasm_ver=$(grep -m1 '^version = ' kanonak-codec/wasm/Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          codec_ver=$(grep -m1 '^version' kanonak-codec/rust/Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          if [ "$wasm_ver" != "$codec_ver" ]; then
+            echo "::error::PREFLIGHT VERSION SKEW kanonak-codec wasm component — wasm crate $wasm_ver vs codec $codec_ver (issue #18); align kanonak-codec/wasm/Cargo.toml BEFORE publishing."; fail=1
+          fi
+
+          # SWIFT TAG DRIFT (same rule as publish-swift's own guard).
+          swift_ver=$(python3 -c "import yaml; print(yaml.safe_load(open('release-targets.yml'))['meta']['swift_package_version'])")
+          stag="v$swift_ver"
+          if git ls-remote --tags origin "refs/tags/$stag" | grep -q .; then
+            if retry 3 15 git fetch --quiet --depth 1 origin "refs/tags/$stag:refs/tags/$stag"; then
+              if ! git diff --quiet "$stag" HEAD -- Package.swift kanonak-*/swift 2>/dev/null; then
+                echo "::error::PREFLIGHT DRIFT Swift sources have CHANGED since $stag but swift_package_version is still $swift_ver — bump it in release-targets.yml. Nothing has been published."; fail=1
+              fi
+            else
+              echo "::error::PREFLIGHT could not fetch $stag to check for Swift drift after retries — refusing to ASSUME (issue #18); re-run when origin is reachable."; fail=1
+            fi
+          fi
+          exit $fail
+
   publish-python:
-    needs: test-python
+    needs: [test-python, preflight]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
     runs-on: ubuntu-latest
@@ -198,7 +278,7 @@ jobs:
         with: { packages-dir: kanonak-wire/python/dist, skip-existing: true }
 
   publish-rust:
-    needs: test-rust
+    needs: [test-rust, preflight]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
     runs-on: ubuntu-latest
@@ -275,7 +355,7 @@ jobs:
           pub kanonak-wire/rust/Cargo.toml
 
   publish-typescript:
-    needs: test-typescript
+    needs: [test-typescript, preflight]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
     runs-on: ubuntu-latest
@@ -318,7 +398,7 @@ jobs:
           done
 
   publish-csharp:
-    needs: test-csharp
+    needs: [test-csharp, preflight]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
     runs-on: ubuntu-latest
@@ -346,7 +426,7 @@ jobs:
         # `--api-key ${{ secrets.NUGET_API_KEY }}`.
 
   publish-java:
-    needs: test-java
+    needs: [test-java, preflight]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
     runs-on: ubuntu-latest
@@ -414,7 +494,7 @@ jobs:
   # Idempotent: an existing tag is NEVER touched or moved (immutability rule);
   # to release a new Go version, bump go_module_versions and re-run.
   publish-go:
-    needs: test-go
+    needs: [test-go, preflight]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
     permissions:
@@ -473,7 +553,7 @@ jobs:
   # Idempotent: an existing tag is NEVER touched or moved; to release a new
   # Swift version, bump swift_package_version and re-run.
   publish-swift:
-    needs: test-swift
+    needs: [test-swift, preflight]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
     permissions:
@@ -534,7 +614,7 @@ jobs:
   # package settings) — GHCR creates org packages private, and anonymous
   # `wkg oci pull` is the acceptance bar. release-audit hard-fails until then.
   publish-wasm:
-    needs: test-wasm
+    needs: [test-wasm, preflight]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
     permissions:
@@ -731,11 +811,20 @@ jobs:
           # NO Package.swift" — a false alarm against a provably good tag
           # (run 31047092610). Retried like every network call in this audit,
           # and not --quiet, so git's own stderr lands in the log.
+          #
+          # The tree check itself asks git DIRECTLY (`cat-file -e`), never
+          # through a pipe: the previous `ls-tree -r | grep -q` form was a
+          # SIGPIPE race under pipefail — grep -q exits at the (early) match,
+          # and once the recursive listing outgrew the pipe buffer, ls-tree
+          # died with 141 and a provably good tag read as "NO Package.swift"
+          # (run 31351406679; the tree crossed the buffer size when the seven
+          # expression ports landed). Never early-exit-pipe a large producer
+          # under pipefail in this audit.
           swift_ver=$(python3 -c "import yaml; print(yaml.safe_load(open('release-targets.yml'))['meta']['swift_package_version'])")
           if git ls-remote --tags origin "refs/tags/v$swift_ver" | grep -q .; then
             if ! retry 3 15 git fetch --depth 1 origin "refs/tags/v$swift_ver:refs/tags/v$swift_ver"; then
               echo "::error::Swift root tag v$swift_ver exists on origin but could not be FETCHED to inspect its tree (see git's output above; likely transient) — the tag itself is untouched; re-run the audit"; fail=1
-            elif git ls-tree -r --name-only "v$swift_ver" | grep -qx "Package.swift"; then
+            elif git cat-file -e "v$swift_ver:Package.swift" 2>/dev/null; then
               echo "OK       Swift         v$swift_ver (root tag present, Package.swift in its tree)"
             else
               echo "::error::Swift root tag v$swift_ver exists but its tree carries NO root Package.swift — SwiftPM cannot resolve it. Never move the tag: bump swift_package_version and re-run from a tree that has it"; fail=1
