@@ -430,6 +430,16 @@ def validate_matches_pattern(pattern: str) -> None:
         fail("unterminated character class")
 
 
+# The ASCII word-boundary translations. Python's native \b follows \w, which
+# is Unicode here (re.ASCII would pin it — but re.ASCII ALSO disables Unicode
+# case folding under IGNORECASE, which the dialect pins ON), so \b/\B expand
+# to explicit lookarounds over the pinned ASCII word class. Host lookaround in
+# a port's COMPILED form is fine — the subset restriction is on what AUTHORS
+# write, not on how an engine implements the pinned semantics.
+_WORD = "[0-9A-Za-z_]"
+_B_BOUNDARY = f"(?:(?<={_WORD})(?!{_WORD})|(?<!{_WORD})(?={_WORD}))"
+_B_NON_BOUNDARY = f"(?:(?<={_WORD})(?={_WORD})|(?<!{_WORD})(?!{_WORD}))"
+
 _EXPANSION_OUT = {
     "d": "[0-9]",
     "D": "[^0-9]",
@@ -437,6 +447,8 @@ _EXPANSION_OUT = {
     "W": "[^0-9A-Za-z_]",
     "s": "[ \\t\\n\\r\\f\\x0B]",
     "S": "[^ \\t\\n\\r\\f\\x0B]",
+    "b": _B_BOUNDARY,
+    "B": _B_NON_BOUNDARY,
 }
 _EXPANSION_IN = {
     "d": "0-9",
@@ -447,8 +459,8 @@ _EXPANSION_IN = {
 
 def _expand_shorthand_classes(body: str) -> str:
     """The pinned ASCII expansions — the dialect DEFINES the shorthands by
-    these, applied textually before compiling. ``\\b``/``\\B`` stay as-written;
-    ``re.ASCII`` at compile time makes them the ASCII word boundary."""
+    these, applied textually before compiling; ``\\b``/``\\B`` become the
+    explicit ASCII-boundary lookarounds above."""
     out: List[str] = []
     in_class = False
     i = 0
@@ -472,11 +484,13 @@ def _expand_shorthand_classes(body: str) -> str:
 
 
 def _matches_pattern(text: str, pattern: str) -> bool:
-    """fn:matches semantics: UNANCHORED. ``.`` counts code points (native);
-    ``re.ASCII`` pins the remaining ``\\b``/``\\B`` to the ASCII boundary."""
+    """fn:matches semantics: UNANCHORED. ``.`` counts code points and matches
+    everything but ``\\n`` (both native here); case folding under ``i`` is
+    Unicode simple folding (native — which is why ``re.ASCII`` must NOT be
+    passed; the ASCII pins ride the textual expansions instead)."""
     flags_str, body = _split_flag_prefix(pattern)
     validate_matches_pattern(body)
-    flags = _re.ASCII
+    flags = 0
     if "i" in flags_str:
         flags |= _re.IGNORECASE
     if "m" in flags_str:

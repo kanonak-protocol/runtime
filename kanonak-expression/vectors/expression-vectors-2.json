@@ -690,6 +690,36 @@
       "expectError": true
     },
     {
+      "id": "matches-dot-matches-carriage-return",
+      "description": "PINNED: non-dotAll `.` is any code point except \\n — it MATCHES \\r (the RE2/Python/Go norm; JS and Java engines exclude more line terminators natively and must translate `.` to [^\\n])",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "\r" },
+        "pattern": "^.$"
+      },
+      "expected": 1
+    },
+    {
+      "id": "matches-vertical-tab-escape",
+      "description": "PINNED: \\v is the vertical tab U+000B (Java's native \\v is a vertical-whitespace CLASS and must translate to \\x0B)",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "\u000b" },
+        "pattern": "^\\v$"
+      },
+      "expected": 1
+    },
+    {
+      "id": "matches-case-fold-is-unicode",
+      "description": "PINNED: (?i) is Unicode simple case folding — é folds to É (Java adds UNICODE_CASE; C# uses CultureInvariant; Python must NOT pass re.ASCII, which disables it)",
+      "expr": {
+        "type": "kanonak.org/transformations/Matches",
+        "matchSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "É" },
+        "pattern": "(?i)é"
+      },
+      "expected": 1
+    },
+    {
       "id": "matches-non-string-source-errors",
       "expr": {
         "type": "kanonak.org/transformations/Matches",

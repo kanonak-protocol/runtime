@@ -546,8 +546,12 @@ const CLASS_EXPANSION_IN: Record<string, string> = {
 };
 
 /** Apply the pinned ASCII expansions (subset-validated input, so every `\X`
- * is a known escape and class boundaries are well-formed). */
-function expandShorthandClasses(body: string): string {
+ * is a known escape and class boundaries are well-formed). Also pins the
+ * non-dotAll `.`: the dialect defines it as "any code point except \n" (the
+ * RE2/Python/Go norm) — THIS engine natively excludes \r/U+2028/U+2029 as
+ * well, so a non-dotAll `.` translates to `[^\n]`. Under `s`, every engine's
+ * dotAll means "everything" and `.` passes through. */
+function expandShorthandClasses(body: string, dotAll: boolean): string {
   let out = '';
   let inClass = false;
   for (let i = 0; i < body.length; i++) {
@@ -562,6 +566,10 @@ function expandShorthandClasses(body: string): string {
         out += c + e;
       }
       i++;
+      continue;
+    }
+    if (!inClass && c === '.' && !dotAll) {
+      out += '[^\\n]';
       continue;
     }
     if (!inClass && c === '[') inClass = true;
@@ -584,7 +592,7 @@ function matchesPattern(input: string, pattern: string): boolean {
   validateMatchesPattern(body);
   let re: RegExp;
   try {
-    re = new RegExp(expandShorthandClasses(body), flags + 'u');
+    re = new RegExp(expandShorthandClasses(body, flags.includes('s')), flags + 'u');
   } catch {
     throw new ExpressionError(`Matches pattern does not compile: ${pattern}`);
   }
