@@ -419,25 +419,49 @@ namespace Kanonak.Expression
         const string DotNoNewline = "(?:[\uD800-\uDBFF][\uDC00-\uDFFF]|[^\n\uD800-\uDFFF])";
         const string DotAllPoints = "(?:[\uD800-\uDBFF][\uDC00-\uDFFF]|[^\uD800-\uDFFF])";
 
-        /// <summary>The same subset scanner as the reference kernel.</summary>
+        /// <summary>Check a WHOLE pattern against the pinned subset, flag prefix
+        /// included. Thin wrapper over <see cref="ParseMatchesPattern"/> so this
+        /// checker and the evaluator can never disagree about what is valid.</summary>
         internal static void ValidateMatchesPattern(string pattern)
+            => ParseMatchesPattern(pattern);
+
+        /// <summary>THE definition of a valid <c>Matches</c> pattern: the single
+        /// place that decides what the pinned subset accepts AND how a whole
+        /// pattern decomposes into its flag prefix and body. Every diagnostic
+        /// quotes the WHOLE pattern the caller passed, never the stripped body.</summary>
+        static (string Flags, string Body) ParseMatchesPattern(string pattern)
         {
             void Fail(string what)
                 => throw Err("Matches pattern is outside the pinned regex subset (" + what + "): " + pattern);
 
+            // Whole-pattern flag prefix - position 0 only, over i/m/s, EACH AT MOST
+            // ONCE. The repeat rule is the subset's, not the host engine's: the JS
+            // engine rejects (?ii) at compile time while the Go, Python and Rust
+            // engines accept it, so the subset decides rather than the host.
+            string flags = "";
+            string body = pattern;
+            var prefix = FlagPrefix.Match(pattern);
+            if (prefix.Success)
+            {
+                flags = prefix.Groups[1].Value;
+                var seen = new HashSet<char>();
+                foreach (var f in flags)
+                    if (!seen.Add(f)) Fail("repeated flag in prefix (?" + flags + ")");
+                body = pattern.Substring(prefix.Length);
+            }
             bool inClass = false;
-            int n = pattern.Length;
+            int n = body.Length;
             for (int i = 0; i < n; i++)
             {
-                char c = pattern[i];
+                char c = body[i];
                 if (c == '\\')
                 {
                     if (i + 1 >= n) Fail("trailing backslash");
-                    char e = pattern[i + 1];
+                    char e = body[i + 1];
                     if (e == 'x')
                     {
-                        if (i + 2 < n && pattern[i + 2] == '{') Fail(@"\x{…} escape");
-                        if (i + 3 >= n || !Uri.IsHexDigit(pattern[i + 2]) || !Uri.IsHexDigit(pattern[i + 3]))
+                        if (i + 2 < n && body[i + 2] == '{') Fail(@"\x{…} escape");
+                        if (i + 3 >= n || !Uri.IsHexDigit(body[i + 2]) || !Uri.IsHexDigit(body[i + 3]))
                             Fail(@"\x escape must be \xHH");
                         i += 3;
                         continue;
@@ -461,14 +485,14 @@ namespace Kanonak.Expression
                 if (inClass)
                 {
                     if (c == ']') inClass = false;
-                    else if (c == '&' && i + 1 < n && pattern[i + 1] == '&') Fail("character-class intersection &&");
-                    else if (c == '[' && i + 1 < n && pattern[i + 1] == ':') Fail("POSIX class [[:…:]]");
+                    else if (c == '&' && i + 1 < n && body[i + 1] == '&') Fail("character-class intersection &&");
+                    else if (c == '[' && i + 1 < n && body[i + 1] == ':') Fail("POSIX class [[:…:]]");
                     continue;
                 }
                 if (c == '[') { inClass = true; continue; }
-                if (c == '(' && i + 1 < n && pattern[i + 1] == '?')
+                if (c == '(' && i + 1 < n && body[i + 1] == '?')
                 {
-                    if (i + 2 >= n || pattern[i + 2] != ':') Fail("group construct (?");
+                    if (i + 2 >= n || body[i + 2] != ':') Fail("group construct (?");
                     i += 2;
                     continue;
                 }
@@ -476,11 +500,12 @@ namespace Kanonak.Expression
                 {
                     // A bare `{` must start a valid quantifier — the SCANNER enforces
                     // this uniformly (a literal brace is written \{).
-                    if (!Quantifier.IsMatch(pattern.Substring(i)))
+                    if (!Quantifier.IsMatch(body.Substring(i)))
                         Fail("bare '{' that is not a quantifier (write \\{)");
                 }
             }
             if (inClass) Fail("unterminated character class");
+            return (flags, body);
         }
 
         /// <summary>The pinned ASCII expansions plus THIS engine's owed translations:
@@ -542,15 +567,7 @@ namespace Kanonak.Expression
         /// folding via IgnoreCase|CultureInvariant.</summary>
         static bool MatchesPattern(string input, string pattern)
         {
-            string flags = "";
-            string body = pattern;
-            var m = FlagPrefix.Match(pattern);
-            if (m.Success)
-            {
-                flags = m.Groups[1].Value;
-                body = pattern.Substring(m.Length);
-            }
-            ValidateMatchesPattern(body);
+            var (flags, body) = ParseMatchesPattern(pattern);
             bool dotAll = flags.IndexOf('s') >= 0;
             var opts = RegexOptions.None;
             if (flags.IndexOf('i') >= 0) opts |= RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;

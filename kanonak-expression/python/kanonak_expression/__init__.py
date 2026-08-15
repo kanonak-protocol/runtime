@@ -345,33 +345,49 @@ _ALLOWED_ESCAPES = set("dDwWsSbBnrtfv.*+?()[]{}|^$\\/")
 _FLAG_PREFIX = _re.compile(r"^\(\?([ims]+)\)")
 
 
-def _split_flag_prefix(pattern: str) -> Tuple[str, str]:
-    m = _FLAG_PREFIX.match(pattern)
-    if not m:
-        return "", pattern
-    return m.group(1), pattern[m.end():]
-
-
 def validate_matches_pattern(pattern: str) -> None:
-    """The same subset scanner as the reference kernel — every port rejects
-    the same constructs with a loud error."""
+    """Check a WHOLE pattern against the pinned subset, flag prefix included.
+
+    Thin wrapper over :func:`_parse_matches_pattern` so this checker and the
+    evaluator can never disagree about what is a valid pattern."""
+    _parse_matches_pattern(pattern)
+
+
+def _parse_matches_pattern(pattern: str) -> Tuple[str, str]:
+    """THE definition of a valid Matches pattern: the single place that decides
+    what the pinned subset accepts AND how a whole pattern decomposes into its
+    flag prefix and body. Every diagnostic quotes the WHOLE pattern the caller
+    passed, never the flag-stripped body."""
 
     def fail(what: str) -> None:
         raise ExpressionError(
             f"Matches pattern is outside the pinned regex subset ({what}): {pattern}"
         )
 
+    # Whole-pattern flag prefix - position 0 only, over i/m/s, EACH AT MOST
+    # ONCE. The repeat rule is the subset's, not the host engine's: the JS
+    # engine rejects (?ii) at compile time while the Go, Python and Rust
+    # engines accept it, so the subset decides rather than the host.
+    flags_str = ""
+    body = pattern
+    m = _FLAG_PREFIX.match(pattern)
+    if m:
+        flags_str = m.group(1)
+        if len(set(flags_str)) != len(flags_str):
+            fail(f"repeated flag in prefix (?{flags_str})")
+        body = pattern[m.end():]
+
     in_class = False
     i = 0
-    n = len(pattern)
+    n = len(body)
     while i < n:
-        c = pattern[i]
+        c = body[i]
         if c == "\\":
             if i + 1 >= n:
                 fail("trailing backslash")
-            e = pattern[i + 1]
+            e = body[i + 1]
             if e == "x":
-                rest = pattern[i + 2 : i + 4]
+                rest = body[i + 2 : i + 4]
                 if len(rest) > 0 and rest[0] == "{":
                     fail("\\x{…} escape")
                 if not _re.fullmatch(r"[0-9a-fA-F]{2}", rest or ""):
@@ -400,9 +416,9 @@ def validate_matches_pattern(pattern: str) -> None:
         if in_class:
             if c == "]":
                 in_class = False
-            elif c == "&" and i + 1 < n and pattern[i + 1] == "&":
+            elif c == "&" and i + 1 < n and body[i + 1] == "&":
                 fail("character-class intersection &&")
-            elif c == "[" and i + 1 < n and pattern[i + 1] == ":":
+            elif c == "[" and i + 1 < n and body[i + 1] == ":":
                 fail("POSIX class [[:…:]]")
             i += 1
             continue
@@ -410,10 +426,10 @@ def validate_matches_pattern(pattern: str) -> None:
             in_class = True
             i += 1
             continue
-        if c == "(" and i + 1 < n and pattern[i + 1] == "?":
+        if c == "(" and i + 1 < n and body[i + 1] == "?":
             # Only (?: survives mid-pattern; the flag prefix splits off first.
-            if i + 2 >= n or pattern[i + 2] != ":":
-                after = pattern[i + 2] if i + 2 < n else ""
+            if i + 2 >= n or body[i + 2] != ":":
+                after = body[i + 2] if i + 2 < n else ""
                 fail(f"group construct (?{after}")
             i += 3
             continue
@@ -421,13 +437,14 @@ def validate_matches_pattern(pattern: str) -> None:
             # A bare `{` must start a valid quantifier — engines disagree on
             # the lenient literal reading, so the SCANNER enforces the rule
             # uniformly (a literal brace is written \{).
-            if not _re.match(r"\{\d+(,\d*)?\}", pattern[i:]):
+            if not _re.match(r"\{\d+(,\d*)?\}", body[i:]):
                 fail("bare '{' that is not a quantifier (write \\{)")
             i += 1
             continue
         i += 1
     if in_class:
         fail("unterminated character class")
+    return flags_str, body
 
 
 # The ASCII word-boundary translations. Python's native \b follows \w, which
@@ -488,8 +505,7 @@ def _matches_pattern(text: str, pattern: str) -> bool:
     everything but ``\\n`` (both native here); case folding under ``i`` is
     Unicode simple folding (native — which is why ``re.ASCII`` must NOT be
     passed; the ASCII pins ride the textual expansions instead)."""
-    flags_str, body = _split_flag_prefix(pattern)
-    validate_matches_pattern(body)
+    flags_str, body = _parse_matches_pattern(pattern)
     flags = 0
     if "i" in flags_str:
         flags |= _re.IGNORECASE

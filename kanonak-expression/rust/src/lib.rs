@@ -506,8 +506,30 @@ fn is_kind_predicate(typ: &str) -> bool {
 // Matches — the pinned RE2-compatible XSD-regex subset.
 // ---------------------------------------------------------------------------
 
-/// Split the whole-pattern flag prefix — `(?i)`, `(?ims)` at position 0.
-fn split_flag_prefix(pattern: &str) -> (String, &str) {
+/// Check a WHOLE pattern against the pinned subset, flag prefix included.
+/// Thin wrapper over [`parse_matches_pattern`] so this checker and the
+/// evaluator can never disagree about what is a valid pattern.
+fn validate_matches_pattern(pattern: &str) -> Result<(), ExpressionError> {
+    parse_matches_pattern(pattern).map(|_| ())
+}
+
+/// THE definition of a valid `Matches` pattern: the single place that decides
+/// what the pinned subset accepts AND how a whole pattern decomposes into its
+/// flag prefix and body. Every diagnostic quotes the WHOLE pattern the caller
+/// passed, never the flag-stripped body.
+fn parse_matches_pattern(pattern: &str) -> Result<(String, &str), ExpressionError> {
+    let fail = |what: &str| -> Result<(String, &str), ExpressionError> {
+        err(format!(
+            "Matches pattern is outside the pinned regex subset ({what}): {pattern}"
+        ))
+    };
+
+    // Whole-pattern flag prefix - position 0 only, over i/m/s, EACH AT MOST
+    // ONCE. The repeat rule is the subset's, not the host engine's: the JS
+    // engine rejects (?ii) at compile time while the Go, Python and Rust
+    // engines accept it, so the subset decides rather than the host.
+    let mut flags = String::new();
+    let mut body = pattern;
     let bytes = pattern.as_bytes();
     if bytes.len() >= 4 && bytes[0] == b'(' && bytes[1] == b'?' {
         let mut j = 2;
@@ -515,26 +537,22 @@ fn split_flag_prefix(pattern: &str) -> (String, &str) {
             j += 1;
         }
         if j > 2 && j < bytes.len() && bytes[j] == b')' {
-            return (pattern[2..j].to_string(), &pattern[j + 1..]);
+            flags = pattern[2..j].to_string();
+            let mut seen: Vec<char> = Vec::new();
+            for f in flags.chars() {
+                if seen.contains(&f) {
+                    return fail(&format!("repeated flag in prefix (?{flags})"));
+                }
+                seen.push(f);
+            }
+            body = &pattern[j + 1..];
         }
     }
-    (String::new(), pattern)
-}
-
-/// Validate a `Matches` pattern body against the pinned subset — the same
-/// scanner as the reference kernel, so every port rejects the same
-/// constructs with a loud error.
-fn validate_matches_pattern(pattern: &str) -> Result<(), ExpressionError> {
-    let fail = |what: &str| -> Result<(), ExpressionError> {
-        err(format!(
-            "Matches pattern is outside the pinned regex subset ({what}): {pattern}"
-        ))
-    };
     const ALLOWED: &[char] = &[
         'd', 'D', 'w', 'W', 's', 'S', 'b', 'B', 'n', 'r', 't', 'f', 'v', '.', '*', '+', '?', '(',
         ')', '[', ']', '{', '}', '|', '^', '$', '\\', '/',
     ];
-    let chars: Vec<char> = pattern.chars().collect();
+    let chars: Vec<char> = body.chars().collect();
     let mut in_class = false;
     let mut i = 0usize;
     while i < chars.len() {
@@ -639,7 +657,7 @@ fn validate_matches_pattern(pattern: &str) -> Result<(), ExpressionError> {
     if in_class {
         return fail("unterminated character class");
     }
-    Ok(())
+    Ok((flags, body))
 }
 
 /// Apply the pinned ASCII expansions of the shorthand classes (the dialect
@@ -699,8 +717,7 @@ fn expand_shorthand_classes(body: &str) -> String {
 /// count code points (this engine's native model); flags translate via
 /// RegexBuilder.
 fn matches_pattern(input: &str, pattern: &str) -> Result<bool, ExpressionError> {
-    let (flags, body) = split_flag_prefix(pattern);
-    validate_matches_pattern(body)?;
+    let (flags, body) = parse_matches_pattern(pattern)?;
     let expanded = expand_shorthand_classes(body);
     let re = regex::RegexBuilder::new(&expanded)
         .case_insensitive(flags.contains('i'))

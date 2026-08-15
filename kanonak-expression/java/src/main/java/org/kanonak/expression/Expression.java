@@ -227,17 +227,50 @@ public final class Expression {
     private static final String ALLOWED_ESCAPES = "dDwWsSbBnrtfv.*+?()[]{}|^$\\/";
 
     /** The same subset scanner as the reference kernel. */
+    /**
+     * Check a WHOLE pattern against the pinned subset, flag prefix included.
+     * Thin wrapper over {@link #parseMatchesPattern} so this checker and the
+     * evaluator can never disagree about what is a valid pattern.
+     */
     static void validateMatchesPattern(String pattern) {
+        parseMatchesPattern(pattern);
+    }
+
+    /** A whole pattern decomposed into its flag prefix and body. */
+    private record MatchesPattern(String flags, String body) {}
+
+    /**
+     * THE definition of a valid {@code Matches} pattern: the single place that
+     * decides what the pinned subset accepts AND how a whole pattern decomposes
+     * into its flag prefix and body. Every diagnostic quotes the WHOLE pattern
+     * the caller passed, never the flag-stripped body.
+     */
+    private static MatchesPattern parseMatchesPattern(String pattern) {
+        // Whole-pattern flag prefix - position 0 only, over i/m/s, EACH AT MOST
+        // ONCE. The repeat rule is the subset's, not the host engine's: the JS
+        // engine rejects (?ii) at compile time while the Go, Python and Rust
+        // engines accept it, so the subset decides rather than the host.
+        String flags = "";
+        String body = pattern;
+        java.util.regex.Matcher prefix = FLAG_PREFIX.matcher(pattern);
+        if (prefix.find()) {
+            flags = prefix.group(1);
+            java.util.Set<Character> seen = new java.util.HashSet<>();
+            for (char f : flags.toCharArray()) {
+                if (!seen.add(f)) throw subsetErr("repeated flag in prefix (?" + flags + ")", pattern);
+            }
+            body = pattern.substring(prefix.end());
+        }
         boolean inClass = false;
-        int n = pattern.length();
+        int n = body.length();
         for (int i = 0; i < n; i++) {
-            char c = pattern.charAt(i);
+            char c = body.charAt(i);
             if (c == '\\') {
                 if (i + 1 >= n) throw subsetErr("trailing backslash", pattern);
-                char e = pattern.charAt(i + 1);
+                char e = body.charAt(i + 1);
                 if (e == 'x') {
-                    if (i + 2 < n && pattern.charAt(i + 2) == '{') throw subsetErr("\\x{…} escape", pattern);
-                    if (i + 3 >= n || !isHex(pattern.charAt(i + 2)) || !isHex(pattern.charAt(i + 3))) {
+                    if (i + 2 < n && body.charAt(i + 2) == '{') throw subsetErr("\\x{…} escape", pattern);
+                    if (i + 3 >= n || !isHex(body.charAt(i + 2)) || !isHex(body.charAt(i + 3))) {
                         throw subsetErr("\\x escape must be \\xHH", pattern);
                     }
                     i += 3;
@@ -261,25 +294,26 @@ public final class Expression {
             }
             if (inClass) {
                 if (c == ']') inClass = false;
-                else if (c == '&' && i + 1 < n && pattern.charAt(i + 1) == '&') throw subsetErr("character-class intersection &&", pattern);
-                else if (c == '[' && i + 1 < n && pattern.charAt(i + 1) == ':') throw subsetErr("POSIX class [[:…:]]", pattern);
+                else if (c == '&' && i + 1 < n && body.charAt(i + 1) == '&') throw subsetErr("character-class intersection &&", pattern);
+                else if (c == '[' && i + 1 < n && body.charAt(i + 1) == ':') throw subsetErr("POSIX class [[:…:]]", pattern);
                 continue;
             }
             if (c == '[') { inClass = true; continue; }
-            if (c == '(' && i + 1 < n && pattern.charAt(i + 1) == '?') {
-                if (i + 2 >= n || pattern.charAt(i + 2) != ':') throw subsetErr("group construct (?", pattern);
+            if (c == '(' && i + 1 < n && body.charAt(i + 1) == '?') {
+                if (i + 2 >= n || body.charAt(i + 2) != ':') throw subsetErr("group construct (?", pattern);
                 i += 2;
                 continue;
             }
             if (c == '{') {
                 // A bare `{` must start a valid quantifier — the SCANNER enforces
                 // this uniformly (a literal brace is written \{).
-                if (!QUANTIFIER.matcher(pattern.substring(i)).find()) {
+                if (!QUANTIFIER.matcher(body.substring(i)).find()) {
                     throw subsetErr("bare '{' that is not a quantifier (write \\{)", pattern);
                 }
             }
         }
         if (inClass) throw subsetErr("unterminated character class", pattern);
+        return new MatchesPattern(flags, body);
     }
 
     private static ExpressionError subsetErr(String what, String pattern) {
@@ -356,14 +390,9 @@ public final class Expression {
     /** fn:matches semantics: UNANCHORED. Java's Pattern counts code points natively;
      * case folding adds UNICODE_CASE per the pinned Unicode simple folding. */
     private static boolean matchesPattern(String input, String pattern) {
-        String flags = "";
-        String body = pattern;
-        java.util.regex.Matcher m = FLAG_PREFIX.matcher(pattern);
-        if (m.find()) {
-            flags = m.group(1);
-            body = pattern.substring(m.end());
-        }
-        validateMatchesPattern(body);
+        MatchesPattern parsed = parseMatchesPattern(pattern);
+        String flags = parsed.flags();
+        String body = parsed.body();
         boolean dotAll = flags.indexOf('s') >= 0;
         int f = 0;
         if (flags.indexOf('i') >= 0) f |= Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE;

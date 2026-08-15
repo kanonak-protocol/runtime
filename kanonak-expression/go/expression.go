@@ -447,11 +447,16 @@ func kindPredicate(typ string, v Value) (float64, bool) {
 var flagPrefixRe = regexp.MustCompile(`^\(\?([ims]+)\)`)
 var quantifierRe = regexp.MustCompile(`^\{\d+(,\d*)?\}`)
 
-func splitFlagPrefix(pattern string) (flags, body string) {
-	if m := flagPrefixRe.FindStringSubmatch(pattern); m != nil {
-		return m[1], pattern[len(m[0]):]
+// hasRepeatedFlag reports whether a prefix flag set repeats a flag.
+func hasRepeatedFlag(flags string) bool {
+	seen := map[rune]bool{}
+	for _, f := range flags {
+		if seen[f] {
+			return true
+		}
+		seen[f] = true
 	}
-	return "", pattern
+	return false
 }
 
 var allowedEscapes = map[rune]bool{
@@ -462,12 +467,34 @@ var allowedEscapes = map[rune]bool{
 	'$': true, '\\': true, '/': true,
 }
 
-// validateMatchesPattern — the same subset scanner as the reference kernel.
+// validateMatchesPattern — check a WHOLE pattern against the pinned subset,
+// flag prefix included. Thin wrapper over parseMatchesPattern so the checker
+// and the evaluator can never disagree about what is valid.
 func validateMatchesPattern(pattern string) {
+	parseMatchesPattern(pattern)
+}
+
+// parseMatchesPattern — THE definition of a valid Matches pattern: the single
+// place that decides what the pinned subset accepts AND how a whole pattern
+// decomposes into flag prefix and body. Every diagnostic quotes the WHOLE
+// pattern the caller passed, never the flag-stripped body.
+func parseMatchesPattern(pattern string) (flags, body string) {
 	fail := func(what string) {
 		raise("Matches pattern is outside the pinned regex subset (%s): %s", what, pattern)
 	}
-	chars := []rune(pattern)
+	// Whole-pattern flag prefix - position 0 only, over i/m/s, EACH AT MOST
+	// ONCE. The repeat rule is the subset's, not the host engine's: the JS
+	// engine rejects (?ii) at compile time while the Go, Python and Rust
+	// engines accept it, so the subset decides rather than the host.
+	body = pattern
+	if m := flagPrefixRe.FindStringSubmatch(pattern); m != nil {
+		flags = m[1]
+		if hasRepeatedFlag(flags) {
+			fail("repeated flag in prefix (?" + flags + ")")
+		}
+		body = pattern[len(m[0]):]
+	}
+	chars := []rune(body)
 	inClass := false
 	for i := 0; i < len(chars); i++ {
 		c := chars[i]
@@ -547,6 +574,7 @@ func validateMatchesPattern(pattern string) {
 	if inClass {
 		fail("unterminated character class")
 	}
+	return flags, body
 }
 
 // expandShorthandClasses — the pinned ASCII expansions (the dialect DEFINES
@@ -608,8 +636,7 @@ func expandShorthandClasses(body string) string {
 // matchesPattern — fn:matches semantics: UNANCHORED. This engine is the RE2
 // family: runes (code points) are the native counting unit.
 func matchesPattern(input, pattern string) bool {
-	flags, body := splitFlagPrefix(pattern)
-	validateMatchesPattern(body)
+	flags, body := parseMatchesPattern(pattern)
 	expanded := expandShorthandClasses(body)
 	if flags != "" {
 		expanded = "(?" + flags + ")" + expanded

@@ -386,15 +386,6 @@ private let wordClass = "[0-9A-Za-z_]"
 private let bBoundary = "(?:(?<=\(wordClass))(?!\(wordClass))|(?<!\(wordClass))(?=\(wordClass)))"
 private let bNonBoundary = "(?:(?<=\(wordClass))(?=\(wordClass))|(?<!\(wordClass))(?!\(wordClass)))"
 
-private func splitFlagPrefix(_ pattern: String) -> (flags: String, body: String) {
-    let chars = Array(pattern)
-    guard chars.count >= 4, chars[0] == "(", chars[1] == "?" else { return ("", pattern) }
-    var j = 2
-    while j < chars.count, chars[j] == "i" || chars[j] == "m" || chars[j] == "s" { j += 1 }
-    guard j > 2, j < chars.count, chars[j] == ")" else { return ("", pattern) }
-    return (String(chars[2..<j]), String(chars[(j + 1)...]))
-}
-
 private func isHex(_ c: Character) -> Bool {
     c.isHexDigit && c.isASCII
 }
@@ -411,13 +402,45 @@ private func quantifierAt(_ chars: [Character], _ start: Int) -> Bool {
     return j < chars.count && chars[j] == "}"
 }
 
-/// The same subset scanner as the reference kernel — every port rejects the
-/// same constructs with a loud error.
+/// Check a WHOLE pattern against the pinned subset, flag prefix included. Thin
+/// wrapper over `parseMatchesPattern` so this checker and the evaluator can
+/// never disagree about what is a valid pattern.
 func validateMatchesPattern(_ pattern: String) throws {
+    _ = try parseMatchesPattern(pattern)
+}
+
+/// THE definition of a valid `Matches` pattern: the single place that decides
+/// what the pinned subset accepts AND how a whole pattern decomposes into its
+/// flag prefix and body. Every diagnostic quotes the WHOLE pattern the caller
+/// passed, never the flag-stripped body.
+private func parseMatchesPattern(_ pattern: String) throws -> (flags: String, body: String) {
     func fail(_ what: String) throws -> Never {
         throw ExpressionError("Matches pattern is outside the pinned regex subset (\(what)): \(pattern)")
     }
-    let chars = Array(pattern)
+
+    // Whole-pattern flag prefix - position 0 only, over i/m/s, EACH AT MOST
+    // ONCE. The repeat rule is the subset's, not the host engine's: the JS
+    // engine rejects (?ii) at compile time while the Go, Python and Rust
+    // engines accept it, so the subset decides rather than the host.
+    var flags = ""
+    var body = pattern
+    let whole = Array(pattern)
+    if whole.count >= 4, whole[0] == "(", whole[1] == "?" {
+        var j = 2
+        while j < whole.count, whole[j] == "i" || whole[j] == "m" || whole[j] == "s" { j += 1 }
+        if j > 2, j < whole.count, whole[j] == ")" {
+            flags = String(whole[2..<j])
+            var seen = Set<Character>()
+            for f in flags {
+                if !seen.insert(f).inserted {
+                    try fail("repeated flag in prefix (?\(flags))")
+                }
+            }
+            body = String(whole[(j + 1)...])
+        }
+    }
+
+    let chars = Array(body)
     var inClass = false
     var i = 0
     while i < chars.count {
@@ -471,6 +494,7 @@ func validateMatchesPattern(_ pattern: String) throws {
         i += 1
     }
     if inClass { try fail("unterminated character class") }
+    return (flags, body)
 }
 
 /// The pinned ASCII expansions plus THIS engine's owed translations:
@@ -530,8 +554,7 @@ private func expandShorthandClasses(_ body: String, dotAll: Bool) -> String {
 /// fn:matches semantics: UNANCHORED. ICU counts code points natively; `(?i)`
 /// is ICU's Unicode case folding, matching the pin.
 private func matchesPattern(_ input: String, _ pattern: String) throws -> Bool {
-    let (flags, body) = splitFlagPrefix(pattern)
-    try validateMatchesPattern(body)
+    let (flags, body) = try parseMatchesPattern(pattern)
     let dotAll = flags.contains("s")
     var options: NSRegularExpression.Options = []
     if flags.contains("i") { options.insert(.caseInsensitive) }

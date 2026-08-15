@@ -424,7 +424,8 @@ const LIST_FOLDS: Record<string, ListFold> = {
  *
  * Allowed: literals; `.`; anchors `^` `$`; alternation `|`; groups `(...)`,
  * `(?:...)`; a WHOLE-PATTERN flag prefix over `i`/`m`/`s` (`(?i)` at position
- * 0 only — each port translates it to its host flag mechanism); quantifiers
+ * 0 only, each flag at most once — each port translates it to its host flag
+ * mechanism); quantifiers
  * `*` `+` `?` `{m}` `{m,}` `{m,n}`; character classes with ranges and
  * negation; escapes `\d \D \w \W \s \S \b \B \n \r \t \f \v \xHH`, escaped
  * syntax punctuation (`\.` `\*` `\+` `\?` `\(` `\)` `\[` `\]` `\{` `\}`
@@ -432,7 +433,9 @@ const LIST_FOLDS: Record<string, ListFold> = {
  *
  * Rejected (divergent or unsafe across engines): lookahead/lookbehind, named
  * groups, backreferences (`\1`…, `\k`), MID-pattern flag groups (`(?i:…)` —
- * not portable to the JS and Python engines), `\p{…}`/`\P{…}` unicode
+ * not portable to the JS and Python engines), a REPEATED flag in the prefix
+ * (`(?ii)` — the JS engine rejects it while the Go, Python and Rust engines
+ * accept it), `\p{…}`/`\P{…}` unicode
  * property classes, POSIX classes (`[[:alpha:]]`), class intersection
  * (`&&`), atomic groups, conditionals, comments, octal/`\u`/`\x{…}` escapes,
  * escaped space (`\ `), `\-` outside a class, and a bare unescaped `{` that
@@ -440,9 +443,40 @@ const LIST_FOLDS: Record<string, ListFold> = {
  * the lenient reading, so the subset requires the explicit form).
  */
 export function validateMatchesPattern(pattern: string): void {
+  parseMatchesPattern(pattern);
+}
+
+/**
+ * THE definition of a valid `Matches` pattern: the single place that decides
+ * what the pinned subset accepts AND how a whole pattern decomposes into its
+ * flag prefix and body. {@link validateMatchesPattern} and `matchesPattern`
+ * both route through this, so a pattern the runtime evaluates is exactly a
+ * pattern the exported checker accepts — the two cannot drift apart, and a
+ * caller can pre-flight an authored pattern without reimplementing any part
+ * of the dialect.
+ *
+ * Every diagnostic quotes the WHOLE pattern the caller passed, never the
+ * flag-stripped body — an author must not be told about a pattern they did
+ * not write.
+ */
+function parseMatchesPattern(pattern: string): { flags: string; body: string } {
   const fail = (what: string): never => {
     throw new ExpressionError(`Matches pattern is outside the pinned regex subset (${what}): ${pattern}`);
   };
+
+  // Whole-pattern flag prefix - position 0 only, over i/m/s, EACH AT MOST
+  // ONCE. The repeat rule is the subset's, not the host engine's: the JS
+  // engine rejects (?ii) at compile time while the Go, Python and Rust
+  // engines accept it, so the subset decides rather than the host.
+  let flags = '';
+  let body = pattern;
+  const prefix = /^\(\?([ims]+)\)/.exec(pattern);
+  if (prefix) {
+    flags = prefix[1]!;
+    if (new Set(flags).size !== flags.length) fail(`repeated flag in prefix (?${flags})`);
+    body = pattern.slice(prefix[0].length);
+  }
+
   // The u-legal intersection: character-class escapes, control escapes,
   // \xHH, and escaped SYNTAX punctuation. `\-` is legal only INSIDE a class;
   // `\ ` (escaped space) is not legal at all — both are Annex-B leniencies
@@ -452,16 +486,16 @@ export function validateMatchesPattern(pattern: string): void {
     '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|', '^', '$', '\\', '/',
   ]);
   let inClass = false;
-  for (let i = 0; i < pattern.length; i++) {
-    const c = pattern[i];
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
     if (c === '\\') {
-      const e = pattern[i + 1];
+      const e = body[i + 1];
       if (e === undefined) fail('trailing backslash');
       if (e === 'x') {
         // \xHH only — \x{…} (RE2 long form) is not portable to the JS engine.
-        const hex = pattern.slice(i + 2, i + 4);
+        const hex = body.slice(i + 2, i + 4);
         if (!/^[0-9a-fA-F]{2}$/.test(hex)) fail('\\x escape must be \\xHH');
-        if (pattern[i + 2] === '{') fail('\\x{…} escape');
+        if (body[i + 2] === '{') fail('\\x{…} escape');
         i += 3;
         continue;
       }
@@ -491,15 +525,16 @@ export function validateMatchesPattern(pattern: string): void {
     }
     if (inClass) {
       if (c === ']') { inClass = false; continue; }
-      if (c === '&' && pattern[i + 1] === '&') fail('character-class intersection &&');
-      if (c === '[' && pattern[i + 1] === ':') fail('POSIX class [[:…:]]');
+      if (c === '&' && body[i + 1] === '&') fail('character-class intersection &&');
+      if (c === '[' && body[i + 1] === ':') fail('POSIX class [[:…:]]');
       continue;
     }
     if (c === '[') { inClass = true; continue; }
-    if (c === '(' && pattern[i + 1] === '?') {
+    if (c === '(' && body[i + 1] === '?') {
       // Only (?: survives mid-pattern; the flag prefix (?ims) is legal at
-      // position 0 ONLY (validated by splitFlagPrefix before this scanner).
-      if (pattern[i + 2] !== ':') fail(`group construct (?${pattern[i + 2] ?? ''}`);
+      // position 0 ONLY, and was already split off above — so any (? the
+      // scanner still sees is mid-pattern, including a SECOND prefix.
+      if (body[i + 2] !== ':') fail(`group construct (?${body[i + 2] ?? ''}`);
       i += 2; // resume after '?:'
       continue;
     }
@@ -507,21 +542,13 @@ export function validateMatchesPattern(pattern: string): void {
       // A bare `{` must start a valid quantifier — engines disagree on the
       // lenient literal reading, so the SCANNER enforces the rule uniformly
       // (a literal brace is written \{), not each host's compile behavior.
-      if (!/^\{\d+(,\d*)?\}/.test(pattern.slice(i))) {
+      if (!/^\{\d+(,\d*)?\}/.test(body.slice(i))) {
         fail("bare '{' that is not a quantifier (write \\{)");
       }
     }
   }
   if (inClass) fail('unterminated character class');
-}
-
-/** Split the whole-pattern flag prefix — `(?i)`, `(?ims)` at position 0 —
- * from the body. Each port translates the flags to its host mechanism (`i`
- * case-fold, `m` multiline anchors, `s` dot-matches-newline). */
-function splitFlagPrefix(pattern: string): { flags: string; body: string } {
-  const m = /^\(\?([ims]+)\)/.exec(pattern);
-  if (!m) return { flags: '', body: pattern };
-  return { flags: m[1]!, body: pattern.slice(m[0].length) };
+  return { flags, body };
 }
 
 /**
@@ -588,8 +615,7 @@ function expandShorthandClasses(body: string, dotAll: boolean): string {
  * `u` also rejects a bare literal `{`, turning an engine-divergent lenient
  * reading into the subset's loud error. */
 function matchesPattern(input: string, pattern: string): boolean {
-  const { flags, body } = splitFlagPrefix(pattern);
-  validateMatchesPattern(body);
+  const { flags, body } = parseMatchesPattern(pattern);
   let re: RegExp;
   try {
     re = new RegExp(expandShorthandClasses(body, flags.includes('s')), flags + 'u');

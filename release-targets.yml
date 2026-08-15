@@ -31,7 +31,7 @@ meta:
   go_module_versions:
     canonical: "0.2.1"
     codec: "0.4.1"
-    expression: "0.3.0"
+    expression: "0.3.1"
     wire: "0.1.0"
   # Swift package version — the ROOT `v<ver>` tag (SwiftPM resolves ONLY root
   # semver tags; ONE version covers all four products — KanonakCanonical,
@@ -49,7 +49,7 @@ meta:
   # + the lenient carrier-routing key) to KanonakCanonical (canonical 0.2.0 in
   # the per-member registries; runtime#17).
   # 0.8.1 adds the total displayName accessor (canonical 0.2.1; #17 reopening).
-  swift_package_version: "0.9.0"
+  swift_package_version: "0.9.1"
   # GitHub Actions OIDC (no stored token) is preferred where supported. A workflow
   # using OIDC needs:  permissions: { id-token: write, contents: read, attestations: write }
   # All PUBLISH jobs run in the `production` GitHub environment (required by NuGet trusted

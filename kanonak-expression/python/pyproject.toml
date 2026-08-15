@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kanonak-expression"
-version = "0.3.0"
+version = "0.3.1"
 readme = "README.md"
 description = "Kanonak expression runtime (expressionRuntimeVersion 2). Conformant port of @kanonak-protocol/expression, a deterministic tx + math tree-walker, verified against the shared parity vectors. Standard-library only."
 requires-python = ">=3.8"
