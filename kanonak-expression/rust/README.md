@@ -2,7 +2,7 @@
 
 The expression runtime for the [Kanonak Protocol](https://kanonak.org) — the Rust
 port of the `kanonak.org/transformations` + `kanonak.org/math` evaluator
-(`expressionRuntimeVersion "1"`), verified against the shared parity vectors.
+(`expressionRuntimeVersion "2"`), verified against the shared parity vectors.
 
 A small, deterministic tree-walker that folds a typed expression to a single
 number: 27 operators with ontology-derived dispatch, a frozen determinism

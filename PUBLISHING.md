@@ -9,7 +9,7 @@ Kanonak SDK depends on, so the runtime is **never inlined** into each SDK:
   from typed nodes + an embedded schema, content-addresses via `canonical`, and
   (de)serializes the wire form. **Depends on `canonical`.**
 - **`kanonak-expression`** — the deterministic expression runtime
-  (`expressionRuntimeVersion "1"`). No cross-dependencies.
+  (`expressionRuntimeVersion "2"`). No cross-dependencies.
 - **`kanonak-wire`** — the binary wire kernel for hot-path protocols
   (`wireFormatVersion "1"`). No cross-dependencies.
 

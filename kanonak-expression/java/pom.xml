@@ -10,7 +10,7 @@
     <packaging>jar</packaging>
 
     <name>kanonak-expression</name>
-    <description>Kanonak expression runtime (expressionRuntimeVersion 1). Conformant port of the kanonak.org/transformations + kanonak.org/math operator engine, verified against the shared parity vectors. JDK-only, no runtime dependencies.</description>
+    <description>Kanonak expression runtime (expressionRuntimeVersion 2). Conformant port of the kanonak.org/transformations + kanonak.org/math operator engine, verified against the shared parity vectors. JDK-only, no runtime dependencies.</description>
 
     <url>https://kanonak.org</url>
     <licenses>

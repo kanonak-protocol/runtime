@@ -2,7 +2,7 @@
 
 The expression runtime for the [Kanonak Protocol](https://kanonak.org) — the C#
 port of the `kanonak.org/transformations` + `kanonak.org/math` evaluator
-(`expressionRuntimeVersion "1"`), verified against the shared parity vectors.
+(`expressionRuntimeVersion "2"`), verified against the shared parity vectors.
 Targets `netstandard2.0` + `net8.0`, no third-party dependencies.
 
 A small, deterministic tree-walker that folds a typed expression tree to a single

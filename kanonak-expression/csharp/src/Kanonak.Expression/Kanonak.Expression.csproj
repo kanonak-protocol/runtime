@@ -6,7 +6,7 @@
     <AssemblyName>Kanonak.Expression</AssemblyName>
     <RootNamespace>Kanonak.Expression</RootNamespace>
     <Nullable>disable</Nullable>
-    <Description>Kanonak expression runtime (expressionRuntimeVersion 1). Conformant port of the kanonak.org/transformations + kanonak.org/math evaluator, verified against the shared parity vectors.</Description>
+    <Description>Kanonak expression runtime (expressionRuntimeVersion 2). Conformant port of the kanonak.org/transformations + kanonak.org/math evaluator, verified against the shared parity vectors.</Description>
     <Version>0.3.1</Version>
     <Authors>Kanonak Maintainers</Authors>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>

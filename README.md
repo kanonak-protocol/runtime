@@ -16,7 +16,7 @@ of them:
   content-addresses it via `kanonak-canonical`, and (de)serializes the
   normalized-JSON wire form. **Depends on `kanonak-canonical`.**
 - **`kanonak-expression`** — the deterministic expression runtime
-  (`expressionRuntimeVersion "1"`): a tree-walker that folds a
+  (`expressionRuntimeVersion "2"`): a tree-walker that folds a
   `kanonak.org/transformations` + `kanonak.org/math` expression to a number,
   identically in every language.
 - **`kanonak-wire`** — the binary wire kernel (`wireFormatVersion "1"`): a
