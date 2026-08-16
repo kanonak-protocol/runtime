@@ -122,6 +122,71 @@ final class CodecVectorTests: XCTestCase {
         }
     }
 
+    /// The 0.5.0 enumerations file (`enums`, runtime#21). Beyond the standard
+    /// form/hash/serialize checks it pins the enumeration contract: the schema
+    /// parses with `enums` keyed by durable VERSIONED URIs at both levels (a
+    /// versionless key would look right and miss every lookup); an enumeration
+    /// STANDS ALONE, with no `classes` twin; `enums` and an enum-ranged `range`
+    /// are canonicalization-INERT; and expectError cases are rejected at
+    /// CANONICALIZATION. Unlike the $types file's all-three-surfaces contract
+    /// this violation is schema-DEPENDENT: serialize is schema-free and
+    /// deserialize does not recurse into embedded values, so canonicalization
+    /// is the only surface that can see it.
+    func testEnumsVectors() throws {
+        let file = try loadVectors("codec-vectors-enums.json")
+        XCTAssertFalse(file.cases.isEmpty)
+
+        // -- structural assertions on the schema itself --
+        let enums = try XCTUnwrap(file.schema.enums, "schema carries no enums")
+        XCTAssertFalse(enums.isEmpty, "schema carries no enums")
+        for (key, en) in enums {
+            XCTAssertEqual(key, en.typeUri, "enum key must equal its typeUri")
+            // An enumeration stands alone. The absence of a `classes` twin is
+            // load-bearing: it is what makes an embedded value on an
+            // enum-ranged property fail instead of being mapped as a resource.
+            XCTAssertNil(file.schema.classes[key],
+                         "enum \(key) must NOT also appear in classes")
+            XCTAssertFalse(en.members.isEmpty, "enum \(key) declares no members")
+            for memberUri in en.members.keys {
+                XCTAssertTrue(isVersionedDurableUri(memberUri),
+                              "member key \(memberUri) is not a versioned durable URI")
+            }
+        }
+
+        // -- cases --
+        for c in file.cases {
+            let cid = c["id"] as! String
+            let nodes = c["nodes"] as! [[String: Any]]
+            let pkg = packageContext(c["pkg"] as! [String: Any])
+
+            if c["expectError"] as? Bool == true {
+                XCTAssertThrowsError(try canonicalForm(nodes, schema: file.schema, pkg: pkg),
+                                     "[\(cid)] expected canonicalization to reject")
+                continue
+            }
+
+            XCTAssertEqual(try canonicalForm(nodes, schema: file.schema, pkg: pkg),
+                           c["expectedCanonicalForm"] as! String, "[\(cid)] canonical form")
+            XCTAssertEqual(try contentHash(nodes, schema: file.schema, pkg: pkg),
+                           c["expectedHash"] as! String, "[\(cid)] hash")
+
+            let expectedSerialize = c["expectedSerialize"] as! [[String: Any]]
+            let ser = try nodes.map { try serialize($0) }
+            XCTAssertTrue(jsonEqual(ser, expectedSerialize), "[\(cid)] serialize")
+        }
+    }
+
+    /// `publisher/package@version/name` - the durable versioned formation,
+    /// checked structurally so the test needs no regex dependency.
+    private func isVersionedDurableUri(_ uri: String) -> Bool {
+        let segs = uri.split(separator: "/", omittingEmptySubsequences: false)
+        guard segs.count == 3, !segs.contains(where: { $0.isEmpty }) else { return false }
+        let pkgAtVer = segs[1].split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
+        guard pkgAtVer.count == 2, !pkgAtVer[0].isEmpty else { return false }
+        let nums = pkgAtVer[1].split(separator: ".", omittingEmptySubsequences: false)
+        return nums.count == 3 && nums.allSatisfy { !$0.isEmpty && $0.allSatisfy { $0.isNumber } }
+    }
+
     private func packageContext(_ pkg: [String: Any]) -> PackageContext {
         PackageContext(publisher: pkg["publisher"] as! String,
                        packageName: pkg["packageName"] as! String,

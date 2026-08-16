@@ -4,6 +4,7 @@ authoritative (TypeScript-generated) expected values."""
 
 import io
 import json
+import re
 import os
 import sys
 
@@ -27,6 +28,7 @@ VECTOR_FILES = [
 ]
 
 TYPES_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-types.json")
+ENUMS_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-enums.json")
 
 
 def run_file(vectors: str) -> "tuple[int, int]":
@@ -143,6 +145,83 @@ def run_types_file(vectors: str) -> "tuple[int, int]":
         else:
             passed += 1
 
+    return passed, failed
+
+
+def run_enums_file(vectors: str) -> "tuple[int, int]":
+    """The 0.5.0 enumerations file (``enums``, runtime#21). Beyond the standard
+    form/hash/serialize checks it pins the enumeration contract: the schema
+    parses with ``enums`` keyed by durable VERSIONED URIs at both levels (a
+    versionless key would look right and miss every lookup); an enumeration
+    STANDS ALONE, with no ``classes`` twin; ``enums`` and an enum-ranged
+    ``range`` are canonicalization-INERT; and expectError cases are rejected at
+    CANONICALIZATION. Unlike the $types file's all-three-surfaces contract this
+    violation is schema-DEPENDENT — serialize is schema-free and deserialize
+    does not recurse into embedded values, so canonicalization is the only
+    surface that can see it."""
+    with io.open(vectors, encoding="utf-8") as fh:
+        data = json.load(fh)
+    schema = data["schema"]
+    passed = 0
+    failed = 0
+
+    member_re = re.compile(r"^[^/]+/[^/@]+@\d+\.\d+\.\d+/[^/]+$")
+    enums = schema.get("enums") or {}
+    shape_ok = bool(enums)
+    if not enums:
+        print("FAIL [enums] schema carries no enums")
+    for key, en in enums.items():
+        if key != en.get("typeUri"):
+            print("FAIL [enums] key {} != typeUri {}".format(key, en.get("typeUri")))
+            shape_ok = False
+        if key in schema["classes"]:
+            print("FAIL [enums] {} must NOT also appear in classes".format(key))
+            shape_ok = False
+        for member_uri in en.get("members", {}):
+            if not member_re.match(member_uri):
+                print("FAIL [enums] member key {} is not a versioned durable URI".format(member_uri))
+                shape_ok = False
+    if shape_ok:
+        passed += 1
+    else:
+        failed += 1
+
+    for case in data["cases"]:
+        cid = case["id"]
+        nodes = case["nodes"]
+        pkg = case["pkg"]
+
+        if case.get("expectError"):
+            try:
+                canonical_form(nodes, schema, pkg)
+            except ValueError:
+                passed += 1
+                continue
+            failed += 1
+            print("FAIL [{}] expected canonicalization to reject, it did not".format(cid))
+            continue
+
+        form = canonical_form(nodes, schema, pkg)
+        hashed = content_hash(nodes, schema, pkg)
+        ser = [serialize(n) for n in nodes]
+        ok = True
+        if form != case["expectedCanonicalForm"]:
+            ok = False
+            print("FAIL [{}] canonical form".format(cid))
+            print("  got: {}".format(form))
+            print("  exp: {}".format(case["expectedCanonicalForm"]))
+        if hashed != case["expectedHash"]:
+            ok = False
+            print("FAIL [{}] hash got {} exp {}".format(cid, hashed, case["expectedHash"]))
+        if ser != case["expectedSerialize"]:
+            ok = False
+            print("FAIL [{}] serialize mismatch".format(cid))
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+
+    print("{}: {} passed, {} failed".format(os.path.basename(vectors), passed, failed))
     return passed, failed
 
 
@@ -310,6 +389,10 @@ def main() -> int:
         failed += f
 
     p, f = run_types_file(TYPES_VECTOR_FILE)
+    passed += p
+    failed += f
+
+    p, f = run_enums_file(ENUMS_VECTOR_FILE)
     passed += p
     failed += f
 

@@ -1,0 +1,136 @@
+{
+ "description": "Enumerations in the schema (`enums`, kanonak-codec 0.5.0, runtime#21): carried metadata that lets a consumer resolve a member URI without a generated SDK. Pins three things — that `enums` and an enum-ranged `range` are canonicalization-inert, that an enumeration stands alone with no `classes` twin, and that an embedded value on an enum-ranged property is rejected (the condition the inertness depends on).",
+ "canonicalFormVersion": "1",
+ "schema": {
+  "typePredicate": "kanonak.org/core-rdf@1.1.0/type",
+  "labelPredicate": "kanonak.org/core-rdf@1.1.0/label",
+  "packageTypeUri": "kanonak.org/core-kanonak@1.0.0/Package",
+  "classes": {
+   "probe.example.com/schema@1.0.0/Product": {
+    "typeUri": "probe.example.com/schema@1.0.0/Product",
+    "props": {
+     "sku": {
+      "predicate": "probe.example.com/schema@1.0.0/sku",
+      "kind": "datatype",
+      "datatype": "kanonak.org/core-xsd/string"
+     },
+     "condition": {
+      "predicate": "probe.example.com/schema@1.0.0/condition",
+      "kind": "object",
+      "range": "probe.example.com/schema@1.0.0/Condition"
+     }
+    }
+   }
+  },
+  "enums": {
+   "probe.example.com/schema@1.0.0/Condition": {
+    "typeUri": "probe.example.com/schema@1.0.0/Condition",
+    "members": {
+     "probe.example.com/schema@1.0.0/condition-new": {
+      "label": "New"
+     },
+     "probe.example.com/schema@1.0.0/condition-used": {
+      "label": "Used"
+     }
+    }
+   }
+  }
+ },
+ "cases": [
+  {
+   "id": "enum-member-ref-hash-inert",
+   "description": "A member URI crosses the wire as {\"$ref\": …} on a property ranged at the enumeration. The schema declares `enums` AND `range`; both are canonicalization-inert — this hash is byte-identical to the one the same nodes produce under a schema carrying neither. `Condition` has no `classes` entry: an enumeration stands alone.",
+   "pkg": {
+    "publisher": "probe.example.com",
+    "packageName": "data",
+    "version": "1.0.0",
+    "label": "Enums Probe Data"
+   },
+   "nodes": [
+    {
+     "$type": "probe.example.com/schema@1.0.0/Product",
+     "$id": "probe.example.com/data@1.0.0/prod-1",
+     "sku": "SKU-1",
+     "condition": {
+      "$ref": "probe.example.com/schema@1.0.0/condition-new"
+     }
+    }
+   ],
+   "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"probe.example.com/data@1.0.0/data\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/label\",\"type\":\"string\",\"value\":\"Enums Probe Data\"},{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"kanonak.org/core-kanonak@1.0.0/Package\"}]},{\"uri\":\"probe.example.com/data@1.0.0/prod-1\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"probe.example.com/schema@1.0.0/Product\"},{\"predicate\":\"probe.example.com/schema@1.0.0/condition\",\"type\":\"ref\",\"value\":\"probe.example.com/schema@1.0.0/condition-new\"},{\"predicate\":\"probe.example.com/schema@1.0.0/sku\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"SKU-1\"}]}]}",
+   "expectedHash": "sha256:ffcb1e08d4471a8b44ecd3ab34c34a2bcf207026419526fb6902e23e18274863",
+   "expectedSerialize": [
+    {
+     "$type": "probe.example.com/schema@1.0.0/Product",
+     "$id": "probe.example.com/data@1.0.0/prod-1",
+     "sku": "SKU-1",
+     "condition": {
+      "$ref": "probe.example.com/schema@1.0.0/condition-new"
+     }
+    }
+   ]
+  },
+  {
+   "id": "enum-member-ref-list",
+   "description": "A property is OPTIONAL and UNBOUNDED unless a shape says otherwise, so an enum-ranged property may legitimately carry SEVERAL member references. Each is a reference; none is embeddable. Included so the single-value case is not mistaken for the only valid shape.",
+   "pkg": {
+    "publisher": "probe.example.com",
+    "packageName": "data",
+    "version": "1.0.0",
+    "label": "Enums Probe Data"
+   },
+   "nodes": [
+    {
+     "$type": "probe.example.com/schema@1.0.0/Product",
+     "$id": "probe.example.com/data@1.0.0/prod-3",
+     "sku": "SKU-3",
+     "condition": [
+      {
+       "$ref": "probe.example.com/schema@1.0.0/condition-new"
+      },
+      {
+       "$ref": "probe.example.com/schema@1.0.0/condition-used"
+      }
+     ]
+    }
+   ],
+   "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"probe.example.com/data@1.0.0/data\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/label\",\"type\":\"string\",\"value\":\"Enums Probe Data\"},{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"kanonak.org/core-kanonak@1.0.0/Package\"}]},{\"uri\":\"probe.example.com/data@1.0.0/prod-3\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"probe.example.com/schema@1.0.0/Product\"},{\"predicate\":\"probe.example.com/schema@1.0.0/condition\",\"type\":\"list\",\"items\":[{\"type\":\"ref\",\"value\":\"probe.example.com/schema@1.0.0/condition-new\"},{\"type\":\"ref\",\"value\":\"probe.example.com/schema@1.0.0/condition-used\"}]},{\"predicate\":\"probe.example.com/schema@1.0.0/sku\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"SKU-3\"}]}]}",
+   "expectedHash": "sha256:8bcc47a14154fcb90b42024590199ff5bcbba28023018b54310570756befefc9",
+   "expectedSerialize": [
+    {
+     "$type": "probe.example.com/schema@1.0.0/Product",
+     "$id": "probe.example.com/data@1.0.0/prod-3",
+     "sku": "SKU-3",
+     "condition": [
+      {
+       "$ref": "probe.example.com/schema@1.0.0/condition-new"
+      },
+      {
+       "$ref": "probe.example.com/schema@1.0.0/condition-used"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "enum-range-embedded-rejected",
+   "description": "An EMBEDDED value on an enum-ranged property must be rejected. An enum member is a reference, never an embeddable resource, and `Condition` has no `classes` entry to map fields against — so canonicalization fails loudly instead of inventing a mapping. This case is what keeps `range` inert for enum-ranged props: the inertness holds precisely because this path is unreachable. Rejection is required at CANONICALIZATION only — serialize is schema-free and deserialize does not recurse into embedded values.",
+   "pkg": {
+    "publisher": "probe.example.com",
+    "packageName": "data",
+    "version": "1.0.0",
+    "label": "Enums Probe Data"
+   },
+   "expectError": true,
+   "nodes": [
+    {
+     "$type": "probe.example.com/schema@1.0.0/Product",
+     "$id": "probe.example.com/data@1.0.0/prod-2",
+     "sku": "SKU-2",
+     "condition": {
+      "grade": "A"
+     }
+    }
+   ]
+  }
+ ]
+}

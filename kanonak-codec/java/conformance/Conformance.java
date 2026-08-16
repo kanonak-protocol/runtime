@@ -22,6 +22,10 @@ import org.kanonak.codec.PackageContext;
  * minimal JSON parser (numbers retained as {@link JsonNumber}) reads the vectors.
  */
 public final class Conformance {
+    /** Durable VERSIONED member-key formation: publisher/package@version/name. */
+    static final java.util.regex.Pattern MEMBER_URI =
+        java.util.regex.Pattern.compile("^[^/]+/[^/@]+@\\d+\\.\\d+\\.\\d+/[^/]+$");
+
     public static void main(String[] args) throws Exception {
         String[] vectorFiles = args.length > 0
             ? args
@@ -42,6 +46,12 @@ public final class Conformance {
             passed += counts[0];
             failed += counts[1];
             System.out.println(typesVectors + ": " + counts[0] + " passed, " + counts[1] + " failed");
+
+            String enumsVectors = "../vectors/codec-vectors-enums.json";
+            int[] ec = runEnumsFile(enumsVectors);
+            passed += ec[0];
+            failed += ec[1];
+            System.out.println(enumsVectors + ": " + ec[0] + " passed, " + ec[1] + " failed");
         }
 
         System.out.println("\n" + passed + " passed, " + failed + " failed");
@@ -238,11 +248,142 @@ public final class Conformance {
             }
             classes.put(e.getKey(), new CodecClass((String) c.get("typeUri"), props));
         }
+        // Closed sets (0.5.0, runtime#21). NOTE: this mirrors
+        // CodecSchema.fromJson by necessity - the harness already holds a
+        // parsed map, not the JSON text fromJson wants. The duplication is a
+        // known drift hazard (it would have silently produced enum-free
+        // schemas here) and is tracked separately.
+        Map<String, CodecSchema.CodecEnum> enums = new LinkedHashMap<>();
+        Object rawEnums = s.get("enums");
+        if (rawEnums != null) {
+            for (Map.Entry<String, Object> e : asMap(rawEnums).entrySet()) {
+                Map<String, Object> en = asMap(e.getValue());
+                Map<String, CodecSchema.CodecEnumMember> members = new LinkedHashMap<>();
+                Object rawMembers = en.get("members");
+                if (rawMembers != null) {
+                    for (Map.Entry<String, Object> me : asMap(rawMembers).entrySet()) {
+                        members.put(me.getKey(), new CodecSchema.CodecEnumMember(
+                            (String) asMap(me.getValue()).get("label")));
+                    }
+                }
+                enums.put(e.getKey(), new CodecSchema.CodecEnum(
+                    (String) en.get("typeUri"), members));
+            }
+        }
         return new CodecSchema(
             (String) s.get("typePredicate"),
             (String) s.get("labelPredicate"),
             (String) s.get("packageTypeUri"),
-            classes);
+            classes,
+            enums);
+    }
+
+    /**
+     * The 0.5.0 enumerations file (`enums`, runtime#21). Beyond the standard
+     * form/hash/serialize checks it pins the enumeration contract: the schema
+     * parses with `enums` keyed by durable VERSIONED URIs at both levels (a
+     * versionless key would look right and miss every lookup); an enumeration
+     * STANDS ALONE, with no `classes` twin; `enums` and an enum-ranged `range`
+     * are canonicalization-INERT; and expectError cases are rejected at
+     * CANONICALIZATION. Unlike the $types file's all-three-surfaces contract
+     * this violation is schema-DEPENDENT: serialize is schema-free and
+     * deserialize does not recurse into embedded values, so canonicalization is
+     * the only surface that can see it.
+     */
+    static int[] runEnumsFile(String vectors) throws Exception {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) Json.parse(
+            Files.readString(Paths.get(vectors), StandardCharsets.UTF_8));
+
+        CodecSchema schema = parseSchema(asMap(data.get("schema")));
+
+        int passed = 0;
+        int failed = 0;
+
+        // -- structural assertions on the schema itself --
+        boolean shapeOk = schema.enums() != null && !schema.enums().isEmpty();
+        if (!shapeOk) {
+            System.out.println("FAIL [enums] schema carries no enums");
+        }
+        if (schema.enums() != null) {
+            for (Map.Entry<String, CodecSchema.CodecEnum> e : schema.enums().entrySet()) {
+                String key = e.getKey();
+                CodecSchema.CodecEnum en = e.getValue();
+                if (!key.equals(en.typeUri())) {
+                    System.out.println("FAIL [enums] key " + key + " != typeUri " + en.typeUri());
+                    shapeOk = false;
+                }
+                if (schema.classes().containsKey(key)) {
+                    System.out.println("FAIL [enums] " + key + " must NOT also appear in classes");
+                    shapeOk = false;
+                }
+                if (en.members().isEmpty()) {
+                    System.out.println("FAIL [enums] " + key + " declares no members");
+                    shapeOk = false;
+                }
+                for (String memberUri : en.members().keySet()) {
+                    if (!MEMBER_URI.matcher(memberUri).matches()) {
+                        System.out.println("FAIL [enums] member key " + memberUri
+                            + " is not a versioned durable URI");
+                        shapeOk = false;
+                    }
+                }
+            }
+        }
+        if (shapeOk) {
+            passed++;
+        } else {
+            failed++;
+        }
+
+        // -- cases --
+        for (Object co : asList(data.get("cases"))) {
+            Map<String, Object> caseObj = asMap(co);
+            String cid = (String) caseObj.get("id");
+            List<Map<String, Object>> nodes = new ArrayList<>();
+            for (Object n : asList(caseObj.get("nodes"))) {
+                nodes.add(asMap(n));
+            }
+            PackageContext pkg = parsePkg(asMap(caseObj.get("pkg")));
+
+            if (Boolean.TRUE.equals(caseObj.get("expectError"))) {
+                if (rejects(() -> Codec.canonicalForm(nodes, schema, pkg))) {
+                    passed++;
+                } else {
+                    failed++;
+                    System.out.println("FAIL [" + cid
+                        + "] expected canonicalization to reject, it did not");
+                }
+                continue;
+            }
+
+            boolean ok = true;
+            String form = Codec.canonicalForm(nodes, schema, pkg);
+            if (!form.equals(caseObj.get("expectedCanonicalForm"))) {
+                ok = false;
+                System.out.println("FAIL [" + cid + "] canonical form mismatch");
+            }
+            String hash = Codec.contentHash(nodes, schema, pkg);
+            if (!hash.equals(caseObj.get("expectedHash"))) {
+                ok = false;
+                System.out.println("FAIL [" + cid + "] hash expected "
+                    + caseObj.get("expectedHash") + " got " + hash);
+            }
+            List<Object> expectedSer = asList(caseObj.get("expectedSerialize"));
+            for (int i = 0; i < nodes.size(); i++) {
+                if (!deepEquals(Codec.serialize(nodes.get(i)), expectedSer.get(i))) {
+                    ok = false;
+                    System.out.println("FAIL [" + cid + "] serialize[" + i + "] mismatch");
+                }
+            }
+            if (ok) {
+                passed++;
+            } else {
+                failed++;
+            }
+        }
+
+        return new int[] {passed, failed};
     }
 
     static PackageContext parsePkg(Map<String, Object> p) {

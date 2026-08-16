@@ -64,6 +64,94 @@ function runFile(relative: string): void {
  *  - positive cases must round-trip: deserialize(serialize(x)) preserves
  *    $types exactly and re-canonicalizes to the same hash.
  */
+/**
+ * The 0.5.0 enumerations file (`enums`, runtime#21). Beyond the standard
+ * form/hash/serialize checks it pins the enumeration contract:
+ *
+ *  - the schema PARSES with `enums` present, keyed by durable VERSIONED URIs at
+ *    both levels — a versionless key would look right and miss every lookup, so
+ *    the formation is asserted, not assumed;
+ *  - an enumeration STANDS ALONE: its class has no `classes` twin;
+ *  - `enums` and an enum-ranged `range` are canonicalization-INERT (the
+ *    positive hashes are the ones the same nodes produce without them);
+ *  - `expectError` cases must be rejected at CANONICALIZATION. Unlike the
+ *    $types file's all-three-surfaces contract, this violation is
+ *    schema-DEPENDENT: `serialize` is schema-free and `deserialize` does not
+ *    recurse into embedded values, so canonicalization is the only surface
+ *    that can see it. Requiring the other two would be requiring them to do
+ *    something they are deliberately not built to do.
+ */
+function runEnumsFile(relative: string): void {
+  const vfile = new URL(`../../vectors/${relative}`, import.meta.url);
+  const d: any = JSON.parse(readFileSync(vfile, 'utf8'));
+  const schema: CodecSchema = d.schema;
+
+  let fails = 0;
+  let pass = 0;
+
+  // -- structural assertions on the schema itself -------------------------
+  const enums = schema.enums;
+  if (!enums || Object.keys(enums).length === 0) {
+    console.error(`${relative}: schema carries no enums`);
+    fails++;
+  } else {
+    for (const [key, en] of Object.entries(enums)) {
+      if (key !== en.typeUri) {
+        console.error(`${relative}: enum key ${key} != typeUri ${en.typeUri}`);
+        fails++;
+      }
+      // An enumeration stands alone: no `classes` twin is required, and the
+      // absence is load-bearing — it is what makes an embedded value on an
+      // enum-ranged property fail instead of being mapped as a resource.
+      if (schema.classes[key]) {
+        console.error(`${relative}: enum ${key} must NOT also appear in classes`);
+        fails++;
+      }
+      for (const memberUri of Object.keys(en.members)) {
+        // Durable VERSIONED formation, byte-identical to the wire `$ref`.
+        if (!/^[^/]+\/[^/@]+@\d+\.\d+\.\d+\/[^/]+$/.test(memberUri)) {
+          console.error(`${relative}: member key ${memberUri} is not a versioned durable URI`);
+          fails++;
+        }
+      }
+    }
+    if (fails === 0) pass++;
+  }
+
+  // -- cases ---------------------------------------------------------------
+  for (const c of d.cases) {
+    const nodes: CodecNode[] = c.nodes;
+    const pkg: PackageContext = c.pkg;
+
+    if (c.expectError) {
+      let threw = false;
+      try { packageCanonicalForm(nodes, schema, pkg); } catch { threw = true; }
+      if (threw) pass++;
+      else { fails++; console.error(`${c.id}: expected canonicalization to reject, it did not`); }
+      continue;
+    }
+
+    const form = packageCanonicalForm(nodes, schema, pkg);
+    const hash = packageContentHash(nodes, schema, pkg);
+    const ser = nodes.map((n) => serialize(n));
+
+    const formOk = form === c.expectedCanonicalForm;
+    const hashOk = hash === c.expectedHash;
+    const serOk = JSON.stringify(ser) === JSON.stringify(c.expectedSerialize);
+
+    if (formOk && hashOk && serOk) pass++;
+    else {
+      fails++;
+      if (!formOk) console.error(`${c.id}: canonical form mismatch\n  expected ${c.expectedCanonicalForm}\n  got      ${form}`);
+      if (!hashOk) console.error(`${c.id}: hash expected ${c.expectedHash} got ${hash}`);
+      if (!serOk) console.error(`${c.id}: serialize mismatch`);
+    }
+  }
+
+  console.log(`${relative}: ${pass}/${d.cases.length + 1} pass (cases + schema shape)`);
+  totalFails += fails;
+}
+
 function runTypesFile(relative: string): void {
   const vfile = new URL(`../../vectors/${relative}`, import.meta.url);
   const d: any = JSON.parse(readFileSync(vfile, 'utf8'));
@@ -123,6 +211,7 @@ function runTypesFile(relative: string): void {
 runFile('codec-vectors.json');
 runFile('codec-vectors-embedded.json');
 runTypesFile('codec-vectors-types.json');
+runEnumsFile('codec-vectors-enums.json');
 
 // -- Typed-surface conformance: generated-style typed objects (KanonakNode +
 //    Ref<T> arm constructors) reproduce the SAME golden vectors. Also the

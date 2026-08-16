@@ -54,6 +54,54 @@ export interface CodecProp {
   range?: string;
 }
 
+/**
+ * One member of a closed set of named individuals.
+ *
+ * An object even when `label` is its only field, so a later addition (an
+ * ordered scale's `dominates` closure, runtime#16) stays additive rather than
+ * a breaking shape change.
+ */
+export interface CodecEnumMember {
+  /**
+   * The member's own label — the ontology's, read through the same predicate
+   * {@link CodecSchema.labelPredicate} names. Display-lens resolution is a
+   * RENDERING concern and deliberately not here; anything presenting this can
+   * layer a lens above it.
+   */
+  label?: string;
+}
+
+/**
+ * A closed set of named individuals — the metadata that lets a consumer
+ * holding only the schema resolve a member URI it received on the wire, with
+ * no generated SDK for the declaring package.
+ *
+ * What makes a set closed is the PRODUCER's decision, taken in the ontology
+ * and resolved by the schema layer above. This runtime is deliberately
+ * ontology-independent: it carries the outcome and names no vocabulary term.
+ *
+ * Carried, never enforced. A prop ranged at an enumeration in ANOTHER package
+ * has no entry here — `classes` and `enums` both describe the SDK's OWN
+ * package — so a codec that validated a `$ref` against these members would
+ * false-reject valid cross-package data. Absence means "not mine", never
+ * "invalid".
+ */
+export interface CodecEnum {
+  /** The enumeration class's durable URI — the same key form `classes` uses. */
+  typeUri: string;
+  /**
+   * Members keyed by durable VERSIONED URI — `publisher/package@version/name`,
+   * byte-identical to what the wire carries as `{"$ref": …}` and to the key
+   * form `classes` uses. A versionless key would look right and miss every
+   * lookup, so the formation is an invariant, not a convention.
+   *
+   * The local name is NOT duplicated as a key: derive it from the URI with
+   * canonical's `localName` (runtime#17), which is already pinned in every
+   * port. Two spellings of one fact is a way for them to disagree.
+   */
+  members: Record<string, CodecEnumMember>;
+}
+
 /** A class's canonicalization schema: its durable URI + its (flattened) props. */
 export interface CodecClass {
   /** The class's durable canonical URI — the value of the synthesized type triple. */
@@ -78,6 +126,22 @@ export interface CodecSchema {
   packageTypeUri: string;
   /** Classes keyed by durable type URI (the node's `$type`). */
   classes: Record<string, CodecClass>;
+  /**
+   * Closed sets of named individuals, keyed by durable type URI (0.5.0,
+   * runtime#21).
+   *
+   * Optional, so it is additive: a schema written before this field remains
+   * valid, and every 0.4.1 reader already ignores it (measured across all
+   * ports). Canonicalization-INERT — content hashes are unchanged by its
+   * presence, which the enums vectors pin rather than assert.
+   *
+   * An entry here does NOT require a twin in {@link CodecSchema.classes}: a
+   * `classes` entry is needed only when instances of that class are emitted
+   * as NODES, which for an enumeration's members they are not. That absence
+   * is load-bearing — it is what makes an embedded value on an enum-ranged
+   * property fail loudly instead of being mapped as if it were a resource.
+   */
+  enums?: Record<string, CodecEnum>;
 }
 
 /**

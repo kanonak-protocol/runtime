@@ -1,6 +1,6 @@
 [package]
 name = "kanonak-codec"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 authors = ["Kanonak Maintainers (https://github.com/kanonak-protocol/runtime)"]
 description = "Kanonak codec runtime (Rust port). Builds the canonical input model from typed nodes + an embedded CodecSchema and content-addresses it via kanonak-canonical."

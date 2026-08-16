@@ -51,19 +51,73 @@ public struct CodecClass: Decodable {
     }
 }
 
+/// One member of a closed set of named individuals. A struct even when `label`
+/// is its only field, so a later addition (an ordered scale's dominates
+/// closure, runtime#16) stays additive rather than a breaking shape change.
+public struct CodecEnumMember: Decodable {
+    /// The member's own label - the ontology's, read through the same predicate
+    /// `labelPredicate` names. Display-lens resolution is a RENDERING concern
+    /// and deliberately not here.
+    public let label: String?
+
+    public init(label: String? = nil) {
+        self.label = label
+    }
+}
+
+/// A closed set of named individuals - the metadata that lets a consumer
+/// holding only the schema resolve a member URI it received on the wire, with
+/// no generated SDK for the declaring package.
+///
+/// Carried, never enforced. A prop ranged at an enumeration in ANOTHER package
+/// has no entry here (`classes` and `enums` both describe the SDK's OWN
+/// package), so a codec that validated a `$ref` against these members would
+/// false-reject valid cross-package data. Absence means "not mine", never
+/// "invalid".
+///
+/// What makes a set closed is the PRODUCER's decision, taken in the ontology
+/// and resolved by the schema layer above; this runtime carries the outcome and
+/// names no vocabulary term.
+public struct CodecEnum: Decodable {
+    /// The enumeration class's durable URI - the same key form `classes` uses.
+    public let typeUri: String
+    /// Members keyed by durable VERSIONED URI (publisher/package@version/name),
+    /// byte-identical to what the wire carries as {"$ref": ...}. A versionless
+    /// key would look right and miss every lookup, so the formation is an
+    /// invariant, not a convention. The local name is NOT duplicated as a key:
+    /// derive it from the URI with canonical's local-name parser (runtime#17).
+    public let members: [String: CodecEnumMember]
+
+    public init(typeUri: String, members: [String: CodecEnumMember]) {
+        self.typeUri = typeUri
+        self.members = members
+    }
+}
+
 /// The per-package metadata a generated SDK embeds.
 public struct CodecSchema: Decodable {
     public let typePredicate: String
     public let labelPredicate: String
     public let packageTypeUri: String
     public let classes: [String: CodecClass]
+    /// Closed sets of named individuals keyed by durable type URI (0.5.0,
+    /// runtime#21). Optional, so it is additive: a schema written before this
+    /// field decodes to nil. Canonicalization-INERT - content hashes are
+    /// unchanged by its presence, which the enums vectors pin rather than
+    /// assert. An entry here does NOT require a twin in `classes`: a `classes`
+    /// entry is needed only when instances of that class are emitted as NODES,
+    /// which an enumeration's members are not. That absence is load-bearing -
+    /// it is what makes an embedded value on an enum-ranged property fail
+    /// loudly instead of being mapped as if it were a resource.
+    public let enums: [String: CodecEnum]?
 
     public init(typePredicate: String, labelPredicate: String, packageTypeUri: String,
-                classes: [String: CodecClass]) {
+                classes: [String: CodecClass], enums: [String: CodecEnum]? = nil) {
         self.typePredicate = typePredicate
         self.labelPredicate = labelPredicate
         self.packageTypeUri = packageTypeUri
         self.classes = classes
+        self.enums = enums
     }
 
     public static func fromJSON(_ json: String) throws -> CodecSchema {
@@ -81,8 +135,18 @@ public struct CodecSchema: Decodable {
             merged.merge(imported.classes) { _, new in new }
         }
         merged.merge(classes) { _, own in own }
+        // Enumerations merge on the same "own wins" rule. Omitting them here
+        // would drop `enums` on every mixed-package graph - the merge rebuilds
+        // the schema, so a field this method does not carry is a field that
+        // silently disappears.
+        var mergedEnums: [String: CodecEnum] = [:]
+        for imported in imports {
+            if let e = imported.enums { mergedEnums.merge(e) { _, new in new } }
+        }
+        if let ownEnums = enums { mergedEnums.merge(ownEnums) { _, mine in mine } }
         return CodecSchema(typePredicate: typePredicate, labelPredicate: labelPredicate,
-                           packageTypeUri: packageTypeUri, classes: merged)
+                           packageTypeUri: packageTypeUri, classes: merged,
+                           enums: mergedEnums.isEmpty ? nil : mergedEnums)
     }
 }
 

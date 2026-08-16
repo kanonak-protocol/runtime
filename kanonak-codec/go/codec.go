@@ -123,12 +123,55 @@ type Class struct {
 	Props   map[string]Prop `json:"props"`
 }
 
+// EnumMember is one member of a closed set of named individuals. A struct even
+// when Label is its only field, so a later addition (an ordered scale's
+// dominates closure, runtime#16) stays additive rather than a breaking shape
+// change.
+type EnumMember struct {
+	// The member's own label - the ontology's, read through the same predicate
+	// LabelPredicate names. Display-lens resolution is a RENDERING concern and
+	// deliberately not here.
+	Label string `json:"label,omitempty"`
+}
+
+// Enum is a closed set of named individuals - the metadata that lets a consumer
+// holding only the schema resolve a member URI it received on the wire, with no
+// generated SDK for the declaring package.
+//
+// Carried, never enforced. A prop ranged at an enumeration in ANOTHER package
+// has no entry here (Classes and Enums both describe the SDK's OWN package), so
+// a codec that validated a $ref against these members would false-reject valid
+// cross-package data. Absence means "not mine", never "invalid".
+//
+// What makes a set closed is the PRODUCER's decision, taken in the ontology and
+// resolved by the schema layer above; this runtime carries the outcome and
+// names no vocabulary term.
+type Enum struct {
+	// The enumeration class's durable URI - the same key form Classes uses.
+	TypeURI string `json:"typeUri"`
+	// Members keyed by durable VERSIONED URI (publisher/package@version/name),
+	// byte-identical to what the wire carries as {"$ref": ...}. A versionless
+	// key would look right and miss every lookup, so the formation is an
+	// invariant, not a convention. The local name is NOT duplicated as a key:
+	// derive it from the URI with canonical's local-name parser (runtime#17).
+	Members map[string]EnumMember `json:"members"`
+}
+
 // CodecSchema is the per-package metadata a generated SDK embeds.
 type CodecSchema struct {
 	TypePredicate  string           `json:"typePredicate"`
 	LabelPredicate string           `json:"labelPredicate"`
 	PackageTypeURI string           `json:"packageTypeUri"`
 	Classes        map[string]Class `json:"classes"`
+	// Enums are closed sets of named individuals keyed by durable type URI
+	// (0.5.0, runtime#21). Optional, so it is additive. Canonicalization-INERT
+	// - content hashes are unchanged by its presence, which the enums vectors
+	// pin rather than assert. An entry here does NOT require a twin in Classes:
+	// a Classes entry is needed only when instances of that class are emitted
+	// as NODES, which an enumeration's members are not. That absence is
+	// load-bearing - it is what makes an embedded value on an enum-ranged
+	// property fail loudly instead of being mapped as if it were a resource.
+	Enums map[string]Enum `json:"enums,omitempty"`
 }
 
 // PackageContext identifies the package being built/hashed.

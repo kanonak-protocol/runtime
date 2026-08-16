@@ -14,6 +14,10 @@ using Kanonak.Codec;
 class Program
 {
     /// <summary>The shared vector files every conformant port must pass.</summary>
+    /// <summary>Durable VERSIONED member-key formation: publisher/package@version/name.</summary>
+    static readonly System.Text.RegularExpressions.Regex MemberUri =
+        new System.Text.RegularExpressions.Regex(@"^[^/]+/[^/@]+@\d+\.\d+\.\d+/[^/]+$");
+
     static readonly string[] VectorFiles = { "codec-vectors.json", "codec-vectors-embedded.json" };
 
     static int Main(string[] args)
@@ -65,6 +69,18 @@ class Program
             Console.WriteLine($"{Path.GetFileName(typesPath)}: {filePassed} passed, {fileFailed} failed");
             passed += filePassed;
             failed += fileFailed;
+
+            string enumsPath = FindVectors("codec-vectors-enums.json");
+            if (enumsPath == null)
+            {
+                Console.Error.WriteLine("codec-vectors-enums.json not found; pass the vector files as arguments");
+                return 2;
+            }
+            int enumsPassed, enumsFailed;
+            RunEnumsFile(enumsPath, out enumsPassed, out enumsFailed);
+            Console.WriteLine($"{Path.GetFileName(enumsPath)}: {enumsPassed} passed, {enumsFailed} failed");
+            passed += enumsPassed;
+            failed += enumsFailed;
         }
 
         Console.WriteLine($"\n{passed} passed, {failed} failed");
@@ -191,34 +207,90 @@ class Program
 
     }
 
+    /// <summary>
+    /// The 0.5.0 enumerations file (<c>enums</c>, runtime#21). Beyond the
+    /// standard form/hash/serialize checks it pins the enumeration contract:
+    /// the schema parses with <c>enums</c> keyed by durable VERSIONED URIs at
+    /// both levels (a versionless key would look right and miss every lookup);
+    /// an enumeration STANDS ALONE, with no <c>classes</c> twin; <c>enums</c>
+    /// and an enum-ranged <c>range</c> are canonicalization-INERT; and
+    /// expectError cases are rejected at CANONICALIZATION. Unlike the $types
+    /// file's all-three-surfaces contract this violation is schema-DEPENDENT:
+    /// Serialize is schema-free and Deserialize does not recurse into embedded
+    /// values, so canonicalization is the only surface that can see it.
+    /// </summary>
+    static void RunEnumsFile(string vectorsPath, out int passed, out int failed)
+    {
+        passed = 0;
+        failed = 0;
+        using var doc = JsonDocument.Parse(File.ReadAllText(vectorsPath));
+        JsonElement root = doc.RootElement;
+        CodecSchema schema = DecodeSchema(root.GetProperty("schema"));
+
+        // -- structural assertions on the schema itself --
+        bool shapeOk = schema.Enums != null && schema.Enums.Count > 0;
+        if (!shapeOk) Console.WriteLine("FAIL [enums] schema carries no enums");
+        if (schema.Enums != null)
+        {
+            foreach (var kv in schema.Enums)
+            {
+                if (kv.Key != kv.Value.TypeUri)
+                { shapeOk = false; Console.WriteLine($"FAIL [enums] key {kv.Key} != typeUri {kv.Value.TypeUri}"); }
+                if (schema.Classes.ContainsKey(kv.Key))
+                { shapeOk = false; Console.WriteLine($"FAIL [enums] {kv.Key} must NOT also appear in classes"); }
+                if (kv.Value.Members.Count == 0)
+                { shapeOk = false; Console.WriteLine($"FAIL [enums] {kv.Key} declares no members"); }
+                foreach (var memberUri in kv.Value.Members.Keys)
+                {
+                    if (!MemberUri.IsMatch(memberUri))
+                    { shapeOk = false; Console.WriteLine($"FAIL [enums] member key {memberUri} is not a versioned durable URI"); }
+                }
+            }
+        }
+        if (shapeOk) passed++; else failed++;
+
+        // -- cases --
+        foreach (var c in root.GetProperty("cases").EnumerateArray())
+        {
+            string id = c.GetProperty("id").GetString();
+            var pkg = DecodePkg(c.GetProperty("pkg"));
+            var nodes = new List<IReadOnlyDictionary<string, object>>();
+            foreach (var n in c.GetProperty("nodes").EnumerateArray())
+                nodes.Add((IReadOnlyDictionary<string, object>)DecodeJson(n));
+
+            if (c.TryGetProperty("expectError", out var expErr) && expErr.GetBoolean())
+            {
+                if (Rejects(() => Codec.CanonicalForm(nodes, schema, pkg))) passed++;
+                else { failed++; Console.WriteLine($"FAIL [{id}] expected canonicalization to reject, it did not"); }
+                continue;
+            }
+
+            bool ok = true;
+            string form = Codec.CanonicalForm(nodes, schema, pkg);
+            string expForm = c.GetProperty("expectedCanonicalForm").GetString();
+            if (form != expForm) { ok = false; Console.WriteLine($"FAIL [{id}] canonical form mismatch"); }
+
+            string hash = Codec.ContentHash(nodes, schema, pkg);
+            string expHash = c.GetProperty("expectedHash").GetString();
+            if (hash != expHash) { ok = false; Console.WriteLine($"FAIL [{id}] hash got {hash} exp {expHash}"); }
+
+            var expSer = c.GetProperty("expectedSerialize");
+            for (int i = 0; i < nodes.Count; i++)
+            {
+                if (!DeepEquals(Codec.Serialize(nodes[i]), DecodeJson(expSer[i])))
+                { ok = false; Console.WriteLine($"FAIL [{id}] serialize[{i}] mismatch"); }
+            }
+            if (ok) passed++; else failed++;
+        }
+    }
+
     // -- Vector decoders -------------------------------------------------------
 
-    static CodecSchema DecodeSchema(JsonElement s)
-    {
-        var schema = new CodecSchema
-        {
-            TypePredicate = s.GetProperty("typePredicate").GetString(),
-            LabelPredicate = s.GetProperty("labelPredicate").GetString(),
-            PackageTypeUri = s.GetProperty("packageTypeUri").GetString(),
-        };
-        foreach (var cls in s.GetProperty("classes").EnumerateObject())
-        {
-            var cc = new CodecClass { TypeUri = cls.Value.GetProperty("typeUri").GetString() };
-            foreach (var p in cls.Value.GetProperty("props").EnumerateObject())
-            {
-                var prop = new CodecProp
-                {
-                    Predicate = p.Value.GetProperty("predicate").GetString(),
-                    Kind = p.Value.GetProperty("kind").GetString(),
-                };
-                if (p.Value.TryGetProperty("datatype", out var dt)) prop.Datatype = dt.GetString();
-                if (p.Value.TryGetProperty("range", out var rg)) prop.Range = rg.GetString();
-                cc.Props[p.Name] = prop;
-            }
-            schema.Classes[cls.Name] = cc;
-        }
-        return schema;
-    }
+    // Delegates to the production parser rather than duplicating it: this was
+    // a line-for-line copy of CodecSchema.FromJson and would have silently
+    // produced enum-free schemas when 0.5.0 added `enums`. One parser, so the
+    // harness cannot drift from what consumers actually run.
+    static CodecSchema DecodeSchema(JsonElement s) => CodecSchema.FromJson(s.GetRawText());
 
     static PackageContext DecodePkg(JsonElement p)
     {

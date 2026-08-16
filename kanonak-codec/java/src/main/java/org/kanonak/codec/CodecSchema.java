@@ -23,10 +23,56 @@ public record CodecSchema(
     String typePredicate,
     String labelPredicate,
     String packageTypeUri,
-    Map<String, CodecClass> classes
+    Map<String, CodecClass> classes,
+    Map<String, CodecEnum> enums
 ) {
+    /**
+     * Source-compatible 4-arg form for callers written before 0.5.0 added
+     * {@code enums}. Yields a schema declaring no enumerations.
+     */
+    public CodecSchema(String typePredicate, String labelPredicate,
+                       String packageTypeUri, Map<String, CodecClass> classes) {
+        this(typePredicate, labelPredicate, packageTypeUri, classes, Map.of());
+    }
+
     /** A class's canonicalization schema: its durable URI + its (flattened) props. */
     public record CodecClass(String typeUri, Map<String, CodecProp> props) {}
+
+    /**
+     * One member of a closed set of named individuals. A record even when
+     * {@code label} is its only component, so a later addition (an ordered
+     * scale's dominates closure, runtime#16) stays additive rather than a
+     * breaking shape change.
+     *
+     * <p>{@code label} is the ontology's own, read through the same predicate
+     * {@link #labelPredicate()} names. Display-lens resolution is a RENDERING
+     * concern and deliberately not here.
+     */
+    public record CodecEnumMember(String label) {}
+
+    /**
+     * A closed set of named individuals — the metadata that lets a consumer
+     * holding only the schema resolve a member URI it received on the wire,
+     * with no generated SDK for the declaring package.
+     *
+     * <p>Carried, never enforced. A prop ranged at an enumeration in ANOTHER
+     * package has no entry here ({@code classes} and {@code enums} both
+     * describe the SDK's OWN package), so a codec that validated a {@code $ref}
+     * against these members would false-reject valid cross-package data.
+     * Absence means "not mine", never "invalid".
+     *
+     * <p>{@code members} is keyed by durable VERSIONED URI
+     * ({@code publisher/package@version/name}), byte-identical to what the wire
+     * carries as {@code {"$ref": ...}}. A versionless key would look right and
+     * miss every lookup, so the formation is an invariant, not a convention.
+     * The local name is NOT duplicated as a key: derive it from the URI with
+     * canonical's local-name parser (runtime#17).
+     *
+     * <p>What makes a set closed is the PRODUCER's decision, taken in the
+     * ontology and resolved by the schema layer above; this runtime carries the
+     * outcome and names no vocabulary term.
+     */
+    public record CodecEnum(String typeUri, Map<String, CodecEnumMember> members) {}
 
     /**
      * Parse the embedded schema JSON (the form the generators emit and the shared
@@ -59,11 +105,30 @@ public record CodecSchema(
                 classes.put(e.getKey(), new CodecClass((String) c.get("typeUri"), props));
             }
         }
+        // Closed sets (0.5.0, runtime#21). Optional: a schema written before
+        // this field remains valid and yields an empty map.
+        Map<String, CodecEnum> enums = new LinkedHashMap<>();
+        Map<String, Object> rawEnums = (Map<String, Object>) s.get("enums");
+        if (rawEnums != null) {
+            for (Map.Entry<String, Object> e : rawEnums.entrySet()) {
+                Map<String, Object> en = (Map<String, Object>) e.getValue();
+                Map<String, CodecEnumMember> members = new LinkedHashMap<>();
+                Map<String, Object> rawMembers = (Map<String, Object>) en.get("members");
+                if (rawMembers != null) {
+                    for (Map.Entry<String, Object> me : rawMembers.entrySet()) {
+                        Map<String, Object> m = (Map<String, Object>) me.getValue();
+                        members.put(me.getKey(), new CodecEnumMember((String) m.get("label")));
+                    }
+                }
+                enums.put(e.getKey(), new CodecEnum((String) en.get("typeUri"), members));
+            }
+        }
         return new CodecSchema(
             (String) s.get("typePredicate"),
             (String) s.get("labelPredicate"),
             (String) s.get("packageTypeUri"),
-            classes);
+            classes,
+            enums);
     }
 
     /**
