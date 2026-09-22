@@ -97,6 +97,31 @@ stale secret can degrade to the keyless path, never fail a release by itself —
 but only once the trusted publisher IS configured on the registry. Delete the
 secret when you see the warning; the bootstrap is over.
 
+## Credential preflight — where to go when it fails
+
+`preflight-credentials` runs before any publish job (dry runs too) and every
+Monday on the schedule. It asks each registry whether it will accept the
+credential the workflow is about to use, and each failure names the fix. On
+the schedule a failure opens (or updates) the issue **"Release credentials
+need attention"** (label `release-credentials`) and a clean run closes it —
+so the issue is open exactly while a release would fail. Stored tokens
+expire; this is the only reminder.
+
+| Check | Where to go | What to do |
+|---|---|---|
+| npm trusted publisher (per package) | `https://www.npmjs.com/package/@kanonak-protocol/<pkg>/access` → Trusted Publisher | GitHub Actions: org `kanonak-protocol`, repo `runtime`, workflow `release.yml`, environment `production`. Then delete `NPM_TOKEN`. |
+| npm `NPM_TOKEN` (fallback) | https://www.npmjs.com/settings/~/tokens/granular-access-tokens/new | Publish rights on `@kanonak-protocol`; note the expiry; update the secret. |
+| crates.io Trusted Publishing (per crate) | `https://crates.io/crates/<crate>/settings` → Trusted Publishing | GitHub: owner `kanonak-protocol`, repo `runtime`, workflow `release.yml`, environment `production`. Then delete `CARGO_REGISTRY_TOKEN`. |
+| crates.io `CARGO_REGISTRY_TOKEN` (fallback) | https://crates.io/settings/tokens/new | Scope publish-update; note the expiry; update the secret. |
+| PyPI trusted publisher (per project) | `https://pypi.org/manage/project/<project>/settings/publishing/` | GitHub: owner `kanonak-protocol`, repo `runtime`, workflow `release.yml`, environment `production`. |
+| NuGet trusted publishing | https://www.nuget.org/account/trustedpublishing (signed in as `NUGET_USER`) | Policy: owner `kanonak-protocol`, repo `runtime`, workflow `release.yml`, environment `production`; account needs push rights on `Kanonak.*`. |
+| Maven Central portal token | https://central.sonatype.com/account → Generate User Token | Update variable `MAVEN_CENTRAL_USERNAME` and secret `MAVEN_CENTRAL_PASSWORD`. |
+| Maven GPG key (expiry + passphrase) | https://central.sonatype.org/publish/requirements/gpg/ | `gpg --edit-key <KEYID> expire`, re-send to `keyserver.ubuntu.com`, re-export the private key into `MAVEN_GPG_PRIVATE_KEY`; passphrase → `MAVEN_GPG_PASSPHRASE`. Warns at < 60 days. |
+
+Secrets and variables: https://github.com/kanonak-protocol/runtime/settings/environments
+(environment `production` → Environment secrets) and
+https://github.com/kanonak-protocol/runtime/settings/variables/actions.
+
 ## Release pipeline
 
 - **Trigger:** tag `v<semver>` (or manual dispatch); default a **dry run**, set

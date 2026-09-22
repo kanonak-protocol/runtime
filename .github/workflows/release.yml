@@ -12,6 +12,12 @@
 # Trusted publishers (PyPI / crates.io / npm / NuGet) must each be configured
 # with environment = production to match the OIDC claim these jobs present.
 #
+# CREDENTIALS ARE VERIFIED BEFORE ANYTHING PUBLISHES — and weekly. The
+# preflight-credentials job asks every registry whether it will accept the
+# credential this workflow is about to use (dry runs included), and on the
+# schedule turns a dead or dying credential into an issue that says where to
+# go and what to do. Stored tokens expire; nothing else reminds anyone.
+#
 # Runner: ubuntu-latest, toolchains pinned via setup-* (Node-24 majors).
 
 name: release
@@ -253,8 +259,228 @@ jobs:
           fi
           exit $fail
 
+  # ============ PREFLIGHT: CREDENTIALS (before ANYTHING publishes) ============
+  # Registry credentials expire — npm granular tokens, crates.io tokens, the
+  # Maven GPG key — and nothing reminds anyone. On 2026-09-22 a dry run passed,
+  # the real run moved PyPI/Maven/Go/NuGet/GHCR/Swift to 0.3.2, and THEN npm
+  # and crates.io rejected their stored tokens: a parity break discovered only
+  # by trying to release. This job asks every registry "will you accept the
+  # credential this workflow is about to use?" BEFORE any publish job may run
+  # — on dry runs too, so `publish=false` is a real rehearsal — and on the
+  # weekly schedule, so a token that dies between releases is found within a
+  # week and lands in an issue (see `report`), not in a half-shipped release.
+  #
+  # Every failure says WHERE TO GO and WHAT TO DO, with the URL, so nobody has
+  # to figure it out again. The remediation table is also in PUBLISHING.md.
+  #
+  # OIDC checks perform the same short-lived token exchange the publish jobs
+  # perform, and use nothing they mint. Token checks call a read-only "who am I"
+  # endpoint. Nothing here writes to any registry.
+  preflight-credentials:
+    if: ${{ github.event_name != 'pull_request' }}
+    environment: production      # the secrets live here; the OIDC claim must match too
+    permissions:
+      id-token: write
+      contents: read
+      issues: write              # the weekly reminder issue (report step)
+    runs-on: ubuntu-latest
+    env:
+      SECRETS_URL: https://github.com/kanonak-protocol/runtime/settings/environments   # -> production -> Environment secrets
+      F: ${{ github.workspace }}/credential-findings.md   # findings for the report step (never committed)
+    steps:
+      - uses: actions/checkout@v6
+      - run: ': > "$F"'
+
+      # ---------------------------------------------------------------- npm --
+      - uses: actions/setup-node@v6
+        with: { node-version: "22", registry-url: "https://registry.npmjs.org" }
+      - name: npm — NPM_TOKEN (if set) or trusted publisher per package
+        continue-on-error: true   # every check runs; `report` is the verdict
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          fix="Configure the trusted publisher on EACH package — https://www.npmjs.com/package/@kanonak-protocol/<canonical|codec|expression|wire>/access -> Trusted Publisher -> GitHub Actions: organization kanonak-protocol, repository runtime, workflow release.yml, environment production. Then DELETE the NPM_TOKEN secret ($SECRETS_URL -> production) so the workflow uses OIDC. (Fallback: mint a granular token at https://www.npmjs.com/settings/~/tokens/granular-access-tokens/new with publish rights on @kanonak-protocol, note its expiry, and update NPM_TOKEN.)"
+          if [ -n "$NODE_AUTH_TOKEN" ]; then
+            if who=$(npm whoami --registry https://registry.npmjs.org 2>&1); then
+              echo "OK   npm: NPM_TOKEN accepted (user $who). It WILL expire — prefer trusted publishing: $fix"
+            else
+              echo "::error::npm: NPM_TOKEN is set but npm rejected it ($who) — expired or revoked. $fix"
+              echo "- **npm**: NPM_TOKEN rejected (expired/revoked). $fix" >> "$F"; exit 1
+            fi
+            exit 0
+          fi
+          # OIDC: perform npm's own exchange for each package — it succeeds only
+          # when a trusted publisher matching THIS repo/workflow/environment exists.
+          id=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=npm:registry.npmjs.org" | jq -r .value)
+          fail=0
+          for pkg in canonical codec expression wire; do
+            enc="%40kanonak-protocol%2F$pkg"
+            code=$(curl -s -o "$RUNNER_TEMP/npm-$pkg.json" -w '%{http_code}' -X POST -H "Authorization: Bearer $id" -H "Content-Type: application/json" "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/$enc") || code="000"
+            if [ "$code" = "200" ]; then
+              echo "OK   npm: trusted publisher accepted this workflow for @kanonak-protocol/$pkg"
+            else
+              echo "::error::npm: no trusted publisher accepted this workflow for @kanonak-protocol/$pkg (HTTP $code: $(head -c 300 "$RUNNER_TEMP/npm-$pkg.json")). Go to https://www.npmjs.com/package/@kanonak-protocol/$pkg/access -> Trusted Publisher -> GitHub Actions: organization kanonak-protocol, repository runtime, workflow release.yml, environment production."
+              echo "- **npm** @kanonak-protocol/$pkg: no trusted publisher for this workflow (HTTP $code). https://www.npmjs.com/package/@kanonak-protocol/$pkg/access -> Trusted Publisher -> GitHub Actions: org kanonak-protocol, repo runtime, workflow release.yml, environment production." >> "$F"; fail=1
+            fi
+          done
+          exit $fail
+
+      # ----------------------------------------------------------- crates.io --
+      - name: crates.io — CARGO_REGISTRY_TOKEN (if set)
+        continue-on-error: true   # every check runs; `report` is the verdict
+        id: cargotok
+        env:
+          TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          fix="Configure Trusted Publishing on EACH crate — https://crates.io/crates/<kanonak-canonical|kanonak-codec|kanonak-expression|kanonak-wire>/settings -> Trusted Publishing -> GitHub: repository owner kanonak-protocol, repository runtime, workflow release.yml, environment production. Then DELETE the CARGO_REGISTRY_TOKEN secret ($SECRETS_URL -> production) so the workflow uses OIDC. (Fallback: new token at https://crates.io/settings/tokens/new with publish-update scope, note its expiry, and update CARGO_REGISTRY_TOKEN.)"
+          if [ -z "$TOKEN" ]; then echo "has_token=false" >> "$GITHUB_OUTPUT"; echo "crates.io: no token — checking trusted publishing next"; exit 0; fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: $TOKEN" -A "kanonak-release-ci (https://github.com/kanonak-protocol/runtime)" https://crates.io/api/v1/me) || code="000"
+          if [ "$code" = "200" ]; then
+            echo "has_token=true" >> "$GITHUB_OUTPUT"; echo "OK   crates.io: CARGO_REGISTRY_TOKEN accepted. It WILL expire — prefer trusted publishing: $fix"
+          else
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+            echo "::error::crates.io: CARGO_REGISTRY_TOKEN is set but crates.io rejected it (HTTP $code) — expired or revoked. $fix"
+            echo "- **crates.io**: CARGO_REGISTRY_TOKEN rejected (HTTP $code). $fix" >> "$F"; exit 1
+          fi
+      - name: crates.io — trusted publishing exchange (the same one publish-rust performs)
+        if: steps.cargotok.outputs.has_token != 'true'
+        id: cargooidc
+        continue-on-error: true
+        uses: rust-lang/crates-io-auth-action@v1
+      - name: crates.io — trusted publishing verdict
+        continue-on-error: true   # every check runs; `report` is the verdict
+        if: steps.cargotok.outputs.has_token != 'true'
+        run: |
+          if [ "${{ steps.cargooidc.outcome }}" = "success" ]; then
+            echo "OK   crates.io: Trusted Publishing accepted this workflow (temporary token minted and discarded)"
+          else
+            fix="Configure Trusted Publishing on EACH crate — https://crates.io/crates/<kanonak-canonical|kanonak-codec|kanonak-expression|kanonak-wire>/settings -> Trusted Publishing -> GitHub: repository owner kanonak-protocol, repository runtime, workflow release.yml, environment production."
+            echo "::error::crates.io: Trusted Publishing did not accept this workflow (no crate trusts kanonak-protocol/runtime + release.yml + environment production), and no CARGO_REGISTRY_TOKEN is set. $fix"
+            echo "- **crates.io**: no Trusted Publishing config for this workflow and no token. $fix" >> "$F"; exit 1
+          fi
+
+      # ---------------------------------------------------------------- PyPI --
+      - name: PyPI — trusted publisher (mint-token, as pypa/gh-action-pypi-publish does)
+        continue-on-error: true   # every check runs; `report` is the verdict
+        run: |
+          id=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=pypi" | jq -r .value)
+          code=$(curl -s -o "$RUNNER_TEMP/pypi.json" -w '%{http_code}' -X POST -H "Content-Type: application/json" -d "{\"token\":\"$id\"}" https://pypi.org/_/oidc/mint-token) || code="000"
+          if [ "$code" = "200" ]; then
+            echo "OK   PyPI: trusted publisher accepted this workflow (token minted and discarded)"
+          else
+            fix="Configure the trusted publisher on EACH project — https://pypi.org/manage/project/<kanonak-canonical|kanonak-codec|kanonak-expression|kanonak-wire>/settings/publishing/ -> GitHub: owner kanonak-protocol, repository runtime, workflow release.yml, environment production."
+            echo "::error::PyPI: no trusted publisher accepted this workflow (HTTP $code: $(head -c 300 "$RUNNER_TEMP/pypi.json")). $fix"
+            echo "- **PyPI**: no trusted publisher for this workflow (HTTP $code). $fix" >> "$F"; exit 1
+          fi
+
+      # --------------------------------------------------------------- NuGet --
+      - name: NuGet — trusted publishing login (the same one publish-csharp performs)
+        id: nugetoidc
+        continue-on-error: true
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+      - name: NuGet — verdict
+        continue-on-error: true   # every check runs; `report` is the verdict
+        run: |
+          if [ "${{ steps.nugetoidc.outcome }}" = "success" ]; then
+            echo "OK   NuGet: trusted-publishing policy accepted this workflow for user ${{ vars.NUGET_USER }} (temporary key discarded)"
+          else
+            fix="Sign in as ${{ vars.NUGET_USER }} (the POLICY CREATOR account) at https://www.nuget.org/account/trustedpublishing and add/repair the policy: owner kanonak-protocol, repository runtime, workflow release.yml, environment production; the account must have push rights on Kanonak.* — https://www.nuget.org/account/Packages. Repo variable NUGET_USER must equal that account: https://github.com/kanonak-protocol/runtime/settings/variables/actions"
+            echo "::error::NuGet: trusted-publishing login failed for user '${{ vars.NUGET_USER }}'. $fix"
+            echo "- **NuGet**: trusted-publishing login failed for '${{ vars.NUGET_USER }}'. $fix" >> "$F"; exit 1
+          fi
+
+      # ------------------------------------------------------- Maven Central --
+      - name: Maven Central — portal token + GPG signing key (expiry checked)
+        continue-on-error: true   # every check runs; `report` is the verdict
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ vars.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_GPG_PRIVATE_KEY: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: |
+          fail=0
+          # 1. Portal token: an authenticated read against the publisher API.
+          tokfix="Generate a new user token at https://central.sonatype.com/account (Generate User Token), then update repo variable MAVEN_CENTRAL_USERNAME (https://github.com/kanonak-protocol/runtime/settings/variables/actions) and secret MAVEN_CENTRAL_PASSWORD ($SECRETS_URL -> production)."
+          if [ -z "$MAVEN_CENTRAL_USERNAME" ] || [ -z "$MAVEN_CENTRAL_PASSWORD" ]; then
+            echo "::error::Maven Central: MAVEN_CENTRAL_USERNAME (variable) or MAVEN_CENTRAL_PASSWORD (secret) is not set. $tokfix"
+            echo "- **Maven Central**: username/password not set. $tokfix" >> "$F"; fail=1
+          else
+            bearer=$(printf "%s:%s" "$MAVEN_CENTRAL_USERNAME" "$MAVEN_CENTRAL_PASSWORD" | base64 -w0)
+            code=$(curl -s -o "$RUNNER_TEMP/central.json" -w '%{http_code}' -H "Authorization: Bearer $bearer" "https://central.sonatype.com/api/v1/publisher/published?namespace=org.kanonak&name=kanonak-canonical&version=0.1.0") || code="000"
+            if [ "$code" = "200" ]; then
+              echo "OK   Maven Central: portal token accepted"
+            else
+              echo "::error::Maven Central: portal token rejected (HTTP $code: $(head -c 200 "$RUNNER_TEMP/central.json")). $tokfix"
+              echo "- **Maven Central**: portal token rejected (HTTP $code). $tokfix" >> "$F"; fail=1
+            fi
+          fi
+          # 2. GPG key: importable, passphrase correct, and NOT expiring soon.
+          gpgfix="Extend the key: gpg --edit-key <KEYID> expire (then save), re-publish it (gpg --keyserver keyserver.ubuntu.com --send-keys <KEYID>), export the private key (gpg --armor --export-secret-keys <KEYID>) and update secret MAVEN_GPG_PRIVATE_KEY ($SECRETS_URL -> production). Sonatype's guide: https://central.sonatype.org/publish/requirements/gpg/"
+          if [ -z "$MAVEN_GPG_PRIVATE_KEY" ]; then
+            echo "::error::Maven Central: MAVEN_GPG_PRIVATE_KEY is not set. $gpgfix"; echo "- **Maven GPG**: private key secret not set. $gpgfix" >> "$F"; fail=1
+          else
+            export GNUPGHOME="$RUNNER_TEMP/gnupg"; mkdir -p "$GNUPGHOME"; chmod 700 "$GNUPGHOME"
+            if ! printf "%s" "$MAVEN_GPG_PRIVATE_KEY" | gpg --batch --quiet --import 2>"$RUNNER_TEMP/gpg-import.err"; then
+              echo "::error::Maven Central: MAVEN_GPG_PRIVATE_KEY did not import ($(head -c 200 "$RUNNER_TEMP/gpg-import.err")). $gpgfix"; echo "- **Maven GPG**: key does not import. $gpgfix" >> "$F"; fail=1
+            else
+              keyid=$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1=="sec"{print $5; exit}')
+              exp=$(gpg --batch --with-colons --list-keys "$keyid" | awk -F: '$1=="pub"{print $7; exit}')
+              if [ -n "$exp" ]; then
+                days=$(( (exp - $(date +%s)) / 86400 ))
+                if [ "$days" -lt 0 ]; then
+                  echo "::error::Maven Central: GPG key $keyid EXPIRED $(( -days )) days ago ($(date -u -d @$exp +%F)) — Central rejects signatures from expired keys. $gpgfix"; echo "- **Maven GPG**: key $keyid expired $(date -u -d @$exp +%F). $gpgfix" >> "$F"; fail=1
+                elif [ "$days" -lt 60 ]; then
+                  echo "::warning::Maven Central: GPG key $keyid expires in $days days ($(date -u -d @$exp +%F)). Extend it before then. $gpgfix"; echo "- **Maven GPG** (warning): key $keyid expires in $days days ($(date -u -d @$exp +%F)). $gpgfix" >> "$F"
+                else
+                  echo "OK   Maven Central: GPG key $keyid valid for $days more days ($(date -u -d @$exp +%F))"
+                fi
+              else
+                echo "OK   Maven Central: GPG key $keyid has no expiry"
+              fi
+              if echo probe | gpg --batch --yes --pinentry-mode loopback --passphrase "$MAVEN_GPG_PASSPHRASE" --local-user "$keyid" --sign -o /dev/null 2>"$RUNNER_TEMP/gpg-sign.err"; then
+                echo "OK   Maven Central: GPG passphrase accepted (test signature made)"
+              else
+                echo "::error::Maven Central: GPG signing with MAVEN_GPG_PASSPHRASE failed ($(head -c 200 "$RUNNER_TEMP/gpg-sign.err")) — the passphrase secret does not match the key. Update MAVEN_GPG_PASSPHRASE at $SECRETS_URL -> production."; echo "- **Maven GPG**: passphrase rejected. Update MAVEN_GPG_PASSPHRASE at $SECRETS_URL -> production." >> "$F"; fail=1
+              fi
+            fi
+          fi
+          exit $fail
+
+      # -------------------------------------------------------------- report --
+      # The DURABLE reminder. On the weekly schedule a failure opens (or
+      # updates) ONE issue labelled release-credentials with the findings —
+      # each already saying where to go — and a clean run closes it. So the
+      # issue is open exactly while a release would fail, and nobody has to
+      # remember to check. Dispatch/tag runs fail the run itself (the publish
+      # jobs need this job) and print the same findings in the log.
+      - name: report
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          title="Release credentials need attention"
+          echo "## Credential preflight findings" ; cat "$F"
+          existing=$(gh issue list --label release-credentials --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          if [ -s "$F" ]; then
+            body=$(printf '%s\n\n%s\n\n%s\n' "The weekly credential preflight (run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) found credentials the release workflow will NOT be able to publish with. Each line says where to go and what to do; PUBLISHING.md has the full table. This issue closes itself on the next clean run." "$(cat "$F")" "Checked on $(date -u +%F) by \`preflight-credentials\`.")
+            if [ "${{ github.event_name }}" = "schedule" ]; then
+              gh label create release-credentials --description "A registry credential the release workflow needs is dead or dying" --color B60205 --force >/dev/null 2>&1 || true
+              if [ -n "$existing" ]; then gh issue comment "$existing" --body "$body" >/dev/null; echo "updated issue #$existing";
+              else gh issue create --title "$title" --label release-credentials --body "$body" ; fi
+            fi
+            echo "::error::Credential preflight found problems — see the findings above; nothing has been published."
+            exit 1
+          fi
+          echo "All release credentials accepted."
+          if [ -n "$existing" ] && [ "${{ github.event_name }}" = "schedule" ]; then
+            gh issue close "$existing" --comment "All release credentials accepted on $(date -u +%F) (run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})." >/dev/null; echo "closed issue #$existing"
+          fi
+
   publish-python:
-    needs: [test-python, preflight]
+    needs: [test-python, preflight, preflight-credentials]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
     runs-on: ubuntu-latest
@@ -278,7 +504,7 @@ jobs:
         with: { packages-dir: kanonak-wire/python/dist, skip-existing: true }
 
   publish-rust:
-    needs: [test-rust, preflight]
+    needs: [test-rust, preflight, preflight-credentials]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
     runs-on: ubuntu-latest
@@ -368,7 +594,7 @@ jobs:
           pub kanonak-wire/rust/Cargo.toml
 
   publish-typescript:
-    needs: [test-typescript, preflight]
+    needs: [test-typescript, preflight, preflight-credentials]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
     runs-on: ubuntu-latest
@@ -445,7 +671,7 @@ jobs:
           done
 
   publish-csharp:
-    needs: [test-csharp, preflight]
+    needs: [test-csharp, preflight, preflight-credentials]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
     runs-on: ubuntu-latest
@@ -473,7 +699,7 @@ jobs:
         # `--api-key ${{ secrets.NUGET_API_KEY }}`.
 
   publish-java:
-    needs: [test-java, preflight]
+    needs: [test-java, preflight, preflight-credentials]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
     runs-on: ubuntu-latest
@@ -541,7 +767,7 @@ jobs:
   # Idempotent: an existing tag is NEVER touched or moved (immutability rule);
   # to release a new Go version, bump go_module_versions and re-run.
   publish-go:
-    needs: [test-go, preflight]
+    needs: [test-go, preflight, preflight-credentials]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
     permissions:
@@ -600,7 +826,7 @@ jobs:
   # Idempotent: an existing tag is NEVER touched or moved; to release a new
   # Swift version, bump swift_package_version and re-run.
   publish-swift:
-    needs: [test-swift, preflight]
+    needs: [test-swift, preflight, preflight-credentials]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
     permissions:
@@ -661,7 +887,7 @@ jobs:
   # package settings) — GHCR creates org packages private, and anonymous
   # `wkg oci pull` is the acceptance bar. release-audit hard-fails until then.
   publish-wasm:
-    needs: [test-wasm, preflight]
+    needs: [test-wasm, preflight, preflight-credentials]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
     permissions:
