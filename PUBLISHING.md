@@ -84,6 +84,19 @@ With OIDC, you configure a **trusted publisher on the registry** (pointing at
 `kanonak-protocol/runtime` + the release workflow) instead of storing a token —
 see each target's `registry_side_config` in `release-targets.yml`.
 
+**Stored tokens expire — and the workflow knows it.** npm granular access
+tokens and crates.io tokens have lifetimes; a secret that published one release
+can be dead by the next (2026-09-22: `NPM_TOKEN` and `CARGO_REGISTRY_TOKEN`,
+both fine on 2026-08-15, were rejected — npm answers a dead token with an E404
+on PUT, crates.io with "403 authentication failed" — and the run had already
+moved PyPI/Maven/Go/NuGet/GHCR/Swift to the new version, so release-audit
+reported the parity break). The `publish-typescript` and `publish-rust` jobs
+therefore VALIDATE a stored token (`npm whoami`, `GET /api/v1/me`) before
+trusting it and fall back to OIDC with a `::warning::` when it is rejected. A
+stale secret can degrade to the keyless path, never fail a release by itself —
+but only once the trusted publisher IS configured on the registry. Delete the
+secret when you see the warning; the bootstrap is over.
+
 ## Release pipeline
 
 - **Trigger:** tag `v<semver>` (or manual dispatch); default a **dry run**, set

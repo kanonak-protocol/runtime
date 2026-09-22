@@ -286,18 +286,31 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       # crates.io has no "pending publisher", so the FIRST publish of a new crate
-      # needs a token. If CARGO_REGISTRY_TOKEN is set, use it (one-time bootstrap);
-      # otherwise use OIDC trusted publishing. After the first release, set up
-      # Trusted Publishing on each crate and DELETE the secret -> auto-switches to OIDC.
+      # needs a token. If CARGO_REGISTRY_TOKEN is set AND crates.io still accepts
+      # it, use it (one-time bootstrap); otherwise use OIDC trusted publishing.
+      # After the first release, set up Trusted Publishing on each crate and
+      # DELETE the secret -> auto-switches to OIDC.
+      #
+      # The token is VALIDATED before it is trusted: crates.io tokens expire, and
+      # a stored-but-dead token used blind fails the whole publish with "403
+      # authentication failed" AFTER the other registries have already moved
+      # (2026-09-22, expression 0.3.2). A rejected token is a warning and a
+      # fall-through to OIDC, never a release failure on its own.
       - name: detect publish auth
         id: cargocfg
         env:
           TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          if [ -n "$TOKEN" ]; then
-            echo "has_token=true" >> "$GITHUB_OUTPUT"; echo "Using CARGO_REGISTRY_TOKEN (one-time bootstrap)"
-          else
+          if [ -z "$TOKEN" ]; then
             echo "has_token=false" >> "$GITHUB_OUTPUT"; echo "Using OIDC trusted publishing"
+            exit 0
+          fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: $TOKEN" -A "kanonak-release-ci (https://github.com/kanonak-protocol/runtime)" https://crates.io/api/v1/me) || code="000"
+          if [ "$code" = "200" ]; then
+            echo "has_token=true" >> "$GITHUB_OUTPUT"; echo "Using CARGO_REGISTRY_TOKEN (one-time bootstrap; crates.io accepted it)"
+          else
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::CARGO_REGISTRY_TOKEN is set but crates.io rejected it (HTTP $code) — it has expired or been revoked. Falling back to OIDC trusted publishing; delete the dead secret (PUBLISHING.md)."
           fi
       - name: crates.io auth (OIDC trusted publishing)
         if: steps.cargocfg.outputs.has_token != 'true'
@@ -305,7 +318,7 @@ jobs:
         id: auth
       - name: publish canonical then codec (skip versions already on crates.io)
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' && secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.cargocfg.outputs.has_token == 'true' && secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}
         run: |
           # The existence pre-check FAILS CLOSED: `curl -sf` alone cannot tell a
           # 404 (absent, publish it) from a 5xx/network error (unknown), and
@@ -369,10 +382,44 @@ jobs:
           npm run build -w @kanonak-protocol/codec
           npm run build -w @kanonak-protocol/expression
           npm run build -w @kanonak-protocol/wire
+      # NPM_TOKEN is the one-time bootstrap; the steady state is npm trusted
+      # publishing (OIDC), configured on each package -> this repo + release.yml
+      # + environment production. The token is VALIDATED before it is trusted:
+      # npm granular tokens expire, and a dead one used blind fails the publish
+      # with an E404 on PUT ("is not in this registry" — npm's answer to a token
+      # without rights) AFTER the other registries have moved (2026-09-22,
+      # expression 0.3.2). A rejected token warns and falls through to OIDC.
+      #
+      # The OIDC path needs npm >= 11.5.1 (Node 22 bundles 10.x) and NO auth
+      # token anywhere: setup-node wrote an `_authToken=${NODE_AUTH_TOKEN}` line
+      # into the user config, which must go, or npm tries the (empty) token
+      # instead of exchanging the OIDC identity.
+      - name: detect publish auth
+        id: npmcfg
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NODE_AUTH_TOKEN" ] && npm whoami --registry https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "has_token=true" >> "$GITHUB_OUTPUT"; echo "Using NPM_TOKEN (one-time bootstrap; npm accepted it)"
+            exit 0
+          fi
+          if [ -n "$NODE_AUTH_TOKEN" ]; then
+            echo "::warning::NPM_TOKEN is set but npm rejected it (npm whoami failed) — it has expired or been revoked. Falling back to npm trusted publishing (OIDC); delete the dead secret (PUBLISHING.md)."
+          else
+            echo "Using npm trusted publishing (OIDC)"
+          fi
+          echo "has_token=false" >> "$GITHUB_OUTPUT"
+          sed -i '/_authToken/d' "$NPM_CONFIG_USERCONFIG"
+          npm install -g npm@latest --no-audit --no-fund
+          npm --version
       - name: publish canonical, codec, expression, wire (npm, provenance; skip already-published)
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}   # or npm trusted publishing (drop the token)
+          NODE_AUTH_TOKEN: ${{ steps.npmcfg.outputs.has_token == 'true' && secrets.NPM_TOKEN || '' }}
         run: |
+          # With no token, `npm publish` exchanges the job's OIDC identity for a
+          # short-lived credential itself (trusted publishing); an empty
+          # NODE_AUTH_TOKEN must not be exported at all or it shadows that.
+          [ -n "$NODE_AUTH_TOKEN" ] || unset NODE_AUTH_TOKEN
           # IDEMPOTENT RE-RUNS: `npm view` reads a replica that can lag a fresh
           # publish by minutes (proven 2026-07-03: wire@0.1.0 published in one run
           # was invisible to `npm view` in the next, and the blind publish died on
