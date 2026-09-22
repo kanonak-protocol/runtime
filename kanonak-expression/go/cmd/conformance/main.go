@@ -20,6 +20,7 @@ import (
 )
 
 const varRef = "kanonak.org/transformations/VarRef"
+const propertyRead = "kanonak.org/transformations/PropertyRead"
 
 type vectorFile struct {
 	Vectors []map[string]interface{} `json:"vectors"`
@@ -138,6 +139,18 @@ func runFile(name string) (pass, total int) {
 				}
 			}
 		}
+		graph := map[string]map[string]expr.Value{}
+		if g, ok := v["graph"].(map[string]interface{}); ok {
+			for uri, props := range g {
+				m := map[string]expr.Value{}
+				if pm, ok := props.(map[string]interface{}); ok {
+					for prop, x := range pm {
+						m[prop] = valueOf(x)
+					}
+				}
+				graph[uri] = m
+			}
+		}
 		var closures expr.ClosureTable
 		if c, ok := v["closures"].(map[string]interface{}); ok {
 			closures = expr.ClosureTable{}
@@ -160,13 +173,33 @@ func runFile(name string) (pass, total int) {
 			}
 		}
 
-		resolve := func(node expr.Node, _ interface{}, _ func(expr.Node, interface{}) expr.Value) expr.Value {
+		resolve := func(node expr.Node, ctx interface{}, evaluate func(expr.Node, interface{}) expr.Value) expr.Value {
 			if node.Type() == varRef {
 				name, _ := node["varName"].(string)
 				if v, ok := env[name]; ok {
 					return v
 				}
 				panic(&expr.Error{Msg: fmt.Sprintf("Unbound variable %q", name)})
+			}
+			// tx.PropertyRead: a host graph read, the documented caller-leaf
+			// shape. readSource is evaluated through the handed-back evaluate
+			// (so an enclosing loopVar is visible — runtime#25) and MUST be a
+			// ref; graph[ref][readProp] is absent → empty list, several → list,
+			// one → itself (the reference engine's convention, pinned by vectors).
+			if node.Type() == propertyRead {
+				src, _ := node["readSource"].(map[string]interface{})
+				source := evaluate(expr.Node(src), ctx)
+				r, ok := source.(expr.Ref)
+				if !ok {
+					panic(&expr.Error{Msg: fmt.Sprintf("PropertyRead over a non-ref: %v", source)})
+				}
+				prop, _ := node["readProp"].(string)
+				if props, ok := graph[r.URI]; ok {
+					if values, ok := props[prop]; ok {
+						return values
+					}
+				}
+				return []expr.Value{}
 			}
 			panic(&expr.Error{Msg: fmt.Sprintf("No resolver for leaf '%s'", node.Type())})
 		}

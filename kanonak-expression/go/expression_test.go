@@ -61,14 +61,32 @@ func valuesDeepEqual(a, b Value) bool {
 	return valuesEqual(a, b)
 }
 
-func makeResolve(env map[string]Value) Resolve {
-	return func(node Node, _ interface{}, _ func(Node, interface{}) Value) Value {
+func makeResolve(env map[string]Value, graph map[string]map[string]Value) Resolve {
+	return func(node Node, ctx interface{}, evaluate func(Node, interface{}) Value) Value {
 		if node.Type() == tx+"/VarRef" {
 			name, _ := node["varName"].(string)
 			if v, ok := env[name]; ok {
 				return v
 			}
 			raise("Unbound variable %q", name)
+		}
+		// tx.PropertyRead: a host graph read through the handed-back evaluate
+		// (so an enclosing loopVar is visible — runtime#25); absent → empty
+		// list, several → list, one → itself.
+		if node.Type() == tx+"/PropertyRead" {
+			src, _ := node["readSource"].(map[string]interface{})
+			source := evaluate(Node(src), ctx)
+			r, ok := source.(Ref)
+			if !ok {
+				raise("PropertyRead over a non-ref: %v", source)
+			}
+			prop, _ := node["readProp"].(string)
+			if props, ok := graph[r.URI]; ok {
+				if values, ok := props[prop]; ok {
+					return values
+				}
+			}
+			return []Value{}
 		}
 		raise("No resolver for leaf '%s'", node.Type())
 		return nil
@@ -145,6 +163,18 @@ func runFile(t *testing.T, name string) {
 				}
 			}
 		}
+		graph := map[string]map[string]Value{}
+		if g, ok := v["graph"].(map[string]interface{}); ok {
+			for uri, props := range g {
+				m := map[string]Value{}
+				if pm, ok := props.(map[string]interface{}); ok {
+					for prop, x := range pm {
+						m[prop] = valueOf(x)
+					}
+				}
+				graph[uri] = m
+			}
+		}
 		var closures ClosureTable
 		if c, ok := v["closures"].(map[string]interface{}); ok {
 			closures = ClosureTable{}
@@ -167,7 +197,7 @@ func runFile(t *testing.T, name string) {
 			}
 		}
 		opts := &Options{Closures: closures, ResolveRef: makeResolveRef(refEnv)}
-		resolve := makeResolve(env)
+		resolve := makeResolve(env, graph)
 
 		expectError, _ := v["expectError"].(bool)
 		got, evalErr := EvaluateWithOptions(expr, nil, resolve, opts)

@@ -17,6 +17,7 @@ using Kanonak.Expression;
 class Program
 {
     const string VARREF = "kanonak.org/transformations/VarRef";
+    const string PROPERTY_READ = "kanonak.org/transformations/PropertyRead";
 
     static int Main(string[] args)
     {
@@ -128,8 +129,16 @@ class Program
     {
         public Dictionary<string, object> Env = new Dictionary<string, object>();
         public Dictionary<string, string> RefEnv = new Dictionary<string, string>();
+        /// <summary>A host graph for the caller's tx.PropertyRead leaf: ref URI -> property -> Value.</summary>
+        public Dictionary<string, Dictionary<string, object>> Graph = new Dictionary<string, Dictionary<string, object>>();
     }
 
+    // The caller's resolve: tx.VarRef -> env binding; tx.PropertyRead -> a host graph read
+    // (the documented caller-leaf shape — the kernel never touches a graph). PropertyRead is
+    // the reference engine's convention, pinned by the vectors so every port's harness
+    // agrees: readSource is evaluated through the handed-back evaluate (so a loopVar bound by
+    // an enclosing iterator is visible — runtime#25) and MUST yield a ref; then
+    // graph[ref][readProp] is absent -> the empty list, several values -> a list, one -> itself.
     static object ResolveHook(ExprNode node, object ctxRaw, Func<ExprNode, object, object> evaluate)
     {
         var ctx = (Ctx)ctxRaw;
@@ -138,6 +147,14 @@ class Program
             string name = node.Get("varName") as string;
             if (name != null && ctx.Env.TryGetValue(name, out var v)) return v;
             throw new ExpressionError($"Unbound variable \"{name}\"");
+        }
+        if (node.Type == PROPERTY_READ)
+        {
+            var source = evaluate(node.Get("readSource") as ExprNode, ctx);
+            if (!(source is Ref r)) throw new ExpressionError($"PropertyRead over a non-ref: {source}");
+            string prop = node.Get("readProp") as string;
+            if (prop != null && ctx.Graph.TryGetValue(r.Uri, out var props) && props.TryGetValue(prop, out var values)) return values;
+            return new List<object>();
         }
         throw new ExpressionError($"No resolver for leaf '{node.Type}'");
     }
@@ -202,6 +219,15 @@ class Program
             if (v.TryGetProperty("refEnv", out var refEnv))
             {
                 foreach (var p in refEnv.EnumerateObject()) ctx.RefEnv[p.Name] = p.Value.GetString();
+            }
+            if (v.TryGetProperty("graph", out var graph))
+            {
+                foreach (var node in graph.EnumerateObject())
+                {
+                    var props = new Dictionary<string, object>();
+                    foreach (var p in node.Value.EnumerateObject()) props[p.Name] = ValueOf(p.Value);
+                    ctx.Graph[node.Name] = props;
+                }
             }
 
             Dictionary<string, Dictionary<string, List<string>>> closures = null;

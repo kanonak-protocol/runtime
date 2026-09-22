@@ -22,7 +22,9 @@
 //! their `loopVar` per element; within their bodies — and only there — a
 //! `tx.VarRef` naming a lexically-enclosing loopVar is resolved by the
 //! kernel (innermost binder wins). Every other leaf is the caller's, and
-//! recursion re-entered from inside `resolve` carries no frames.
+//! the `evaluate` handed back to `resolve` carries the frames in force at the
+//! leaf, so a caller subtree keeps the lexical scope it was written in
+//! (runtime#25).
 //!
 //! MATCHES: the pinned RE2-compatible XSD-regex subset. `.` and quantifiers
 //! count Unicode CODE POINTS (this engine's native rune model); the shorthand
@@ -81,7 +83,7 @@ impl EvalValue {
 /// a binding (`tx.VarRef`), a host graph read (a property-read leaf returning
 /// a list), or a domain leaf — to a value. `ctx` is opaque caller state;
 /// `recurse` is handed back so a domain leaf containing sub-expressions can
-/// recurse into the kernel (WITHOUT lambda frames — the caller's subtrees are
+/// recurse into the kernel (WITH the lambda frames in force at the leaf — see
 /// the caller's scope).
 pub type Resolve<'a, C> = &'a dyn Fn(
     &Json,
@@ -1007,9 +1009,7 @@ fn go<C>(
         }
     }
 
-    resolve(node, ctx, &mut |n, c| {
-        go(n, c, resolve, options, &mut Vec::new())
-    })
+    resolve(node, ctx, &mut |n, c| go(n, c, resolve, options, frames))
 }
 
 // ---------------------------------------------------------------------------
@@ -1254,8 +1254,6 @@ fn trace<C>(
         }
     }
 
-    let v = resolve(node, ctx, &mut |n, c| {
-        go(n, c, resolve, options, &mut Vec::new())
-    })?;
+    let v = resolve(node, ctx, &mut |n, c| go(n, c, resolve, options, frames))?;
     Ok(leaf(typ, v))
 }

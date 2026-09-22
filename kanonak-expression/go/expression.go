@@ -19,7 +19,9 @@
 // LAMBDA BINDING: Filter/ListMap/ForEach bind their loopVar per element;
 // within their bodies — and only there — a tx.VarRef naming a
 // lexically-enclosing loopVar is resolved by the kernel (innermost binder
-// wins). Recursion re-entered from inside resolve carries no frames.
+// wins). The evaluate handed back to resolve carries the frames in force at
+// the leaf, so a caller subtree keeps the lexical scope it was written in
+// (runtime#25).
 //
 // MATCHES: the pinned RE2-compatible XSD-regex subset — this engine IS the
 // RE2 family, so the subset is native: code points (runes) are the counting
@@ -68,7 +70,7 @@ type Value = interface{}
 // literal — a binding (tx.VarRef), a host graph read (a property-read leaf
 // returning a list), or a domain leaf — to a value. ctx is opaque caller
 // state; evaluate is handed back so a domain leaf containing sub-expressions
-// can recurse into the kernel (WITHOUT lambda frames).
+// can recurse into the kernel; it carries the lambda frames in force at the leaf.
 type Resolve func(node Node, ctx interface{}, evaluate func(Node, interface{}) Value) Value
 
 // ClosureTable is the transitive closures ordered comparisons consult.
@@ -896,7 +898,7 @@ func evalNode(node Node, ctx interface{}, resolve Resolve, opts *Options, frames
 	}
 
 	return resolve(node, ctx, func(n Node, c interface{}) Value {
-		return evalNode(n, c, resolve, opts, nil)
+		return evalNode(n, c, resolve, opts, frames)
 	})
 }
 
@@ -1128,7 +1130,7 @@ func explainPanic(node Node, ctx interface{}, resolve Resolve, opts *Options, fr
 	}
 
 	v := resolve(node, ctx, func(n Node, c interface{}) Value {
-		return evalNode(n, c, resolve, opts, nil)
+		return evalNode(n, c, resolve, opts, frames)
 	})
 	return leafTrace(typ, v)
 }

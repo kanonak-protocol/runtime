@@ -26,6 +26,7 @@ from kanonak_expression import (
 )
 
 VARREF = "kanonak.org/transformations/VarRef"
+PROPERTY_READ = "kanonak.org/transformations/PropertyRead"
 
 
 def value_of(v: Any):
@@ -56,14 +57,28 @@ def values_deep_equal(a, b) -> bool:
     return False
 
 
-def make_resolve(env):
-    def resolve(node, ctx, _evaluate):
-        if node.get("type") == VARREF:
+def make_resolve(env, graph):
+    """The caller's resolve: tx.VarRef -> env binding; tx.PropertyRead -> a host
+    graph read (the documented caller-leaf shape -- the kernel never touches a
+    graph). PropertyRead is the reference engine's convention, pinned by the
+    vectors so every port's harness agrees: ``readSource`` is evaluated through
+    the handed-back ``evaluate`` (so a loopVar bound by an enclosing iterator is
+    visible -- runtime#25) and MUST yield a ref; then graph[ref][readProp] is
+    absent -> the empty list, several values -> a list, one value -> itself."""
+    def resolve(node, ctx, evaluate):
+        typ = node.get("type")
+        if typ == VARREF:
             name = node.get("varName")
             if name not in env:
                 raise ExpressionError(f'Unbound variable "{name}"')
             return env[name]
-        raise ExpressionError(f"No resolver for leaf '{node.get('type')}'")
+        if typ == PROPERTY_READ:
+            source = evaluate(node["readSource"], ctx)
+            if not isinstance(source, Ref):
+                raise ExpressionError(f"PropertyRead over a non-ref: {source!r}")
+            values = graph.get(source.ref, {}).get(node.get("readProp"))
+            return [] if values is None else values
+        raise ExpressionError(f"No resolver for leaf '{typ}'")
     return resolve
 
 
@@ -102,8 +117,12 @@ def run_file(vectors_dir: Path, name: str) -> tuple[int, int]:
         vid = v["id"]
         env = {k: value_of(x) for k, x in (v.get("env") or {}).items()}
         ref_env = dict(v.get("refEnv") or {})
+        graph = {
+            uri: {prop: value_of(x) for prop, x in props.items()}
+            for uri, props in (v.get("graph") or {}).items()
+        }
         options = EvalOptions(closures=v.get("closures"), resolve_ref=make_resolve_ref(ref_env))
-        resolve = make_resolve(env)
+        resolve = make_resolve(env, graph)
 
         if v.get("expectError"):
             eval_threw = False

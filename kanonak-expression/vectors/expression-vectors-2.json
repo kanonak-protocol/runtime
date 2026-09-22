@@ -834,6 +834,560 @@
           { "type": "kanonak.org/transformations/VarRef", "value": ["a", "b"], "children": [] }
         ]
       }
+    },
+    {
+      "id": "filter-caller-leaf-sees-loop-binding",
+      "description": "runtime#25: a caller-resolved leaf inside a Filter body reads the loop element. The caller's PropertyRead evaluates its readSource through the handed-back evaluate, which MUST carry the enclosing loopVar frame — the binding is the kernel's, the read is the caller's",
+      "expr": {
+        "type": "kanonak.org/transformations/Count",
+        "source": {
+          "type": "kanonak.org/transformations/Filter",
+          "source": {
+            "type": "kanonak.org/transformations/VarRef",
+            "varName": "items"
+          },
+          "loopVar": "it",
+          "predicate": {
+            "type": "kanonak.org/transformations/Equals",
+            "compareLeft": {
+              "type": "kanonak.org/transformations/PropertyRead",
+              "readSource": {
+                "type": "kanonak.org/transformations/VarRef",
+                "varName": "it"
+              },
+              "readProp": "size"
+            },
+            "compareRight": {
+              "type": "kanonak.org/transformations/IntegerLiteral",
+              "integerLiteral": 20
+            }
+          }
+        }
+      },
+      "env": {
+        "items": [
+          {
+            "ref": "example.org/inv/item-1"
+          },
+          {
+            "ref": "example.org/inv/item-2"
+          }
+        ]
+      },
+      "graph": {
+        "example.org/inv/item-1": {
+          "size": 10,
+          "tags": [
+            "a",
+            "b"
+          ]
+        },
+        "example.org/inv/item-2": {
+          "size": 20,
+          "tags": "c",
+          "owner": {
+            "ref": "example.org/inv/ann"
+          }
+        }
+      },
+      "expected": 1
+    },
+    {
+      "id": "list-map-caller-leaf-reads-each-element",
+      "description": "ListMap body = a caller leaf over the loop element; the element bound by loopVar is whatever the caller put in the list — for a host graph, a ref — so readSource evaluating to a ref is the shape every port must handle. The trace shows the caller leaf as a leaf with its resolved value",
+      "expr": {
+        "type": "kanonak.org/transformations/ListMap",
+        "source": {
+          "type": "kanonak.org/transformations/VarRef",
+          "varName": "items"
+        },
+        "loopVar": "it",
+        "mapBody": {
+          "type": "kanonak.org/transformations/PropertyRead",
+          "readSource": {
+            "type": "kanonak.org/transformations/VarRef",
+            "varName": "it"
+          },
+          "readProp": "size"
+        }
+      },
+      "env": {
+        "items": [
+          {
+            "ref": "example.org/inv/item-1"
+          },
+          {
+            "ref": "example.org/inv/item-2"
+          }
+        ]
+      },
+      "graph": {
+        "example.org/inv/item-1": {
+          "size": 10,
+          "tags": [
+            "a",
+            "b"
+          ]
+        },
+        "example.org/inv/item-2": {
+          "size": 20,
+          "tags": "c",
+          "owner": {
+            "ref": "example.org/inv/ann"
+          }
+        }
+      },
+      "expected": [
+        10,
+        20
+      ],
+      "trace": {
+        "type": "kanonak.org/transformations/ListMap",
+        "value": [
+          10,
+          20
+        ],
+        "children": [
+          {
+            "type": "kanonak.org/transformations/VarRef",
+            "value": [
+              {
+                "ref": "example.org/inv/item-1"
+              },
+              {
+                "ref": "example.org/inv/item-2"
+              }
+            ],
+            "children": []
+          },
+          {
+            "type": "kanonak.org/transformations/PropertyRead",
+            "value": 10,
+            "children": []
+          },
+          {
+            "type": "kanonak.org/transformations/PropertyRead",
+            "value": 20,
+            "children": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "for-each-caller-leaf-flattens-multi-and-single",
+      "description": "ForEach over a caller leaf: a multi-valued read contributes each value, a single-valued read contributes itself",
+      "expr": {
+        "type": "kanonak.org/transformations/ForEach",
+        "source": {
+          "type": "kanonak.org/transformations/VarRef",
+          "varName": "items"
+        },
+        "loopVar": "it",
+        "emit": {
+          "type": "kanonak.org/transformations/PropertyRead",
+          "readSource": {
+            "type": "kanonak.org/transformations/VarRef",
+            "varName": "it"
+          },
+          "readProp": "tags"
+        }
+      },
+      "env": {
+        "items": [
+          {
+            "ref": "example.org/inv/item-1"
+          },
+          {
+            "ref": "example.org/inv/item-2"
+          }
+        ]
+      },
+      "graph": {
+        "example.org/inv/item-1": {
+          "size": 10,
+          "tags": [
+            "a",
+            "b"
+          ]
+        },
+        "example.org/inv/item-2": {
+          "size": 20,
+          "tags": "c",
+          "owner": {
+            "ref": "example.org/inv/ann"
+          }
+        }
+      },
+      "expected": [
+        "a",
+        "b",
+        "c"
+      ]
+    },
+    {
+      "id": "property-read-multiple-values-is-a-list-in-loop-body",
+      "description": "The reference engine's convention, pinned INSIDE a loop body so every port's caller leaf agrees: a property with several values reads as a list",
+      "expr": {
+        "type": "kanonak.org/transformations/Filter",
+        "source": {
+          "type": "kanonak.org/transformations/VarRef",
+          "varName": "items"
+        },
+        "loopVar": "it",
+        "predicate": {
+          "type": "kanonak.org/transformations/Equals",
+          "compareLeft": {
+            "type": "kanonak.org/transformations/Count",
+            "source": {
+              "type": "kanonak.org/transformations/PropertyRead",
+              "readSource": {
+                "type": "kanonak.org/transformations/VarRef",
+                "varName": "it"
+              },
+              "readProp": "tags"
+            }
+          },
+          "compareRight": {
+            "type": "kanonak.org/transformations/IntegerLiteral",
+            "integerLiteral": 2
+          }
+        }
+      },
+      "env": {
+        "items": [
+          {
+            "ref": "example.org/inv/item-1"
+          },
+          {
+            "ref": "example.org/inv/item-2"
+          }
+        ]
+      },
+      "graph": {
+        "example.org/inv/item-1": {
+          "size": 10,
+          "tags": [
+            "a",
+            "b"
+          ]
+        },
+        "example.org/inv/item-2": {
+          "size": 20,
+          "tags": "c",
+          "owner": {
+            "ref": "example.org/inv/ann"
+          }
+        }
+      },
+      "expected": [
+        {
+          "ref": "example.org/inv/item-1"
+        }
+      ]
+    },
+    {
+      "id": "property-read-single-value-is-itself-in-loop-body",
+      "description": "A property with one value reads as that value, NOT a one-element list — Equals against the scalar holds (a port wrapping singles in a list fails cross-kind here)",
+      "expr": {
+        "type": "kanonak.org/transformations/Filter",
+        "source": {
+          "type": "kanonak.org/transformations/VarRef",
+          "varName": "items"
+        },
+        "loopVar": "it",
+        "predicate": {
+          "type": "kanonak.org/transformations/Equals",
+          "compareLeft": {
+            "type": "kanonak.org/transformations/PropertyRead",
+            "readSource": {
+              "type": "kanonak.org/transformations/VarRef",
+              "varName": "it"
+            },
+            "readProp": "tags"
+          },
+          "compareRight": {
+            "type": "kanonak.org/transformations/StringLiteral",
+            "stringLiteral": "c"
+          }
+        }
+      },
+      "env": {
+        "items": [
+          {
+            "ref": "example.org/inv/item-1"
+          },
+          {
+            "ref": "example.org/inv/item-2"
+          }
+        ]
+      },
+      "graph": {
+        "example.org/inv/item-1": {
+          "size": 10,
+          "tags": [
+            "a",
+            "b"
+          ]
+        },
+        "example.org/inv/item-2": {
+          "size": 20,
+          "tags": "c",
+          "owner": {
+            "ref": "example.org/inv/ann"
+          }
+        }
+      },
+      "expected": [
+        {
+          "ref": "example.org/inv/item-2"
+        }
+      ]
+    },
+    {
+      "id": "property-read-absent-is-empty-list-in-loop-body",
+      "description": "A property with no value reads as the empty list (absence), never an error and never null: Count is 0 for the element without an owner",
+      "expr": {
+        "type": "kanonak.org/transformations/ListMap",
+        "source": {
+          "type": "kanonak.org/transformations/VarRef",
+          "varName": "items"
+        },
+        "loopVar": "it",
+        "mapBody": {
+          "type": "kanonak.org/transformations/Count",
+          "source": {
+            "type": "kanonak.org/transformations/PropertyRead",
+            "readSource": {
+              "type": "kanonak.org/transformations/VarRef",
+              "varName": "it"
+            },
+            "readProp": "owner"
+          }
+        }
+      },
+      "env": {
+        "items": [
+          {
+            "ref": "example.org/inv/item-1"
+          },
+          {
+            "ref": "example.org/inv/item-2"
+          }
+        ]
+      },
+      "graph": {
+        "example.org/inv/item-1": {
+          "size": 10,
+          "tags": [
+            "a",
+            "b"
+          ]
+        },
+        "example.org/inv/item-2": {
+          "size": 20,
+          "tags": "c",
+          "owner": {
+            "ref": "example.org/inv/ann"
+          }
+        }
+      },
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "id": "is-set-guards-absent-property-in-loop-body",
+      "description": "IsSet over a caller leaf distinguishes the element that has the property",
+      "expr": {
+        "type": "kanonak.org/transformations/Filter",
+        "source": {
+          "type": "kanonak.org/transformations/VarRef",
+          "varName": "items"
+        },
+        "loopVar": "it",
+        "predicate": {
+          "type": "kanonak.org/transformations/IsSet",
+          "checkExpr": {
+            "type": "kanonak.org/transformations/PropertyRead",
+            "readSource": {
+              "type": "kanonak.org/transformations/VarRef",
+              "varName": "it"
+            },
+            "readProp": "owner"
+          }
+        }
+      },
+      "env": {
+        "items": [
+          {
+            "ref": "example.org/inv/item-1"
+          },
+          {
+            "ref": "example.org/inv/item-2"
+          }
+        ]
+      },
+      "graph": {
+        "example.org/inv/item-1": {
+          "size": 10,
+          "tags": [
+            "a",
+            "b"
+          ]
+        },
+        "example.org/inv/item-2": {
+          "size": 20,
+          "tags": "c",
+          "owner": {
+            "ref": "example.org/inv/ann"
+          }
+        }
+      },
+      "expected": [
+        {
+          "ref": "example.org/inv/item-2"
+        }
+      ]
+    },
+    {
+      "id": "inner-loop-var-shadows-outer-through-caller-leaf",
+      "description": "Nested iterators binding the SAME loopVar name: the innermost binder wins, and that precedence reaches a caller leaf too. Were the outer 'it' visible, the inner count would be [0, 2]",
+      "expr": {
+        "type": "kanonak.org/transformations/ListMap",
+        "source": {
+          "type": "kanonak.org/transformations/VarRef",
+          "varName": "items"
+        },
+        "loopVar": "it",
+        "mapBody": {
+          "type": "kanonak.org/transformations/Count",
+          "source": {
+            "type": "kanonak.org/transformations/Filter",
+            "source": {
+              "type": "kanonak.org/transformations/VarRef",
+              "varName": "items"
+            },
+            "loopVar": "it",
+            "predicate": {
+              "type": "kanonak.org/transformations/Equals",
+              "compareLeft": {
+                "type": "kanonak.org/transformations/PropertyRead",
+                "readSource": {
+                  "type": "kanonak.org/transformations/VarRef",
+                  "varName": "it"
+                },
+                "readProp": "size"
+              },
+              "compareRight": {
+                "type": "kanonak.org/transformations/IntegerLiteral",
+                "integerLiteral": 20
+              }
+            }
+          }
+        }
+      },
+      "env": {
+        "items": [
+          {
+            "ref": "example.org/inv/item-1"
+          },
+          {
+            "ref": "example.org/inv/item-2"
+          }
+        ]
+      },
+      "graph": {
+        "example.org/inv/item-1": {
+          "size": 10,
+          "tags": [
+            "a",
+            "b"
+          ]
+        },
+        "example.org/inv/item-2": {
+          "size": 20,
+          "tags": "c",
+          "owner": {
+            "ref": "example.org/inv/ann"
+          }
+        }
+      },
+      "expected": [
+        1,
+        1
+      ]
+    },
+    {
+      "id": "loop-var-shadows-caller-binding-inside-body-only",
+      "description": "A loopVar whose name collides with a name the CALLER binds ('it' is in env as item-1): inside the body the kernel's binding wins — silently, which is why a generator should refuse the collision where it is visible — while outside the body the caller's binding is untouched. size(env.it)=10 + count-of-size-20-elements=1",
+      "expr": {
+        "type": "kanonak.org/transformations/Add",
+        "arithLeft": {
+          "type": "kanonak.org/transformations/PropertyRead",
+          "readSource": {
+            "type": "kanonak.org/transformations/VarRef",
+            "varName": "it"
+          },
+          "readProp": "size"
+        },
+        "arithRight": {
+          "type": "kanonak.org/transformations/Count",
+          "source": {
+            "type": "kanonak.org/transformations/Filter",
+            "source": {
+              "type": "kanonak.org/transformations/VarRef",
+              "varName": "items"
+            },
+            "loopVar": "it",
+            "predicate": {
+              "type": "kanonak.org/transformations/Equals",
+              "compareLeft": {
+                "type": "kanonak.org/transformations/PropertyRead",
+                "readSource": {
+                  "type": "kanonak.org/transformations/VarRef",
+                  "varName": "it"
+                },
+                "readProp": "size"
+              },
+              "compareRight": {
+                "type": "kanonak.org/transformations/IntegerLiteral",
+                "integerLiteral": 20
+              }
+            }
+          }
+        }
+      },
+      "env": {
+        "items": [
+          {
+            "ref": "example.org/inv/item-1"
+          },
+          {
+            "ref": "example.org/inv/item-2"
+          }
+        ],
+        "it": {
+          "ref": "example.org/inv/item-1"
+        }
+      },
+      "graph": {
+        "example.org/inv/item-1": {
+          "size": 10,
+          "tags": [
+            "a",
+            "b"
+          ]
+        },
+        "example.org/inv/item-2": {
+          "size": 20,
+          "tags": "c",
+          "owner": {
+            "ref": "example.org/inv/ann"
+          }
+        }
+      },
+      "expected": 11
     }
   ]
 }

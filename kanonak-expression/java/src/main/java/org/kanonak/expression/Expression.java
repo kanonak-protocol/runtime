@@ -66,7 +66,8 @@ public final class Expression {
     }
 
     /** The kernel's evaluate handed back to a {@link Resolve} so domain leaves can recurse
-     * (WITHOUT lambda frames — the caller's subtrees are the caller's scope). */
+     * (WITH the lambda frames in force at the leaf, so a caller subtree keeps the
+     * lexical scope it was written in — runtime#25). */
     @FunctionalInterface
     public interface Recurse<C> {
         Object apply(Map<String, Object> node, C ctx);
@@ -765,7 +766,7 @@ public final class Expression {
             }
         }
 
-        return resolve.resolve(node, ctx, (n, c) -> go(n, c, resolve, options, new ArrayList<>()));
+        return resolve.resolve(node, ctx, (n, c) -> go(n, c, resolve, options, frames));
     }
 
     // -- explain --------------------------------------------------------------
@@ -943,7 +944,7 @@ public final class Expression {
             }
         }
 
-        Object v = resolve.resolve(node, ctx, (n, c) -> go(n, c, resolve, options, new ArrayList<>()));
+        Object v = resolve.resolve(node, ctx, (n, c) -> go(n, c, resolve, options, frames));
         return leaf(typ, v);
     }
 

@@ -171,9 +171,21 @@ lexically-enclosing `loopVar` is resolved by the kernel to the bound element
 (innermost binder wins; shadowing is lexical). Every other leaf, including a
 `VarRef` naming anything else, still goes to the caller's `resolve`. This is
 the scoped exception to "the kernel never privileges VarRef": VarRef is the
-bound-variable mechanism of the kernel's own binders, nothing more. Recursion
-re-entered from inside `resolve` carries NO frames — the caller's subtrees
-are the caller's scope.
+bound-variable mechanism of the kernel's own binders, nothing more.
+
+The `evaluate` handed back to `resolve` carries the frames in force at the
+leaf, so a caller subtree keeps the lexical scope it was written in. That is
+what makes the documented caller-leaf shape work inside a body:
+`Filter(items, it => PropertyRead(it, size) == 20)` — the binding of `it` is
+the kernel's, the read of `size` is the caller's, and the caller's
+`PropertyRead` evaluates its `readSource` through the hand-back and gets the
+element. (Runtime releases before **0.3.2** dropped the frames at the
+hand-back, so this shape raised "unbound variable" — runtime#25; a consumer
+pinning a floor below 0.3.2 keeps that behaviour.) Inside a body the kernel's
+binding wins over any caller binding of the same name — innermost binder,
+uniformly — and outside the body the caller's binding is untouched; a
+generator that knows the caller's namespace should refuse the collision where
+it is visible, because the shadowing itself is silent.
 
 ## Matches — the pinned regex subset
 
@@ -294,7 +306,12 @@ Two files, both required for a v2-complete port:
 
 `expr` is the tree; `env` binds `tx.VarRef` names for the conformance
 `resolve` hook (values are Values: numbers, strings, arrays, `{"ref": …}`
-objects); `refEnv` binds identity leaves for `resolveRef`; `expected` is the
+objects); `graph` is a host graph for the hook's `tx.PropertyRead` caller leaf
+(ref URI → property → Value — the leaf evaluates `readSource` through the
+handed-back `evaluate`, requires a ref, and returns absent → `[]`, several
+values → a list, one value → itself: the reference engine's convention,
+pinned by the vectors so every port's harness agrees rather than each
+inventing it); `refEnv` binds identity leaves for `resolveRef`; `expected` is the
 exact result (`tolerance` for the few transcendentals where libm differs by
 an ULP); `expectError` marks required errors; `trace` structurally asserts
 the `explain` verdict tree. Every language port runs both files;

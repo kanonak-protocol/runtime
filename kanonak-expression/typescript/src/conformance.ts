@@ -27,16 +27,20 @@ import {
   type EvalOptions,
   type ExprNode,
   type TraceNode,
+  isRef,
   type Value,
 } from './index.js';
 
 const VARREF = 'kanonak.org/transformations/VarRef';
+const PROPERTY_READ = 'kanonak.org/transformations/PropertyRead';
 
 interface Vector {
   id: string;
   expr: ExprNode;
   env?: Record<string, Value>;
   refEnv?: Record<string, string>;
+  /** A host graph for the caller's `tx.PropertyRead` leaf: ref URI → property → Value. */
+  graph?: Record<string, Record<string, Value>>;
   closures?: ClosureTable;
   expected?: Value;
   tolerance?: number;
@@ -47,14 +51,30 @@ interface Vector {
 interface Ctx {
   env: Record<string, Value>;
   refEnv: Record<string, string>;
+  graph: Record<string, Record<string, Value>>;
 }
 
-// The caller's resolve: tx.VarRef -> env binding; any other leaf is unbound here.
-const resolve = (node: ExprNode, ctx: Ctx): Value => {
+// The caller's resolve: tx.VarRef -> env binding; tx.PropertyRead -> a host
+// graph read (the documented caller-leaf shape — the kernel never touches a
+// graph); any other leaf is unbound here.
+//
+// PropertyRead is the reference engine's convention, pinned by the vectors so
+// every port's harness agrees: `readSource` is evaluated through the
+// handed-back `evaluate` (so a loopVar bound by an enclosing iterator is
+// visible — runtime#25) and MUST yield a ref; then graph[ref][readProp] is
+// absent → the empty list, several values → a list, one value → itself.
+const resolve = (node: ExprNode, ctx: Ctx, evaluate: (n: ExprNode, c: Ctx) => Value): Value => {
   if (node.type === VARREF) {
     const name = node.varName as string;
     if (!(name in ctx.env)) throw new ExpressionError(`Unbound variable "${name}"`);
     return ctx.env[name]!;
+  }
+  if (node.type === PROPERTY_READ) {
+    const source = evaluate(node.readSource as ExprNode, ctx);
+    if (!isRef(source)) throw new ExpressionError(`PropertyRead over a non-ref: ${JSON.stringify(source)}`);
+    const prop = node.readProp as string;
+    const values = ctx.graph[source.ref]?.[prop];
+    return values === undefined ? [] : values;
   }
   throw new ExpressionError(`No resolver for leaf '${node.type}'`);
 };
@@ -101,7 +121,7 @@ function runFile(relPath: string, label: string): { pass: number; fail: number; 
   let pass = 0;
   let fail = 0;
   for (const v of data.vectors) {
-    const ctx: Ctx = { env: v.env ?? {}, refEnv: v.refEnv ?? {} };
+    const ctx: Ctx = { env: v.env ?? {}, refEnv: v.refEnv ?? {}, graph: v.graph ?? {} };
     const options: EvalOptions<Ctx> = { closures: v.closures, resolveRef };
     if (v.expectError) {
       let evalThrew = false;

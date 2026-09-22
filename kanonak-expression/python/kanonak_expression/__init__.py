@@ -20,7 +20,9 @@ cross-kind and the ordering comparisons on non-numbers yield ``0.0``).
 LAMBDA BINDING: Filter/ListMap/ForEach bind their ``loopVar`` per element;
 within their bodies -- and only there -- a ``tx.VarRef`` naming a
 lexically-enclosing loopVar is resolved by the kernel (innermost binder wins).
-Recursion re-entered from inside ``resolve`` carries no frames.
+The ``evaluate`` handed back to ``resolve`` carries the frames in force at
+the leaf, so a caller subtree keeps the lexical scope it was written in
+(runtime#25).
 
 MATCHES: the pinned RE2-compatible XSD-regex subset. ``.`` and quantifiers
 count code points (Python's native model); the shorthand classes are ASCII by
@@ -723,7 +725,7 @@ def _go(
             if bound is not None:
                 return bound
 
-    return resolve(node, ctx, lambda n, c: _go(n, c, resolve, options, []))
+    return resolve(node, ctx, lambda n, c: _go(n, c, resolve, options, frames))
 
 
 # ---------------------------------------------------------------------------
@@ -911,5 +913,5 @@ def _trace(
             if bound is not None:
                 return TraceNode(typ, bound)
 
-    value = resolve(node, ctx, lambda n, c: _go(n, c, resolve, options, []))
+    value = resolve(node, ctx, lambda n, c: _go(n, c, resolve, options, frames))
     return TraceNode(typ, value)

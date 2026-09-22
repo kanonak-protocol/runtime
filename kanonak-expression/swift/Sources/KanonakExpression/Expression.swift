@@ -20,7 +20,9 @@
 // LAMBDA BINDING: Filter/ListMap/ForEach bind their `loopVar` per element;
 // within their bodies — and only there — a `tx.VarRef` naming a
 // lexically-enclosing loopVar is resolved by the kernel (innermost binder
-// wins). Recursion re-entered from inside `resolve` carries no frames.
+// wins). The `evaluate` handed back to `resolve` carries the frames in force at
+// the leaf, so a caller subtree keeps the lexical scope it was written in
+// (runtime#25).
 //
 // MATCHES: the pinned RE2-compatible XSD-regex subset via NSRegularExpression
 // (ICU). ICU counts code points natively; the dialect translations THIS engine
@@ -71,7 +73,7 @@ public indirect enum EvalValue: Equatable {
 }
 
 /// Recurse back into the kernel — handed to `resolve` so a domain leaf holding
-/// sub-expressions can evaluate them (WITHOUT lambda frames).
+/// sub-expressions can evaluate them (WITH the lambda frames in force at the leaf).
 public typealias Evaluator<C> = (ExprNode, C) throws -> EvalValue
 
 /// Resolve any node the kernel does not recognise as an operator or literal — a
@@ -768,9 +770,13 @@ private func go<C>(
         return bound
     }
 
+    // The hand-back carries the frames in force at this leaf (a value copy — an
+    // inout parameter cannot be captured), so a caller subtree keeps the
+    // lexical scope it was written in (runtime#25).
+    let scope = frames
     return try resolve(node, ctx) { n, c in
-        var fresh: Frames = []
-        return try go(n, c, resolve, options, &fresh)
+        var inner = scope
+        return try go(n, c, resolve, options, &inner)
     }
 }
 
@@ -951,9 +957,10 @@ private func trace<C>(
         return TraceNode(typ, bound)
     }
 
+    let scope = frames
     let v = try resolve(node, ctx) { n, c in
-        var fresh: Frames = []
-        return try go(n, c, resolve, options, &fresh)
+        var inner = scope
+        return try go(n, c, resolve, options, &inner)
     }
     return TraceNode(typ, v)
 }

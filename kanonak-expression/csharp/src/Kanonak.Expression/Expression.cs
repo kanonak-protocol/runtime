@@ -52,8 +52,9 @@ namespace Kanonak.Expression
     /// binding (<c>tx.VarRef</c>), a host graph read (a property-read leaf returning a
     /// list), or a domain leaf — to a value (<c>double | string | Ref | List&lt;object&gt;</c>).
     /// <c>ctx</c> is opaque caller state; <c>evaluate</c> is handed back so a domain leaf
-    /// containing sub-expressions can recurse into the kernel (WITHOUT lambda frames —
-    /// the caller's subtrees are the caller's scope).
+    /// containing sub-expressions can recurse into the kernel (WITH the lambda frames in
+    /// force at the leaf, so a caller subtree keeps the lexical scope it was written in —
+    /// runtime#25).
     /// </summary>
     public delegate object Resolve(ExprNode node, object ctx, Func<ExprNode, object, object> evaluate);
 
@@ -813,7 +814,7 @@ namespace Kanonak.Expression
                 if (bound != null) return bound;
             }
 
-            return resolve(node, ctx, (n, c) => Go(n, c, resolve, options, new List<Frame>()));
+            return resolve(node, ctx, (n, c) => Go(n, c, resolve, options, frames));
         }
 
         // -- explain -----------------------------------------------------------
@@ -1012,7 +1013,7 @@ namespace Kanonak.Expression
                 if (bound != null) return Leaf(typ, bound);
             }
 
-            var rv = resolve(node, ctx, (n, c) => Go(n, c, resolve, options, new List<Frame>()));
+            var rv = resolve(node, ctx, (n, c) => Go(n, c, resolve, options, frames));
             return Leaf(typ, rv);
         }
     }

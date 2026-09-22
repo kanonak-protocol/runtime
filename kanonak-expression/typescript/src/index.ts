@@ -66,6 +66,11 @@
  * `VarRef` naming anything else, still goes to the caller's `resolve`. This is
  * the scoped exception to "the kernel never privileges VarRef": VarRef is the
  * bound-variable mechanism of the kernel's own binders, nothing more. The
+ * `evaluate` handed back to `resolve` carries the frames in force at the leaf,
+ * so a caller subtree keeps the lexical scope it was written in — a caller's
+ * `PropertyRead(it, …)` inside a Filter body sees the element bound to `it`
+ * (runtime#25). Inside a body the kernel's binding wins over any caller
+ * binding of the same name; outside it the caller's is untouched. The
  * remaining iterating family (WindowedMap, PairwiseMap, Scan, DistinctBy,
  * PartitionBy) is additive within v2 under this same reserved shape.
  *
@@ -115,7 +120,8 @@ export interface ExprNode {
  * (a property-read leaf returning a list), or a domain leaf (`Step`, `Time`,
  * `Smooth`…) — to a value. `ctx` is opaque caller state (the binding env, a
  * graph handle, a sim clock, integration state). `evaluate` is handed back so a
- * domain leaf containing sub-expressions can recurse into the kernel. */
+ * domain leaf containing sub-expressions can recurse into the kernel; it
+ * carries the lambda frames in force at the leaf. */
 export type Resolve<C> = (node: ExprNode, ctx: C, evaluate: (n: ExprNode, ctx: C) => Value) => Value;
 
 /**
@@ -869,9 +875,11 @@ function evalNode<C>(
   }
 
   // Not an operator or literal — a binding, graph read, or domain leaf. The
-  // caller owns it. (Recursion from inside `resolve` re-enters WITHOUT lambda
-  // frames: the caller's subtrees are the caller's scope.)
-  return resolve(node, ctx, (n, c) => evalNode(n, c, resolve, options, []));
+  // caller owns it. The hand-back `evaluate` carries the CURRENT frames: a
+  // caller subtree keeps the lexical scope it was written in, so a caller leaf
+  // inside an iterating operator's body (`PropertyRead(it, size)`) can read the
+  // element the kernel bound to `it` (runtime#25).
+  return resolve(node, ctx, (n, c) => evalNode(n, c, resolve, options, frames));
 }
 
 function operand(node: ExprNode, key: string): ExprNode {
@@ -928,11 +936,10 @@ export function explain<C = unknown>(
   resolve: Resolve<C>,
   options?: EvalOptions<C>,
 ): TraceNode {
-  // Value recursion for subtrees the caller's `resolve` re-enters: those
-  // folds happen inside the caller and are invisible to the trace, exactly
-  // like the caller's own computation. Only kernel-visited nodes appear.
-  const recurseValue = (n: ExprNode, c: C): Value => evalNode(n, c, resolve, options, []);
-
+  // Subtrees the caller's `resolve` re-enters fold inside the caller and are
+  // invisible to the trace, exactly like the caller's own computation: only
+  // kernel-visited nodes appear. The hand-back carries the current frames, as
+  // in `evaluate`, so a traced value never differs from an evaluated one.
   const trace = (n: ExprNode, c: C, frames: readonly Frame[]): TraceNode => {
     const leaf = (value: Value): TraceNode => ({ type: n.type, value, children: [] });
 
@@ -1092,7 +1099,7 @@ export function explain<C = unknown>(
       if (bound !== undefined) return leaf(bound);
     }
 
-    return leaf(resolve(n, c, recurseValue));
+    return leaf(resolve(n, c, (nn, cc) => evalNode(nn, cc, resolve, options, frames)));
   };
 
   return trace(node, ctx, []);

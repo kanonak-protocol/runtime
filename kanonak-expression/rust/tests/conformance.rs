@@ -44,14 +44,22 @@ fn value_of(v: &J) -> EvalValue {
 struct Ctx {
     env: HashMap<String, EvalValue>,
     ref_env: HashMap<String, String>,
+    /// A host graph for the caller's `tx.PropertyRead` leaf: ref URI → property → Value.
+    graph: HashMap<String, HashMap<String, EvalValue>>,
 }
 
 /// Conformance resolve hook: a `tx.VarRef` returns `env[varName]` (error if
-/// absent); any other unknown leaf is an error.
+/// absent); a `tx.PropertyRead` is a host graph read — the documented
+/// caller-leaf shape, the kernel never touches a graph. PropertyRead is the
+/// reference engine's convention, pinned by the vectors so every port's harness
+/// agrees: `readSource` is evaluated through the handed-back `recurse` (so a
+/// loopVar bound by an enclosing iterator is visible — runtime#25) and MUST
+/// yield a ref; then graph[ref][readProp] is absent → the empty list, several
+/// values → a list, one value → itself. Any other unknown leaf is an error.
 fn resolve_vector(
     node: &J,
     ctx: &mut Ctx,
-    _recurse: &mut dyn FnMut(&J, &mut Ctx) -> Result<EvalValue, ExpressionError>,
+    recurse: &mut dyn FnMut(&J, &mut Ctx) -> Result<EvalValue, ExpressionError>,
 ) -> Result<EvalValue, ExpressionError> {
     let typ = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
     if typ == "kanonak.org/transformations/VarRef" {
@@ -63,6 +71,24 @@ fn resolve_vector(
             Some(v) => Ok(v.clone()),
             None => Err(ExpressionError(format!("unbound variable '{name}'"))),
         }
+    } else if typ == "kanonak.org/transformations/PropertyRead" {
+        let source_node = node
+            .get("readSource")
+            .ok_or_else(|| ExpressionError("PropertyRead missing readSource".into()))?;
+        let uri = match recurse(source_node, ctx)? {
+            EvalValue::Ref(u) => u,
+            other => return Err(ExpressionError(format!("PropertyRead over a non-ref: {other:?}"))),
+        };
+        let prop = node
+            .get("readProp")
+            .and_then(|p| p.as_str())
+            .ok_or_else(|| ExpressionError("PropertyRead missing readProp".into()))?;
+        Ok(ctx
+            .graph
+            .get(&uri)
+            .and_then(|props| props.get(prop))
+            .cloned()
+            .unwrap_or(EvalValue::List(Vec::new())))
     } else {
         Err(ExpressionError(format!("unresolved leaf '{typ}'")))
     }
@@ -102,7 +128,19 @@ fn ctx_of(v: &J) -> Ctx {
             }
         }
     }
-    Ctx { env, ref_env }
+    let mut graph = HashMap::new();
+    if let Some(obj) = v.get("graph").and_then(|g| g.as_object()) {
+        for (uri, props) in obj {
+            let mut m = HashMap::new();
+            if let Some(pm) = props.as_object() {
+                for (prop, val) in pm {
+                    m.insert(prop.clone(), value_of(val));
+                }
+            }
+            graph.insert(uri.clone(), m);
+        }
+    }
+    Ctx { env, ref_env, graph }
 }
 
 fn closures_of(v: &J) -> Option<ClosureTable> {

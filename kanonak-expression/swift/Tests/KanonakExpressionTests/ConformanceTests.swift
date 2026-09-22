@@ -11,6 +11,7 @@ import XCTest
 @testable import KanonakExpression
 
 private let varRef = "kanonak.org/transformations/VarRef"
+private let propertyRead = "kanonak.org/transformations/PropertyRead"
 
 private func vectorsURL(_ name: String) -> URL {
     // .../kanonak-expression/swift/Tests/KanonakExpressionTests/ConformanceTests.swift
@@ -48,24 +49,46 @@ private func valueOf(_ v: Any) throws -> EvalValue {
 /// is Equatable with exactly these semantics).
 private func deepEqual(_ a: EvalValue, _ b: EvalValue) -> Bool { a == b }
 
-/// The conformance context: value bindings (env) plus identity bindings (refEnv).
+/// The conformance context: value bindings (env), identity bindings (refEnv), and
+/// a host graph for the caller's tx.PropertyRead leaf (ref URI -> property -> Value).
 private struct Ctx {
     let env: [String: EvalValue]
     let refEnv: [String: String]
+    let graph: [String: [String: EvalValue]]
 }
 
-/// The caller's resolve: tx.VarRef -> env binding; any other leaf is unbound here.
-private let resolve: Resolve<Ctx> = { node, ctx, _ in
-    guard node["type"] as? String == varRef else {
-        throw ExpressionError("No resolver for leaf '\(node["type"] as? String ?? "")'")
+/// The caller's resolve: tx.VarRef -> env binding; tx.PropertyRead -> a host graph
+/// read (the documented caller-leaf shape — the kernel never touches a graph); any
+/// other leaf is unbound here. PropertyRead is the reference engine's convention,
+/// pinned by the vectors so every port's harness agrees: readSource is evaluated
+/// through the handed-back evaluate (so a loopVar bound by an enclosing iterator is
+/// visible — runtime#25) and MUST yield a ref; then graph[ref][readProp] is absent
+/// -> the empty list, several values -> a list, one value -> itself.
+private let resolve: Resolve<Ctx> = { node, ctx, evaluate in
+    let typ = node["type"] as? String ?? ""
+    if typ == varRef {
+        guard let name = node["varName"] as? String else {
+            throw ExpressionError("VarRef without a varName")
+        }
+        guard let bound = ctx.env[name] else {
+            throw ExpressionError("Unbound variable \"\(name)\"")
+        }
+        return bound
     }
-    guard let name = node["varName"] as? String else {
-        throw ExpressionError("VarRef without a varName")
+    if typ == propertyRead {
+        guard let sourceNode = node["readSource"] as? ExprNode else {
+            throw ExpressionError("PropertyRead missing readSource")
+        }
+        let source = try evaluate(sourceNode, ctx)
+        guard case let .ref(uri) = source else {
+            throw ExpressionError("PropertyRead over a non-ref: \(source)")
+        }
+        guard let prop = node["readProp"] as? String else {
+            throw ExpressionError("PropertyRead missing readProp")
+        }
+        return ctx.graph[uri]?[prop] ?? .list([])
     }
-    guard let bound = ctx.env[name] else {
-        throw ExpressionError("Unbound variable \"\(name)\"")
-    }
-    return bound
+    throw ExpressionError("No resolver for leaf '\(typ)'")
 }
 
 /// The identity-domain mirror: tx.VarRef -> refEnv member URI.
@@ -131,7 +154,15 @@ final class ExpressionVectorTests: XCTestCase {
                 env[k] = try valueOf(x)
             }
             let refEnv = (v["refEnv"] as? [String: String]) ?? [:]
-            let ctx = Ctx(env: env, refEnv: refEnv)
+            var graph: [String: [String: EvalValue]] = [:]
+            for (uri, props) in (v["graph"] as? [String: Any] ?? [:]) {
+                var m: [String: EvalValue] = [:]
+                for (prop, x) in (props as? [String: Any] ?? [:]) {
+                    m[prop] = try valueOf(x)
+                }
+                graph[uri] = m
+            }
+            let ctx = Ctx(env: env, refEnv: refEnv, graph: graph)
             let options = EvalOptions<Ctx>(closures: closuresOf(v), resolveRef: resolveRef)
 
             let expectError = v["expectError"] as? Bool ?? false

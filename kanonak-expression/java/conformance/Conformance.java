@@ -57,14 +57,25 @@ public final class Conformance {
         return false;
     }
 
-    /** The conformance context: value bindings (env) plus identity bindings (refEnv). */
+    /** The conformance context: value bindings (env), identity bindings (refEnv),
+     *  and a host graph for the caller's tx.PropertyRead leaf (ref URI -> property -> value). */
     static final class Ctx {
         final Map<String, Object> env;
         final Map<String, Object> refEnv;
-        Ctx(Map<String, Object> env, Map<String, Object> refEnv) { this.env = env; this.refEnv = refEnv; }
+        final Map<String, Object> graph;
+        Ctx(Map<String, Object> env, Map<String, Object> refEnv, Map<String, Object> graph) {
+            this.env = env; this.refEnv = refEnv; this.graph = graph;
+        }
     }
 
-    /** The conformance resolve hook: tx.VarRef -> env[varName]; any other leaf -> raise. */
+    /** The conformance resolve hook: tx.VarRef -> env[varName]; tx.PropertyRead -> a host
+     *  graph read (the documented caller-leaf shape — the kernel never touches a graph);
+     *  any other leaf -> raise. PropertyRead is the reference engine's convention, pinned
+     *  by the vectors so every port's harness agrees: readSource is evaluated through the
+     *  handed-back evaluate (so a loopVar bound by an enclosing iterator is visible —
+     *  runtime#25) and MUST yield a ref; then graph[ref][readProp] is absent -> the empty
+     *  list, several values -> a list, one value -> itself. */
+    @SuppressWarnings("unchecked")
     static Object resolve(Map<String, Object> node, Ctx ctx, Expression.Recurse<Ctx> evaluate) {
         if ("kanonak.org/transformations/VarRef".equals(node.get("type"))) {
             String name = (String) node.get("varName");
@@ -72,6 +83,15 @@ public final class Conformance {
                 throw new ExpressionError("unbound variable: " + name);
             }
             return valueOf(ctx.env.get(name));
+        }
+        if ("kanonak.org/transformations/PropertyRead".equals(node.get("type"))) {
+            Object source = evaluate.apply((Map<String, Object>) node.get("readSource"), ctx);
+            if (!(source instanceof Ref ref)) {
+                throw new ExpressionError("PropertyRead over a non-ref: " + source);
+            }
+            Object props = ctx.graph == null ? null : ctx.graph.get(ref.uri);
+            Object raw = props instanceof Map<?, ?> m ? m.get(node.get("readProp")) : null;
+            return raw == null ? new ArrayList<>() : valueOf(raw);
         }
         throw new ExpressionError("unknown leaf node type: " + node.get("type"));
     }
@@ -136,7 +156,8 @@ public final class Conformance {
             Map<String, Object> expr = (Map<String, Object>) v.get("expr");
             Ctx ctx = new Ctx(
                 (Map<String, Object>) v.getOrDefault("env", Map.of()),
-                (Map<String, Object>) v.getOrDefault("refEnv", Map.of()));
+                (Map<String, Object>) v.getOrDefault("refEnv", Map.of()),
+                (Map<String, Object>) v.getOrDefault("graph", Map.of()));
             boolean expectError = Boolean.TRUE.equals(v.get("expectError"));
             Expression.EvalOptions<Ctx> options =
                 new Expression.EvalOptions<>(closuresOf(v), Conformance::resolveRef);
