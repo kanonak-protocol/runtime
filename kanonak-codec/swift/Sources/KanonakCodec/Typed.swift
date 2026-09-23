@@ -74,7 +74,14 @@ public protocol KanonakResource {
 /// embedded value's fields map via the containing property's declared range
 /// when it carries no explicit $type — that range-derived typing is inference
 /// only, never materialized as a statement.
-public enum Ref<T: Codable>: Codable {
+///
+/// `indirect` (0.6.0, runtime#27): a single-valued property ranging over its
+/// own class — a parent/child hierarchy — makes a value type that recursively
+/// contains itself, which Swift rejects ("cannot have a stored property that
+/// recursively contains it") unless the payload lives behind indirection. The
+/// wire form never had that limit. Source-compatible: construction, pattern
+/// matching and the accessors are unchanged; only the layout moves.
+public indirect enum Ref<T: Codable>: Codable {
     case reference(String)
     case embedded(T)
 

@@ -74,12 +74,22 @@ pub trait KanonakResource {
 /// derived identity, no `$id`). The typed twin of the wire form's
 /// `{"$ref": uri}` vs embedded-node distinction; the choice between the arms
 /// is authorial and hash-relevant, so it is explicit here, never inferred.
+///
+/// The embedded payload is BOXED (0.6.0, runtime#27). A single-valued
+/// property ranging over its own class — a parent/child hierarchy, the most
+/// ordinary shape an ontology declares — makes `struct Objective { supports:
+/// Option<Ref<Objective>> }`, which has infinite size if the payload is
+/// inline (E0072) and so cannot be generated. The wire form never had that
+/// limit; `Box` is the indirection Rust needs to match it. Construct with
+/// [`Ref::embed`] / [`Ref::embed_named`] and read with [`Ref::value`] /
+/// [`Ref::uri`] and the box is invisible; only a direct `Ref::Embedded(x)`
+/// pattern sees it (`Ref::Embedded(b) => &**b`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Ref<T> {
     /// A reference to a named resource by its canonical URI.
     Reference(String),
-    /// An embedded value, carried inline.
-    Embedded(T),
+    /// An embedded value, carried inline (boxed — see the type's docs).
+    Embedded(Box<T>),
 }
 
 impl<T> Ref<T> {
@@ -104,7 +114,7 @@ impl<T> Ref<T> {
 
     /// An embedded value, carried inline (derived identity, no `$id`).
     pub fn embed(value: T) -> Self {
-        Ref::Embedded(value)
+        Ref::Embedded(Box::new(value))
     }
 
     /// An embedded value with its authored dict-key name (hash-relevant).
@@ -113,12 +123,44 @@ impl<T> Ref<T> {
         T: KanonakResource,
     {
         value.kanonak_node_mut().name = Some(name.into());
-        Ref::Embedded(value)
+        Ref::Embedded(Box::new(value))
     }
 
     /// True when this is the reference arm.
     pub fn is_reference(&self) -> bool {
         matches!(self, Ref::Reference(_))
+    }
+
+    /// The referenced resource's canonical URI — the reference arm (else `None`).
+    pub fn uri(&self) -> Option<&str> {
+        match self {
+            Ref::Reference(uri) => Some(uri),
+            Ref::Embedded(_) => None,
+        }
+    }
+
+    /// The embedded value — the embedded arm (else `None`).
+    pub fn value(&self) -> Option<&T> {
+        match self {
+            Ref::Embedded(value) => Some(value),
+            Ref::Reference(_) => None,
+        }
+    }
+
+    /// The embedded value, mutably — the embedded arm (else `None`).
+    pub fn value_mut(&mut self) -> Option<&mut T> {
+        match self {
+            Ref::Embedded(value) => Some(value),
+            Ref::Reference(_) => None,
+        }
+    }
+
+    /// Consume the embedded arm, returning its value (else `None`).
+    pub fn into_value(self) -> Option<T> {
+        match self {
+            Ref::Embedded(value) => Some(*value),
+            Ref::Reference(_) => None,
+        }
     }
 }
 
@@ -142,7 +184,7 @@ impl<'de, T: DeserializeOwned> Deserialize<'de> for Ref<T> {
             return Ok(Ref::Reference(uri.to_string()));
         }
         serde_json::from_value(value)
-            .map(Ref::Embedded)
+            .map(|v| Ref::Embedded(Box::new(v)))
             .map_err(serde::de::Error::custom)
     }
 }

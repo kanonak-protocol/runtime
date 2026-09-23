@@ -481,3 +481,63 @@ fn typed_types_vectors() {
         )],
     );
 }
+
+// -- Self-referential classes (0.6.0, runtime#27) ------------------------------
+//
+// A single-valued property ranging over its own class — a parent/child
+// hierarchy, the most ordinary shape an ontology declares. `Ref<T>` must
+// carry its embedded payload behind indirection or this struct has infinite
+// size and the generated SDK does not compile (E0072). The wire form never
+// had the limit; only the two ports with sized value types did.
+
+#[derive(Serialize, Default)]
+struct Objective {
+    #[serde(flatten)]
+    node: KanonakNode,
+    #[serde(rename = "title", skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(rename = "supportsObjective", skip_serializing_if = "Option::is_none")]
+    supports_objective: Option<Ref<Objective>>,
+}
+resource!(Objective);
+
+#[test]
+fn self_referential_single_valued_property_compiles_and_round_trips() {
+    // Reference arm: the ordinary "this one supports that one" by identity.
+    let goal = Objective {
+        node: envelope("g1", "Objective"),
+        title: Some("Grow".into()),
+        supports_objective: None,
+    };
+    let child = Objective {
+        node: envelope("g2", "Objective"),
+        title: Some("Ship".into()),
+        supports_objective: Some(Ref::to_resource(&goal).unwrap()),
+    };
+    let wire = serde_json::to_value(&child).unwrap();
+    assert_eq!(wire["supportsObjective"]["$ref"], J::from(format!("{}/g1", DATA)));
+
+    // Embedded arm: the payload is boxed, so nesting is bounded only by data.
+    let nested = Objective {
+        node: envelope("g3", "Objective"),
+        title: Some("Outer".into()),
+        supports_objective: Some(Ref::embed(Objective {
+            node: KanonakNode { type_uri: Some(format!("{}/Objective", SCHEMA_NS)), ..Default::default() },
+            title: Some("Inner".into()),
+            supports_objective: Some(Ref::embed(Objective {
+                node: KanonakNode { type_uri: Some(format!("{}/Objective", SCHEMA_NS)), ..Default::default() },
+                title: Some("Innermost".into()),
+                supports_objective: None,
+            })),
+        })),
+    };
+    let r = nested.supports_objective.as_ref().unwrap();
+    assert!(!r.is_reference());
+    assert_eq!(r.value().and_then(|o| o.title.as_deref()), Some("Inner"));
+    assert_eq!(r.uri(), None);
+    let wire = serde_json::to_value(&nested).unwrap();
+    assert_eq!(wire["supportsObjective"]["supportsObjective"]["title"], J::from("Innermost"));
+    // And the boxed arm deserializes back through the same split.
+    let back: Ref<serde_json::Map<String, J>> = serde_json::from_value(wire["supportsObjective"].clone()).unwrap();
+    assert_eq!(back.value().and_then(|m| m.get("title")).cloned(), Some(J::from("Inner")));
+}

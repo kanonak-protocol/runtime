@@ -315,6 +315,32 @@ private struct Account: Codable, KanonakResource {
     }
 }
 
+/// runtime#27's shape: an objective that supports ONE other objective.
+private struct Objective: Codable, KanonakResource {
+    var kanonakNode = KanonakNode(type: "\(schemaNS)/Objective")
+    var title: String?
+    var supportsObjective: Ref<Objective>?
+
+    enum CodingKeys: String, CodingKey { case title, supportsObjective }
+
+    init(id: String) { kanonakNode = KanonakNode(id: id, type: "\(schemaNS)/Objective") }
+    init(type: String) { kanonakNode = KanonakNode(type: type) }
+
+    init(from decoder: Decoder) throws {
+        kanonakNode = try KanonakNode(from: decoder)
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        supportsObjective = try c.decodeIfPresent(Ref<Objective>.self, forKey: .supportsObjective)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        try kanonakNode.encode(to: encoder)
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(title, forKey: .title)
+        try c.encodeIfPresent(supportsObjective, forKey: .supportsObjective)
+    }
+}
+
 final class TypedSurfaceTests: XCTestCase {
     func testTypedReproducesBasicVector() throws {
         let file = try loadVectors("codec-vectors.json")
@@ -338,6 +364,35 @@ final class TypedSurfaceTests: XCTestCase {
                        c["expectedHash"] as! String, "typed hash")
         XCTAssertEqual(try canonicalFormTyped([person, account], schema: file.schema, pkg: pkg),
                        c["expectedCanonicalForm"] as! String, "typed canonical form")
+    }
+
+    /// runtime#27: a single-valued property ranging over its own class. Before
+    /// `indirect` this struct did not compile ("value type 'Objective' cannot
+    /// have a stored property that recursively contains it"); compiling IS the
+    /// assertion, the round trip is the proof the arms still work.
+    func testSelfReferentialSingleValuedPropertyCompilesAndRoundTrips() throws {
+        var goal = Objective(id: "\(dataNS)/g1")
+        goal.title = "Grow"
+        var child = Objective(id: "\(dataNS)/g2")
+        child.title = "Ship"
+        child.supportsObjective = try .to(goal)
+        let wire = try JSONEncoder().encode(child)
+        let obj = try parseJSON(wire) as! [String: Any]
+        XCTAssertEqual((obj["supportsObjective"] as? [String: Any])?["$ref"] as? String, "\(dataNS)/g1")
+
+        var inner = Objective(type: "\(schemaNS)/Objective")
+        inner.title = "Inner"
+        var innermost = Objective(type: "\(schemaNS)/Objective")
+        innermost.title = "Innermost"
+        inner.supportsObjective = .embed(innermost)
+        var outer = Objective(id: "\(dataNS)/g3")
+        outer.title = "Outer"
+        outer.supportsObjective = .embed(inner)
+        XCTAssertEqual(outer.supportsObjective?.value?.title, "Inner")
+        XCTAssertEqual(outer.supportsObjective?.value?.supportsObjective?.value?.title, "Innermost")
+        XCTAssertNil(outer.supportsObjective?.uri)
+        let decoded = try JSONDecoder().decode(Objective.self, from: try JSONEncoder().encode(outer))
+        XCTAssertEqual(decoded.supportsObjective?.value?.supportsObjective?.value?.title, "Innermost")
     }
 
     func testRefDecodeRoundTrip() throws {
