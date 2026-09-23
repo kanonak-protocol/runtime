@@ -23,6 +23,7 @@ public final class Conformance {
         String vdir = args.length > 0 ? args[0] : "../vectors";
         int fails = run(Paths.get(vdir, "expression-vectors.json"));
         fails += run(Paths.get(vdir, "expression-vectors-2.json"));
+        fails += runAlign(Paths.get(vdir, "expression-alignment-vectors.json"));
         if (fails == 0) System.out.println("ALL VECTORS PASS");
         System.exit(fails == 0 ? 0 : 1);
     }
@@ -304,5 +305,64 @@ public final class Conformance {
         private void ws() {
             while (i < s.length() && Character.isWhitespace(s.charAt(i))) i++;
         }
+    }
+
+    /** Structural equality of an aligned tree against the vector's expected JSON tree. */
+    @SuppressWarnings("unchecked")
+    static boolean alignedMatches(Expression.AlignedNode got, Map<String, Object> want) {
+        Object typ = want.get("type");
+        if (!got.expr.get("type").equals(typ) || !got.trace.type.equals(typ)) return false;
+        if (!java.util.Objects.equals(got.operand, want.get("operand"))) return false;
+        Integer wantIndex = want.get("index") instanceof Number n ? n.intValue() : null;
+        if (!java.util.Objects.equals(got.index, wantIndex)) return false;
+        Map<String, Object> wel = want.get("element") instanceof Map<?, ?> m ? (Map<String, Object>) m : null;
+        if ((got.element == null) != (wel == null)) return false;
+        if (got.element != null && (!got.element.loopVar.equals(wel.get("loopVar"))
+            || !deepEqual(got.element.value, valueOf(wel.get("value"))))) return false;
+        if (!want.containsKey("value") || !deepEqual(got.trace.value, valueOf(want.get("value")))) return false;
+        List<Object> wantChildren = want.get("children") instanceof List<?> l ? (List<Object>) l : List.of();
+        if (wantChildren.size() != got.children.size()) return false;
+        for (int i = 0; i < wantChildren.size(); i++) {
+            if (!alignedMatches(got.children.get(i), (Map<String, Object>) wantChildren.get(i))) return false;
+        }
+        return true;
+    }
+
+    /** The alignment vectors: explain expr, then align — the pairing must be exactly the expected tree,
+     *  or an error where one is expected. Returns the failure count. */
+    @SuppressWarnings("unchecked")
+    static int runAlign(Path path) throws Exception {
+        Map<String, Object> doc = (Map<String, Object>) Json.parse(Files.readString(path, StandardCharsets.UTF_8));
+        List<Object> vectors = (List<Object>) doc.get("vectors");
+        String name = path.getFileName().toString();
+        int pass = 0, fail = 0;
+        for (Object o : vectors) {
+            Map<String, Object> v = (Map<String, Object>) o;
+            String id = (String) v.get("id");
+            Map<String, Object> expr = (Map<String, Object>) v.get("expr");
+            Ctx ctx = new Ctx(
+                (Map<String, Object>) v.getOrDefault("env", Map.of()),
+                (Map<String, Object>) v.getOrDefault("refEnv", Map.of()),
+                (Map<String, Object>) v.getOrDefault("graph", Map.of()));
+            Expression.EvalOptions<Ctx> options = new Expression.EvalOptions<>(closuresOf(v), Conformance::resolveRef);
+            Expression.TraceNode trace;
+            try { trace = Expression.explain(expr, ctx, Conformance::resolve, options); }
+            catch (RuntimeException e) { fail++; System.out.println("  FAIL [" + name + "/" + id + "] explain: " + e.getMessage()); continue; }
+            if (Boolean.TRUE.equals(v.get("expectError"))) {
+                Map<String, Object> target = v.get("alignExpr") instanceof Map<?, ?> m ? (Map<String, Object>) m : expr;
+                try { Expression.align(target, trace); fail++; System.out.println("  FAIL [" + name + "/" + id + "] expected align to reject the trace"); }
+                catch (RuntimeException e) { pass++; }
+                continue;
+            }
+            Expression.AlignedNode got;
+            try { got = Expression.align(expr, trace); }
+            catch (RuntimeException e) { fail++; System.out.println("  FAIL [" + name + "/" + id + "] align: " + e.getMessage()); continue; }
+            if (!alignedMatches(got, (Map<String, Object>) v.get("expected"))) {
+                fail++; System.out.println("  FAIL [" + name + "/" + id + "] alignment mismatch"); continue;
+            }
+            pass++;
+        }
+        System.out.println(name + ": " + pass + "/" + vectors.size() + " pass");
+        return fail;
     }
 }

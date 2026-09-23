@@ -106,6 +106,26 @@ namespace Kanonak.Expression
     /// IgnoreCase|CultureInvariant. Host lookaround in the COMPILED form is fine — the
     /// subset restriction is on what authors write.</para>
     /// </summary>
+    /// <summary>The binding in force for an iterating body: the loopVar and element Index of the source value coerced to a list.</summary>
+    public sealed class AlignedElement
+    {
+        public string LoopVar;
+        public object Value;
+    }
+
+    /// <summary>One node of the expression paired with its verdict. Operand is the key on the PARENT expression
+    /// through which the node was reached (null at the root); Index the position within a list operand or the
+    /// element index of an iterating body; Element is set for an iterating body only.</summary>
+    public sealed class AlignedNode
+    {
+        public ExprNode Expr;
+        public TraceNode Trace;
+        public string Operand;
+        public int? Index;
+        public AlignedElement Element;
+        public List<AlignedNode> Children = new List<AlignedNode>();
+    }
+
     public static class Expr
     {
         /// <summary>The frozen expression-runtime version (determinism contract). Not hashed.</summary>
@@ -822,6 +842,103 @@ namespace Kanonak.Expression
         /// <summary>Evaluate and return the verdict tree. The root's Value is exactly what
         /// <see cref="Evaluate"/> returns for the same inputs; the conformance suite runs
         /// every vector through both and requires agreement.</summary>
+        // -------------------------------------------------------------------
+        // align — the trace↔expression walk (runtime#26). A trace carries verdicts,
+        // not labels, and it does not mirror the expression node-for-node: its shape
+        // follows the operator's DISPATCH GROUP (README, "The trace↔expression
+        // contract"). Every consumer that wants to label a verdict — "which property was
+        // read, on which element" — must walk both trees under that contract; this is
+        // that walk, once per port, pinned by vectors/expression-alignment-vectors.json
+        // so all seven agree. It PAIRS; it never renders. A trace that does not fit the
+        // expression is an error, never a best-effort pairing that would label the wrong
+        // node.
+        // -------------------------------------------------------------------
+
+        static bool IsOrderedComparison(string typ) => typ == TX + "/IsAtLeast" || typ == TX + "/Dominates";
+
+        /// <summary>Trace-child order for the direct and list operators — the order Explain visits them.</summary>
+        static string[] DirectChildren(string typ)
+        {
+            switch (typ)
+            {
+                case TX + "/Not": return new[] { "operand" };
+                case TX + "/ListItemAt": return new[] { "source", "itemIndex" };
+                case TX + "/Contains": return new[] { "haystack", "needle" };
+                case TX + "/IsSet": return new[] { "checkExpr" };
+                case TX + "/Matches": return new[] { "matchSource" };
+                case TX + "/Count": case TX + "/Sum": case TX + "/Min": case TX + "/Max": case TX + "/Average":
+                case TX + "/Join": case TX + "/Reverse":
+                    return new[] { "source" };
+                case TX + "/IsString": case TX + "/IsNumber": case TX + "/IsReference": case TX + "/IsList":
+                    return new[] { "kindCheck" };
+                default: return null;
+            }
+        }
+
+        /// <summary>Pair an expression with the trace <see cref="Explain"/> produced for it.</summary>
+        public static AlignedNode Align(ExprNode expr, TraceNode trace) => AlignNode(expr, trace, null, null, null);
+
+        static AlignedNode AlignNode(ExprNode expr, TraceNode trace, string operandKey, int? index, AlignedElement element)
+        {
+            string typ = expr.Type ?? "";
+            string at = operandKey == null ? "at the root"
+                : "at operand '" + operandKey + "'" + (index.HasValue ? "[" + index.Value + "]" : "");
+            if (typ != trace.Type) throw Err("align: expression node " + typ + " does not match trace node " + trace.Type + " " + at);
+            var node = new AlignedNode { Expr = expr, Trace = trace, Operand = operandKey, Index = index, Element = element };
+            // IteratingExpression: [source, body×N], N = |source value coerced to a list|.
+            string body = IteratorBody(typ);
+            if (body != null)
+            {
+                if (trace.Children.Count < 1) throw Err("align: " + typ + " trace has no source child " + at);
+                node.Children.Add(AlignNode(Operand(expr, "source"), trace.Children[0], "source", null, null));
+                var elements = trace.Children[0].Value is List<object> l ? l : new List<object> { trace.Children[0].Value };
+                if (trace.Children.Count != 1 + elements.Count)
+                    throw Err("align: " + typ + " trace has " + (trace.Children.Count - 1) + " body traces for " + elements.Count + " source elements " + at);
+                string loopVar = expr.Get("loopVar") as string ?? "";
+                var bodyNode = Operand(expr, body);
+                for (int k = 0; k < elements.Count; k++)
+                    node.Children.Add(AlignNode(bodyNode, trace.Children[k + 1], body, k, new AlignedElement { LoopVar = loopVar, Value = elements[k] }));
+                return node;
+            }
+            var a = OperatorArity(typ);
+            // BooleanLogic: a PREFIX of `operands` — the tail was never evaluated.
+            if (a.HasValue && a.Value.Kind == "nary")
+            {
+                if (!(expr.Get(a.Value.A) is List<object> raw)) throw Err("align: " + typ + " is missing list operand '" + a.Value.A + "'");
+                if (trace.Children.Count > raw.Count)
+                    throw Err("align: " + typ + " trace has " + trace.Children.Count + " children for " + raw.Count + " operands " + at);
+                for (int i = 0; i < trace.Children.Count; i++)
+                {
+                    if (!(raw[i] is ExprNode sub)) throw Err("align: " + typ + " operand '" + a.Value.A + "'[" + i + "] is not a node");
+                    node.Children.Add(AlignNode(sub, trace.Children[i], a.Value.A, i, null));
+                }
+                return node;
+            }
+            // OrderedComparison: nothing beneath is traced.
+            if (IsOrderedComparison(typ))
+            {
+                if (trace.Children.Count != 0) throw Err("align: " + typ + " trace must have no children " + at);
+                return node;
+            }
+            // Everything else with operands: positional, in the group's operand order.
+            string[] keys = a.HasValue
+                ? (a.Value.Kind == "unary" ? new[] { a.Value.A }
+                    : a.Value.Kind == "binary" ? new[] { a.Value.A, a.Value.B }
+                    : new[] { a.Value.A, a.Value.B, a.Value.C })
+                : DirectChildren(typ);
+            if (keys != null)
+            {
+                if (trace.Children.Count != keys.Length)
+                    throw Err("align: " + typ + " trace has " + trace.Children.Count + " children, expected " + keys.Length + " " + at);
+                for (int i = 0; i < keys.Length; i++)
+                    node.Children.Add(AlignNode(Operand(expr, keys[i]), trace.Children[i], keys[i], null, null));
+                return node;
+            }
+            // A leaf — literal, binding, caller leaf: the trace carries its value and nothing beneath.
+            if (trace.Children.Count != 0) throw Err("align: " + typ + " is a leaf but its trace has children " + at);
+            return node;
+        }
+
         public static TraceNode Explain(ExprNode node, object ctx, Resolve resolve, EvalOptions options = null)
             => Trace(node, ctx, resolve, options, new List<Frame>());
 

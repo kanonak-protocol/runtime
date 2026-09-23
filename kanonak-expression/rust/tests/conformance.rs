@@ -294,6 +294,87 @@ fn expression_vectors() {
     // v1 vectors are the regression gate: every one passes unchanged under v2.
     let (p1, t1) = run_file("expression-vectors.json");
     let (p2, t2) = run_file("expression-vectors-2.json");
+    let (p3, t3) = run_align_file("expression-alignment-vectors.json");
     assert_eq!(p1, t1, "{} v1 vector(s) failed", t1 - p1);
     assert_eq!(p2, t2, "{} v2 vector(s) failed", t2 - p2);
+    assert_eq!(p3, t3, "{} alignment vector(s) failed", t3 - p3);
+}
+
+/// Structural equality of an aligned tree against the vector's expected tree.
+fn aligned_matches(got: &AlignedNode, want: &J) -> bool {
+    let typ = want.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    if got.expr.get("type").and_then(|t| t.as_str()) != Some(typ) || got.trace.typ != typ {
+        return false;
+    }
+    if got.operand.as_deref() != want.get("operand").and_then(|o| o.as_str()) {
+        return false;
+    }
+    if got.index.map(|i| i as u64) != want.get("index").and_then(|i| i.as_u64()) {
+        return false;
+    }
+    match (&got.element, want.get("element")) {
+        (None, None) => {}
+        (Some(el), Some(w)) => {
+            if Some(el.loop_var.as_str()) != w.get("loopVar").and_then(|l| l.as_str()) {
+                return false;
+            }
+            match w.get("value") {
+                Some(v) if values_deep_equal(&el.value, &value_of(v)) => {}
+                _ => return false,
+            }
+        }
+        _ => return false,
+    }
+    match want.get("value") {
+        Some(v) if values_deep_equal(&got.trace.value, &value_of(v)) => {}
+        _ => return false,
+    }
+    let want_children: &[J] = want.get("children").and_then(|c| c.as_array()).map(|a| a.as_slice()).unwrap_or(&[]);
+    if want_children.len() != got.children.len() {
+        return false;
+    }
+    got.children.iter().zip(want_children.iter()).all(|(g, w)| aligned_matches(g, w))
+}
+
+/// The alignment vectors: explain `expr`, then `align` — the pairing must be
+/// exactly the expected tree, or an error where one is expected.
+fn run_align_file(name: &str) -> (usize, usize) {
+    let doc = read(name);
+    let vectors = doc["vectors"].as_array().unwrap();
+    let mut pass = 0;
+    for v in vectors {
+        let id = v["id"].as_str().unwrap();
+        let expr = &v["expr"];
+        let closures = closures_of(v);
+        let options = EvalOptions { closures: closures.as_ref(), resolve_ref: Some(&resolve_ref_vector) };
+        let mut ctx = ctx_of(v);
+        let trace = match explain(expr, &mut ctx, &resolve_vector, Some(&options)) {
+            Ok(t) => t,
+            Err(e) => {
+                println!("{name}/{id}: explain failed: {}", e.0);
+                continue;
+            }
+        };
+        if v.get("expectError").and_then(|x| x.as_bool()).unwrap_or(false) {
+            let target = v.get("alignExpr").unwrap_or(expr);
+            if align(target, &trace).is_ok() {
+                println!("{name}/{id}: expected align to reject the trace");
+            } else {
+                pass += 1;
+            }
+            continue;
+        }
+        match align(expr, &trace) {
+            Ok(got) => {
+                if aligned_matches(&got, &v["expected"]) {
+                    pass += 1;
+                } else {
+                    println!("{name}/{id}: alignment mismatch");
+                }
+            }
+            Err(e) => println!("{name}/{id}: align failed: {}", e.0),
+        }
+    }
+    println!("{name}: {pass}/{} pass", vectors.len());
+    (pass, vectors.len())
 }

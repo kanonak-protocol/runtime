@@ -1257,3 +1257,182 @@ fn trace<C>(
     let v = resolve(node, ctx, &mut |n, c| go(n, c, resolve, options, frames))?;
     Ok(leaf(typ, v))
 }
+
+
+// ---------------------------------------------------------------------------
+// align — the trace↔expression walk (runtime#26). A trace carries verdicts,
+// not labels, and it does not mirror the expression node-for-node: its shape
+// follows the operator's DISPATCH GROUP (README, "The trace↔expression
+// contract"). Every consumer that wants to label a verdict — "which property was
+// read, on which element" — must walk both trees under that contract; this is
+// that walk, once per port, pinned by vectors/expression-alignment-vectors.json
+// so all seven agree. It PAIRS; it never renders. A trace that does not fit the
+// expression is an error, never a best-effort pairing that would label the wrong
+// node.
+// ---------------------------------------------------------------------------
+
+/// The binding in force for an iterating body: the loopVar and element
+/// `index` of the source value coerced to a list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlignedElement {
+    pub loop_var: String,
+    pub value: EvalValue,
+}
+
+/// One node of the expression paired with its verdict. `operand` is the key on
+/// the PARENT expression through which the node was reached (`None` at the
+/// root); `index` the position within a list operand or the element index of
+/// an iterating body; `element` is set for an iterating body only.
+#[derive(Debug, Clone)]
+pub struct AlignedNode<'a> {
+    pub expr: &'a Json,
+    pub trace: &'a TraceNode,
+    pub operand: Option<String>,
+    pub index: Option<usize>,
+    pub element: Option<AlignedElement>,
+    pub children: Vec<AlignedNode<'a>>,
+}
+
+/// Trace-child order for the direct and list operators — the order `explain`
+/// visits them. Data operands (Join's separator, Matches' pattern) are not children.
+fn direct_children(typ: &str) -> Option<&'static [&'static str]> {
+    match typ {
+        "kanonak.org/transformations/Not" => Some(&["operand"]),
+        "kanonak.org/transformations/ListItemAt" => Some(&["source", "itemIndex"]),
+        "kanonak.org/transformations/Contains" => Some(&["haystack", "needle"]),
+        "kanonak.org/transformations/IsSet" => Some(&["checkExpr"]),
+        "kanonak.org/transformations/Matches" => Some(&["matchSource"]),
+        "kanonak.org/transformations/Count"
+        | "kanonak.org/transformations/Sum"
+        | "kanonak.org/transformations/Min"
+        | "kanonak.org/transformations/Max"
+        | "kanonak.org/transformations/Average"
+        | "kanonak.org/transformations/Join"
+        | "kanonak.org/transformations/Reverse" => Some(&["source"]),
+        "kanonak.org/transformations/IsString"
+        | "kanonak.org/transformations/IsNumber"
+        | "kanonak.org/transformations/IsReference"
+        | "kanonak.org/transformations/IsList" => Some(&["kindCheck"]),
+        _ => None,
+    }
+}
+
+fn is_ordered_comparison(typ: &str) -> bool {
+    matches!(typ, "kanonak.org/transformations/IsAtLeast" | "kanonak.org/transformations/Dominates")
+}
+
+/// Pair an expression with the trace [`explain`] produced for it.
+pub fn align<'a>(expr: &'a Json, trace: &'a TraceNode) -> Result<AlignedNode<'a>, ExpressionError> {
+    align_node(expr, trace, None, None, None)
+}
+
+fn align_node<'a>(
+    expr: &'a Json,
+    trace: &'a TraceNode,
+    operand_key: Option<&'static str>,
+    index: Option<usize>,
+    element: Option<AlignedElement>,
+) -> Result<AlignedNode<'a>, ExpressionError> {
+    let typ = expr.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    let at = match (operand_key, index) {
+        (None, _) => "at the root".to_string(),
+        (Some(k), None) => format!("at operand '{k}'"),
+        (Some(k), Some(i)) => format!("at operand '{k}'[{i}]"),
+    };
+    if typ != trace.typ {
+        return Err(ExpressionError(format!(
+            "align: expression node {typ} does not match trace node {} {at}",
+            trace.typ
+        )));
+    }
+    let mut node = AlignedNode {
+        expr,
+        trace,
+        operand: operand_key.map(|s| s.to_string()),
+        index,
+        element,
+        children: Vec::new(),
+    };
+    // IteratingExpression: [source, body×N], N = |source value coerced to a list|.
+    if let Some(body) = iterator_body(typ) {
+        if trace.children.is_empty() {
+            return Err(ExpressionError(format!("align: {typ} trace has no source child {at}")));
+        }
+        node.children
+            .push(align_node(operand(expr, typ, "source")?, &trace.children[0], Some("source"), None, None)?);
+        let elements: Vec<EvalValue> = match &trace.children[0].value {
+            EvalValue::List(l) => l.clone(),
+            other => vec![other.clone()],
+        };
+        if trace.children.len() != 1 + elements.len() {
+            return Err(ExpressionError(format!(
+                "align: {typ} trace has {} body traces for {} source elements {at}",
+                trace.children.len() - 1,
+                elements.len()
+            )));
+        }
+        let loop_var = expr.get("loopVar").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let body_node = operand(expr, typ, body)?;
+        for (k, el) in elements.into_iter().enumerate() {
+            node.children.push(align_node(
+                body_node,
+                &trace.children[k + 1],
+                Some(body),
+                Some(k),
+                Some(AlignedElement { loop_var: loop_var.clone(), value: el }),
+            )?);
+        }
+        return Ok(node);
+    }
+    // BooleanLogic: a PREFIX of `operands` — the tail was never evaluated.
+    if let Some(Arity::Nary { operands }) = operator_arity(typ) {
+        let list = expr
+            .get(operands)
+            .and_then(|o| o.as_array())
+            .ok_or_else(|| ExpressionError(format!("align: {typ} is missing list operand '{operands}'")))?;
+        if trace.children.len() > list.len() {
+            return Err(ExpressionError(format!(
+                "align: {typ} trace has {} children for {} operands {at}",
+                trace.children.len(),
+                list.len()
+            )));
+        }
+        for (i, child) in trace.children.iter().enumerate() {
+            node.children.push(align_node(&list[i], child, Some(operands), Some(i), None)?);
+        }
+        return Ok(node);
+    }
+    // OrderedComparison: nothing beneath is traced.
+    if is_ordered_comparison(typ) {
+        if !trace.children.is_empty() {
+            return Err(ExpressionError(format!("align: {typ} trace must have no children {at}")));
+        }
+        return Ok(node);
+    }
+    // Everything else with operands: positional, in the group's operand order.
+    let keys: Option<Vec<&'static str>> = match operator_arity(typ) {
+        Some(Arity::Unary { operand }) => Some(vec![operand]),
+        Some(Arity::Binary { left, right }) => Some(vec![left, right]),
+        Some(Arity::Ternary { a, b, c }) => Some(vec![a, b, c]),
+        Some(Arity::Nary { .. }) => None,
+        None => direct_children(typ).map(|k| k.to_vec()),
+    };
+    if let Some(keys) = keys {
+        if trace.children.len() != keys.len() {
+            return Err(ExpressionError(format!(
+                "align: {typ} trace has {} children, expected {} {at}",
+                trace.children.len(),
+                keys.len()
+            )));
+        }
+        for (i, key) in keys.iter().enumerate() {
+            node.children.push(align_node(operand(expr, typ, key)?, &trace.children[i], Some(key), None, None)?);
+        }
+        return Ok(node);
+    }
+    // A leaf — literal, binding, caller leaf: the trace carries its value and nothing beneath.
+    if !trace.children.is_empty() {
+        return Err(ExpressionError(format!("align: {typ} is a leaf but its trace has children {at}")));
+    }
+    Ok(node)
+}

@@ -915,3 +915,124 @@ def _trace(
 
     value = resolve(node, ctx, lambda n, c: _go(n, c, resolve, options, frames))
     return TraceNode(typ, value)
+
+
+# ---------------------------------------------------------------------------
+# align — the trace↔expression walk (runtime#26). A trace carries verdicts,
+# not labels, and it does not mirror the expression node-for-node: its shape
+# follows the operator's DISPATCH GROUP (README, "The trace↔expression
+# contract"). Every consumer that wants to label a verdict — "which property was
+# read, on which element" — must walk both trees under that contract; this is
+# that walk, once per port, pinned by vectors/expression-alignment-vectors.json
+# so all seven agree. It PAIRS; it never renders. A trace that does not fit the
+# expression is an error, never a best-effort pairing that would label the wrong
+# node.
+# ---------------------------------------------------------------------------
+
+_ORDERED_COMPARISON = {f"{TX}/IsAtLeast", f"{TX}/Dominates"}
+
+# Trace-child order for the direct and list operators — the order ``explain``
+# visits them. Data operands (Join's separator, Matches' pattern) are not children.
+_DIRECT_CHILDREN: Dict[str, Tuple[str, ...]] = {
+    f"{TX}/Not": ("operand",),
+    f"{TX}/ListItemAt": ("source", "itemIndex"),
+    f"{TX}/Contains": ("haystack", "needle"),
+    f"{TX}/IsSet": ("checkExpr",),
+    f"{TX}/Matches": ("matchSource",),
+    f"{TX}/Count": ("source",),
+    f"{TX}/Sum": ("source",),
+    f"{TX}/Min": ("source",),
+    f"{TX}/Max": ("source",),
+    f"{TX}/Average": ("source",),
+    f"{TX}/Join": ("source",),
+    f"{TX}/Reverse": ("source",),
+    f"{TX}/IsString": ("kindCheck",),
+    f"{TX}/IsNumber": ("kindCheck",),
+    f"{TX}/IsReference": ("kindCheck",),
+    f"{TX}/IsList": ("kindCheck",),
+}
+
+
+class AlignedNode:
+    """One node of the expression paired with its verdict. ``operand`` is the
+    key on the PARENT expression through which the node was reached (None at
+    the root); ``index`` the position within a list operand or the element
+    index of an iterating body; ``element`` ``{"loopVar", "value"}`` for an
+    iterating body — element ``index`` of the source value coerced to a list."""
+
+    __slots__ = ("expr", "trace", "operand", "index", "element", "children")
+
+    def __init__(self, expr: ExprNode, trace: TraceNode, operand: Optional[str], index: Optional[int],
+                 element: Optional[Dict[str, Any]]) -> None:
+        self.expr = expr
+        self.trace = trace
+        self.operand = operand
+        self.index = index
+        self.element = element
+        self.children: List["AlignedNode"] = []
+
+
+def align(expr: ExprNode, trace: TraceNode) -> AlignedNode:
+    """Pair an expression with the trace :func:`explain` produced for it."""
+    return _align(expr, trace, None, None, None)
+
+
+def _align(expr: ExprNode, trace: TraceNode, operand_key: Optional[str], index: Optional[int],
+           element: Optional[Dict[str, Any]]) -> AlignedNode:
+    typ = expr.get("type")
+    if operand_key is None:
+        where = "at the root"
+    else:
+        where = f"at operand '{operand_key}'" + ("" if index is None else f"[{index}]")
+    if typ != trace.type:
+        raise ExpressionError(f"align: expression node {typ} does not match trace node {trace.type} {where}")
+    node = AlignedNode(expr, trace, operand_key, index, element)
+
+    # IteratingExpression: [source, body×N], N = |source value coerced to a list|.
+    body = _ITERATOR_BODY.get(typ)
+    if body is not None:
+        if len(trace.children) < 1:
+            raise ExpressionError(f"align: {typ} trace has no source child {where}")
+        node.children.append(_align(_operand(expr, typ, "source"), trace.children[0], "source", None, None))
+        src = trace.children[0].value
+        elements = src if isinstance(src, list) else [src]
+        if len(trace.children) != 1 + len(elements):
+            raise ExpressionError(
+                f"align: {typ} trace has {len(trace.children) - 1} body traces for {len(elements)} source elements {where}")
+        loop_var = expr.get("loopVar")
+        loop_var = loop_var if isinstance(loop_var, str) else ""
+        body_node = _operand(expr, typ, body)
+        for k, elv in enumerate(elements):
+            node.children.append(_align(body_node, trace.children[k + 1], body, k, {"loopVar": loop_var, "value": elv}))
+        return node
+
+    arity = OPERATOR_ARITY.get(typ)
+    # BooleanLogic: a PREFIX of `operands` — the tail was never evaluated.
+    if arity is not None and arity[0] == "nary":
+        operands = expr.get(arity[1])
+        if not isinstance(operands, list):
+            raise ExpressionError(f"align: {typ} is missing list operand '{arity[1]}'")
+        if len(trace.children) > len(operands):
+            raise ExpressionError(
+                f"align: {typ} trace has {len(trace.children)} children for {len(operands)} operands {where}")
+        for i, child in enumerate(trace.children):
+            node.children.append(_align(operands[i], child, arity[1], i, None))
+        return node
+    # OrderedComparison: nothing beneath is traced.
+    if typ in _ORDERED_COMPARISON:
+        if trace.children:
+            raise ExpressionError(f"align: {typ} trace must have no children {where}")
+        return node
+    # Everything else with operands: positional, in the group's operand order.
+    keys = arity[1:] if arity is not None else _DIRECT_CHILDREN.get(typ)
+    if keys is not None:
+        if len(trace.children) != len(keys):
+            raise ExpressionError(
+                f"align: {typ} trace has {len(trace.children)} children, expected {len(keys)} {where}")
+        for i, key in enumerate(keys):
+            node.children.append(_align(_operand(expr, typ, key), trace.children[i], key, None, None))
+        return node
+    # A leaf — literal, binding, caller leaf: the trace carries its value and nothing beneath.
+    if trace.children:
+        raise ExpressionError(f"align: {typ} is a leaf but its trace has children {where}")
+    return node

@@ -1,0 +1,942 @@
+{
+  "expressionRuntimeVersion": "2",
+  "description": "Alignment vectors (runtime#26): explain() returns verdicts, not labels, and the trace does not mirror the expression node-for-node — its shape follows the operator's dispatch group. `align(expr, trace)` walks both under that contract and yields, per node: `type` (expr and trace agree), `operand` (the key on the parent expression through which the node was reached; absent at the root), `index` (the position within a list operand, or the element index of an iterating body), `element` ({loopVar, value} for an iterating body: element k of the source value coerced to a list), `value` (the trace verdict) and `children`. It pairs, never renders. A trace that does not fit is an error (`expectError`: the trace of `expr` aligned against `alignExpr`). Values, env, graph, refEnv and closures follow expression-vectors-2.json.",
+  "vectors": [
+    {
+      "id": "align-filter-list-source-with-rejected-element",
+      "description": "IteratingExpression: children[0] pairs with `source`; body trace k pairs with the body operand under element k (loopVar + value), every element including the rejected one. The caller leaf (PropertyRead) pairs as a LEAF — its readSource is the caller's computation and is not traced",
+      "expr": {
+        "type": "kanonak.org/transformations/Count",
+        "source": {
+          "type": "kanonak.org/transformations/Filter",
+          "source": {
+            "type": "kanonak.org/transformations/VarRef",
+            "varName": "items"
+          },
+          "loopVar": "it",
+          "predicate": {
+            "type": "kanonak.org/transformations/Equals",
+            "compareLeft": {
+              "type": "kanonak.org/transformations/PropertyRead",
+              "readSource": {
+                "type": "kanonak.org/transformations/VarRef",
+                "varName": "it"
+              },
+              "readProp": "size"
+            },
+            "compareRight": {
+              "type": "kanonak.org/transformations/IntegerLiteral",
+              "integerLiteral": 20
+            }
+          }
+        }
+      },
+      "env": {
+        "items": [
+          {
+            "ref": "example.org/inv/item-1"
+          },
+          {
+            "ref": "example.org/inv/item-2"
+          }
+        ]
+      },
+      "graph": {
+        "example.org/inv/item-1": {
+          "size": 10,
+          "tags": [
+            "a",
+            "b"
+          ]
+        },
+        "example.org/inv/item-2": {
+          "size": 20,
+          "tags": "c",
+          "owner": {
+            "ref": "example.org/inv/ann"
+          }
+        }
+      },
+      "expected": {
+        "type": "kanonak.org/transformations/Count",
+        "value": 1,
+        "children": [
+          {
+            "type": "kanonak.org/transformations/Filter",
+            "operand": "source",
+            "value": [
+              {
+                "ref": "example.org/inv/item-2"
+              }
+            ],
+            "children": [
+              {
+                "type": "kanonak.org/transformations/VarRef",
+                "operand": "source",
+                "value": [
+                  {
+                    "ref": "example.org/inv/item-1"
+                  },
+                  {
+                    "ref": "example.org/inv/item-2"
+                  }
+                ],
+                "children": []
+              },
+              {
+                "type": "kanonak.org/transformations/Equals",
+                "operand": "predicate",
+                "index": 0,
+                "element": {
+                  "loopVar": "it",
+                  "value": {
+                    "ref": "example.org/inv/item-1"
+                  }
+                },
+                "value": 0,
+                "children": [
+                  {
+                    "type": "kanonak.org/transformations/PropertyRead",
+                    "operand": "compareLeft",
+                    "value": 10,
+                    "children": []
+                  },
+                  {
+                    "type": "kanonak.org/transformations/IntegerLiteral",
+                    "operand": "compareRight",
+                    "value": 20,
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "type": "kanonak.org/transformations/Equals",
+                "operand": "predicate",
+                "index": 1,
+                "element": {
+                  "loopVar": "it",
+                  "value": {
+                    "ref": "example.org/inv/item-2"
+                  }
+                },
+                "value": 1,
+                "children": [
+                  {
+                    "type": "kanonak.org/transformations/PropertyRead",
+                    "operand": "compareLeft",
+                    "value": 20,
+                    "children": []
+                  },
+                  {
+                    "type": "kanonak.org/transformations/IntegerLiteral",
+                    "operand": "compareRight",
+                    "value": 20,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "align-filter-scalar-source-coerced",
+      "description": "The coercion hole: a one-valued source iterates as a one-element list while its source trace carries the scalar; align reports element 0 = that scalar",
+      "expr": {
+        "type": "kanonak.org/transformations/Filter",
+        "source": {
+          "type": "kanonak.org/transformations/PropertyRead",
+          "readSource": {
+            "type": "kanonak.org/transformations/VarRef",
+            "varName": "x"
+          },
+          "readProp": "tags"
+        },
+        "loopVar": "t",
+        "predicate": {
+          "type": "kanonak.org/transformations/Equals",
+          "compareLeft": {
+            "type": "kanonak.org/transformations/VarRef",
+            "varName": "t"
+          },
+          "compareRight": {
+            "type": "kanonak.org/transformations/StringLiteral",
+            "stringLiteral": "c"
+          }
+        }
+      },
+      "env": {
+        "x": {
+          "ref": "example.org/inv/item-2"
+        }
+      },
+      "graph": {
+        "example.org/inv/item-1": {
+          "size": 10,
+          "tags": [
+            "a",
+            "b"
+          ]
+        },
+        "example.org/inv/item-2": {
+          "size": 20,
+          "tags": "c",
+          "owner": {
+            "ref": "example.org/inv/ann"
+          }
+        }
+      },
+      "expected": {
+        "type": "kanonak.org/transformations/Filter",
+        "value": [
+          "c"
+        ],
+        "children": [
+          {
+            "type": "kanonak.org/transformations/PropertyRead",
+            "operand": "source",
+            "value": "c",
+            "children": []
+          },
+          {
+            "type": "kanonak.org/transformations/Equals",
+            "operand": "predicate",
+            "index": 0,
+            "element": {
+              "loopVar": "t",
+              "value": "c"
+            },
+            "value": 1,
+            "children": [
+              {
+                "type": "kanonak.org/transformations/VarRef",
+                "operand": "compareLeft",
+                "value": "c",
+                "children": []
+              },
+              {
+                "type": "kanonak.org/transformations/StringLiteral",
+                "operand": "compareRight",
+                "value": "c",
+                "children": []
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "align-and-short-circuit-prefix",
+      "description": "BooleanLogic: the trace is a PREFIX of `operands`; the second operand (an unbound VarRef that would error) was never evaluated and has no aligned node — absence means \"did not run\"",
+      "expr": {
+        "type": "kanonak.org/transformations/And",
+        "operands": [
+          {
+            "type": "kanonak.org/transformations/GreaterThan",
+            "compareLeft": {
+              "type": "kanonak.org/transformations/IntegerLiteral",
+              "integerLiteral": 1
+            },
+            "compareRight": {
+              "type": "kanonak.org/transformations/IntegerLiteral",
+              "integerLiteral": 2
+            }
+          },
+          {
+            "type": "kanonak.org/transformations/VarRef",
+            "varName": "never"
+          }
+        ]
+      },
+      "env": {},
+      "expected": {
+        "type": "kanonak.org/transformations/And",
+        "value": 0,
+        "children": [
+          {
+            "type": "kanonak.org/transformations/GreaterThan",
+            "operand": "operands",
+            "index": 0,
+            "value": 0,
+            "children": [
+              {
+                "type": "kanonak.org/transformations/IntegerLiteral",
+                "operand": "compareLeft",
+                "value": 1,
+                "children": []
+              },
+              {
+                "type": "kanonak.org/transformations/IntegerLiteral",
+                "operand": "compareRight",
+                "value": 2,
+                "children": []
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "align-ordered-comparison-has-no-children",
+      "description": "OrderedComparison: nothing to pair — the verdict and the resolved identities are on the trace node itself (leftRef/rightRef); the operands are not visited",
+      "expr": {
+        "type": "kanonak.org/transformations/And",
+        "operands": [
+          {
+            "type": "kanonak.org/transformations/IsAtLeast",
+            "viaProperty": "example.org/severity/dominates",
+            "compareLeft": {
+              "type": "kanonak.org/transformations/VarRef",
+              "varName": "observed"
+            },
+            "compareRight": {
+              "type": "kanonak.org/transformations/UriLiteral",
+              "refTo": "example.org/severity/warn"
+            }
+          },
+          {
+            "type": "kanonak.org/transformations/Equals",
+            "compareLeft": {
+              "type": "kanonak.org/transformations/IntegerLiteral",
+              "integerLiteral": 1
+            },
+            "compareRight": {
+              "type": "kanonak.org/transformations/IntegerLiteral",
+              "integerLiteral": 2
+            }
+          }
+        ]
+      },
+      "refEnv": {
+        "observed": "example.org/severity/error"
+      },
+      "closures": {
+        "example.org/severity/dominates": {
+          "example.org/severity/error": [
+            "example.org/severity/warn"
+          ]
+        }
+      },
+      "expected": {
+        "type": "kanonak.org/transformations/And",
+        "value": 0,
+        "children": [
+          {
+            "type": "kanonak.org/transformations/IsAtLeast",
+            "operand": "operands",
+            "index": 0,
+            "value": 1,
+            "children": []
+          },
+          {
+            "type": "kanonak.org/transformations/Equals",
+            "operand": "operands",
+            "index": 1,
+            "value": 0,
+            "children": [
+              {
+                "type": "kanonak.org/transformations/IntegerLiteral",
+                "operand": "compareLeft",
+                "value": 1,
+                "children": []
+              },
+              {
+                "type": "kanonak.org/transformations/IntegerLiteral",
+                "operand": "compareRight",
+                "value": 2,
+                "children": []
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "align-nested-iterators-shadowing",
+      "description": "Nested binders with the same loopVar: each body carries ITS binder's element, so the inner element is visible per inner iteration and the outer per outer",
+      "expr": {
+        "type": "kanonak.org/transformations/ListMap",
+        "source": {
+          "type": "kanonak.org/transformations/VarRef",
+          "varName": "items"
+        },
+        "loopVar": "it",
+        "mapBody": {
+          "type": "kanonak.org/transformations/Count",
+          "source": {
+            "type": "kanonak.org/transformations/Filter",
+            "source": {
+              "type": "kanonak.org/transformations/VarRef",
+              "varName": "items"
+            },
+            "loopVar": "it",
+            "predicate": {
+              "type": "kanonak.org/transformations/Equals",
+              "compareLeft": {
+                "type": "kanonak.org/transformations/PropertyRead",
+                "readSource": {
+                  "type": "kanonak.org/transformations/VarRef",
+                  "varName": "it"
+                },
+                "readProp": "size"
+              },
+              "compareRight": {
+                "type": "kanonak.org/transformations/IntegerLiteral",
+                "integerLiteral": 20
+              }
+            }
+          }
+        }
+      },
+      "env": {
+        "items": [
+          {
+            "ref": "example.org/inv/item-1"
+          },
+          {
+            "ref": "example.org/inv/item-2"
+          }
+        ]
+      },
+      "graph": {
+        "example.org/inv/item-1": {
+          "size": 10,
+          "tags": [
+            "a",
+            "b"
+          ]
+        },
+        "example.org/inv/item-2": {
+          "size": 20,
+          "tags": "c",
+          "owner": {
+            "ref": "example.org/inv/ann"
+          }
+        }
+      },
+      "expected": {
+        "type": "kanonak.org/transformations/ListMap",
+        "value": [
+          1,
+          1
+        ],
+        "children": [
+          {
+            "type": "kanonak.org/transformations/VarRef",
+            "operand": "source",
+            "value": [
+              {
+                "ref": "example.org/inv/item-1"
+              },
+              {
+                "ref": "example.org/inv/item-2"
+              }
+            ],
+            "children": []
+          },
+          {
+            "type": "kanonak.org/transformations/Count",
+            "operand": "mapBody",
+            "index": 0,
+            "element": {
+              "loopVar": "it",
+              "value": {
+                "ref": "example.org/inv/item-1"
+              }
+            },
+            "value": 1,
+            "children": [
+              {
+                "type": "kanonak.org/transformations/Filter",
+                "operand": "source",
+                "value": [
+                  {
+                    "ref": "example.org/inv/item-2"
+                  }
+                ],
+                "children": [
+                  {
+                    "type": "kanonak.org/transformations/VarRef",
+                    "operand": "source",
+                    "value": [
+                      {
+                        "ref": "example.org/inv/item-1"
+                      },
+                      {
+                        "ref": "example.org/inv/item-2"
+                      }
+                    ],
+                    "children": []
+                  },
+                  {
+                    "type": "kanonak.org/transformations/Equals",
+                    "operand": "predicate",
+                    "index": 0,
+                    "element": {
+                      "loopVar": "it",
+                      "value": {
+                        "ref": "example.org/inv/item-1"
+                      }
+                    },
+                    "value": 0,
+                    "children": [
+                      {
+                        "type": "kanonak.org/transformations/PropertyRead",
+                        "operand": "compareLeft",
+                        "value": 10,
+                        "children": []
+                      },
+                      {
+                        "type": "kanonak.org/transformations/IntegerLiteral",
+                        "operand": "compareRight",
+                        "value": 20,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "type": "kanonak.org/transformations/Equals",
+                    "operand": "predicate",
+                    "index": 1,
+                    "element": {
+                      "loopVar": "it",
+                      "value": {
+                        "ref": "example.org/inv/item-2"
+                      }
+                    },
+                    "value": 1,
+                    "children": [
+                      {
+                        "type": "kanonak.org/transformations/PropertyRead",
+                        "operand": "compareLeft",
+                        "value": 20,
+                        "children": []
+                      },
+                      {
+                        "type": "kanonak.org/transformations/IntegerLiteral",
+                        "operand": "compareRight",
+                        "value": 20,
+                        "children": []
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "kanonak.org/transformations/Count",
+            "operand": "mapBody",
+            "index": 1,
+            "element": {
+              "loopVar": "it",
+              "value": {
+                "ref": "example.org/inv/item-2"
+              }
+            },
+            "value": 1,
+            "children": [
+              {
+                "type": "kanonak.org/transformations/Filter",
+                "operand": "source",
+                "value": [
+                  {
+                    "ref": "example.org/inv/item-2"
+                  }
+                ],
+                "children": [
+                  {
+                    "type": "kanonak.org/transformations/VarRef",
+                    "operand": "source",
+                    "value": [
+                      {
+                        "ref": "example.org/inv/item-1"
+                      },
+                      {
+                        "ref": "example.org/inv/item-2"
+                      }
+                    ],
+                    "children": []
+                  },
+                  {
+                    "type": "kanonak.org/transformations/Equals",
+                    "operand": "predicate",
+                    "index": 0,
+                    "element": {
+                      "loopVar": "it",
+                      "value": {
+                        "ref": "example.org/inv/item-1"
+                      }
+                    },
+                    "value": 0,
+                    "children": [
+                      {
+                        "type": "kanonak.org/transformations/PropertyRead",
+                        "operand": "compareLeft",
+                        "value": 10,
+                        "children": []
+                      },
+                      {
+                        "type": "kanonak.org/transformations/IntegerLiteral",
+                        "operand": "compareRight",
+                        "value": 20,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "type": "kanonak.org/transformations/Equals",
+                    "operand": "predicate",
+                    "index": 1,
+                    "element": {
+                      "loopVar": "it",
+                      "value": {
+                        "ref": "example.org/inv/item-2"
+                      }
+                    },
+                    "value": 1,
+                    "children": [
+                      {
+                        "type": "kanonak.org/transformations/PropertyRead",
+                        "operand": "compareLeft",
+                        "value": 20,
+                        "children": []
+                      },
+                      {
+                        "type": "kanonak.org/transformations/IntegerLiteral",
+                        "operand": "compareRight",
+                        "value": 20,
+                        "children": []
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "align-ternary-and-arithmetic-positional",
+      "description": "Positional groups: Clip pairs clipValue/clipLower/clipUpper in that order; Add pairs arithLeft/arithRight",
+      "expr": {
+        "type": "kanonak.org/math/Clip",
+        "clipValue": {
+          "type": "kanonak.org/transformations/Add",
+          "arithLeft": {
+            "type": "kanonak.org/transformations/IntegerLiteral",
+            "integerLiteral": 2
+          },
+          "arithRight": {
+            "type": "kanonak.org/transformations/IntegerLiteral",
+            "integerLiteral": 3
+          }
+        },
+        "clipLower": {
+          "type": "kanonak.org/transformations/IntegerLiteral",
+          "integerLiteral": 0
+        },
+        "clipUpper": {
+          "type": "kanonak.org/transformations/IntegerLiteral",
+          "integerLiteral": 4
+        }
+      },
+      "expected": {
+        "type": "kanonak.org/math/Clip",
+        "value": 4,
+        "children": [
+          {
+            "type": "kanonak.org/transformations/Add",
+            "operand": "clipValue",
+            "value": 5,
+            "children": [
+              {
+                "type": "kanonak.org/transformations/IntegerLiteral",
+                "operand": "arithLeft",
+                "value": 2,
+                "children": []
+              },
+              {
+                "type": "kanonak.org/transformations/IntegerLiteral",
+                "operand": "arithRight",
+                "value": 3,
+                "children": []
+              }
+            ]
+          },
+          {
+            "type": "kanonak.org/transformations/IntegerLiteral",
+            "operand": "clipLower",
+            "value": 0,
+            "children": []
+          },
+          {
+            "type": "kanonak.org/transformations/IntegerLiteral",
+            "operand": "clipUpper",
+            "value": 4,
+            "children": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "align-direct-operators-not-isset-listitemat",
+      "description": "Direct operators: Not→operand, IsSet→checkExpr, ListItemAt→source,itemIndex",
+      "expr": {
+        "type": "kanonak.org/transformations/Not",
+        "operand": {
+          "type": "kanonak.org/transformations/IsSet",
+          "checkExpr": {
+            "type": "kanonak.org/transformations/ListItemAt",
+            "source": {
+              "type": "kanonak.org/transformations/VarRef",
+              "varName": "xs"
+            },
+            "itemIndex": {
+              "type": "kanonak.org/transformations/IntegerLiteral",
+              "integerLiteral": 5
+            }
+          }
+        }
+      },
+      "env": {
+        "xs": [
+          "a",
+          "b"
+        ]
+      },
+      "expected": {
+        "type": "kanonak.org/transformations/Not",
+        "value": 1,
+        "children": [
+          {
+            "type": "kanonak.org/transformations/IsSet",
+            "operand": "operand",
+            "value": 0,
+            "children": [
+              {
+                "type": "kanonak.org/transformations/ListItemAt",
+                "operand": "checkExpr",
+                "value": [],
+                "children": [
+                  {
+                    "type": "kanonak.org/transformations/VarRef",
+                    "operand": "source",
+                    "value": [
+                      "a",
+                      "b"
+                    ],
+                    "children": []
+                  },
+                  {
+                    "type": "kanonak.org/transformations/IntegerLiteral",
+                    "operand": "itemIndex",
+                    "value": 5,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "align-direct-operators-contains-matches-join",
+      "description": "Direct operators: Contains→haystack,needle; Matches→matchSource (pattern is data); Join→source",
+      "expr": {
+        "type": "kanonak.org/transformations/And",
+        "operands": [
+          {
+            "type": "kanonak.org/transformations/Contains",
+            "haystack": {
+              "type": "kanonak.org/transformations/VarRef",
+              "varName": "xs"
+            },
+            "needle": {
+              "type": "kanonak.org/transformations/StringLiteral",
+              "stringLiteral": "b"
+            }
+          },
+          {
+            "type": "kanonak.org/transformations/Matches",
+            "matchSource": {
+              "type": "kanonak.org/transformations/Join",
+              "source": {
+                "type": "kanonak.org/transformations/VarRef",
+                "varName": "xs"
+              },
+              "separator": "-"
+            },
+            "pattern": "a-b"
+          }
+        ]
+      },
+      "env": {
+        "xs": [
+          "a",
+          "b"
+        ]
+      },
+      "expected": {
+        "type": "kanonak.org/transformations/And",
+        "value": 1,
+        "children": [
+          {
+            "type": "kanonak.org/transformations/Contains",
+            "operand": "operands",
+            "index": 0,
+            "value": 1,
+            "children": [
+              {
+                "type": "kanonak.org/transformations/VarRef",
+                "operand": "haystack",
+                "value": [
+                  "a",
+                  "b"
+                ],
+                "children": []
+              },
+              {
+                "type": "kanonak.org/transformations/StringLiteral",
+                "operand": "needle",
+                "value": "b",
+                "children": []
+              }
+            ]
+          },
+          {
+            "type": "kanonak.org/transformations/Matches",
+            "operand": "operands",
+            "index": 1,
+            "value": 1,
+            "children": [
+              {
+                "type": "kanonak.org/transformations/Join",
+                "operand": "matchSource",
+                "value": "a-b",
+                "children": [
+                  {
+                    "type": "kanonak.org/transformations/VarRef",
+                    "operand": "source",
+                    "value": [
+                      "a",
+                      "b"
+                    ],
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "align-kind-predicate-and-unary-chain",
+      "description": "KindPredicate→kindCheck; UnaryNumericOp→value, nested",
+      "expr": {
+        "type": "kanonak.org/transformations/IsNumber",
+        "kindCheck": {
+          "type": "kanonak.org/transformations/Abs",
+          "value": {
+            "type": "kanonak.org/transformations/Negate",
+            "value": {
+              "type": "kanonak.org/transformations/IntegerLiteral",
+              "integerLiteral": 3
+            }
+          }
+        }
+      },
+      "expected": {
+        "type": "kanonak.org/transformations/IsNumber",
+        "value": 1,
+        "children": [
+          {
+            "type": "kanonak.org/transformations/Abs",
+            "operand": "kindCheck",
+            "value": 3,
+            "children": [
+              {
+                "type": "kanonak.org/transformations/Negate",
+                "operand": "value",
+                "value": -3,
+                "children": [
+                  {
+                    "type": "kanonak.org/transformations/IntegerLiteral",
+                    "operand": "value",
+                    "value": 3,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "align-rejects-a-trace-from-another-expression",
+      "description": "A trace that does not fit the expression is an ERROR, never a best-effort pairing: here the trace of Add(1,2) is aligned against Subtract(1,2)",
+      "expr": {
+        "type": "kanonak.org/transformations/Add",
+        "arithLeft": {
+          "type": "kanonak.org/transformations/IntegerLiteral",
+          "integerLiteral": 1
+        },
+        "arithRight": {
+          "type": "kanonak.org/transformations/IntegerLiteral",
+          "integerLiteral": 2
+        }
+      },
+      "alignExpr": {
+        "type": "kanonak.org/transformations/Subtract",
+        "arithLeft": {
+          "type": "kanonak.org/transformations/IntegerLiteral",
+          "integerLiteral": 1
+        },
+        "arithRight": {
+          "type": "kanonak.org/transformations/IntegerLiteral",
+          "integerLiteral": 2
+        }
+      },
+      "expectError": true
+    },
+    {
+      "id": "align-rejects-a-trace-with-the-wrong-arity",
+      "description": "Same root type, different tree: the trace of Add(1,2) against Add(1, Add(2,3)) fails at the child whose type does not match",
+      "expr": {
+        "type": "kanonak.org/transformations/Add",
+        "arithLeft": {
+          "type": "kanonak.org/transformations/IntegerLiteral",
+          "integerLiteral": 1
+        },
+        "arithRight": {
+          "type": "kanonak.org/transformations/IntegerLiteral",
+          "integerLiteral": 2
+        }
+      },
+      "alignExpr": {
+        "type": "kanonak.org/transformations/Add",
+        "arithLeft": {
+          "type": "kanonak.org/transformations/IntegerLiteral",
+          "integerLiteral": 1
+        },
+        "arithRight": {
+          "type": "kanonak.org/transformations/Add",
+          "arithLeft": {
+            "type": "kanonak.org/transformations/IntegerLiteral",
+            "integerLiteral": 2
+          },
+          "arithRight": {
+            "type": "kanonak.org/transformations/IntegerLiteral",
+            "integerLiteral": 3
+          }
+        }
+      },
+      "expectError": true
+    }
+  ]
+}

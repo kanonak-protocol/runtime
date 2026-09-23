@@ -1104,3 +1104,140 @@ export function explain<C = unknown>(
 
   return trace(node, ctx, []);
 }
+
+// ---------------------------------------------------------------------------
+// align — the trace↔expression walk (runtime#26)
+//
+// A trace carries verdicts, not labels, and it does not mirror the expression
+// node-for-node: its shape follows the operator's DISPATCH GROUP (README, "The
+// trace↔expression contract"). Every consumer that wants to label a verdict —
+// "which property was read, on which element" — must walk both trees under
+// that contract, and there are seven generated emitters that would each
+// hand-write the walk. This is the walk, once per port, pinned by
+// vectors/expression-alignment-vectors.json so all seven agree. It PAIRS; it
+// never renders — no strings, no display choices — so it stays portable.
+// ---------------------------------------------------------------------------
+
+/** One node of the expression paired with its verdict. */
+export interface AlignedNode {
+  /** The expression node — where the labels live (`readProp`, `varName`, …). */
+  expr: ExprNode;
+  /** Its verdict. `trace.value` is the value; ordered comparisons also carry `leftRef`/`rightRef`. */
+  trace: TraceNode;
+  /** The operand key on the PARENT expression through which this node was reached; absent at the root. */
+  operand?: string;
+  /** Position within a list operand (`operands[i]`), or the element index of an iterating body. */
+  index?: number;
+  /** For an iterating body: the binding in force — `loopVar` and element `index` of the source value coerced to a list. */
+  element?: { loopVar: string; value: Value };
+  children: AlignedNode[];
+}
+
+/** Operators whose trace has NO children: the verdict and the resolved identities are on the node. */
+const ORDERED_COMPARISON: ReadonlySet<string> = new Set([`${TX}/IsAtLeast`, `${TX}/Dominates`]);
+
+/**
+ * Trace-child order for the direct and list operators — the order `explain`
+ * visits them, which is the order the arity-less branches of `trace` evaluate.
+ * (Data operands — Join's `separator`, Matches' `pattern` — are not children.)
+ */
+const DIRECT_CHILDREN: Record<string, readonly string[]> = {
+  [`${TX}/Not`]: ['operand'],
+  [`${TX}/ListItemAt`]: ['source', 'itemIndex'],
+  [`${TX}/Contains`]: ['haystack', 'needle'],
+  [`${TX}/IsSet`]: ['checkExpr'],
+  [`${TX}/Matches`]: ['matchSource'],
+  [`${TX}/Count`]: ['source'],
+  [`${TX}/Sum`]: ['source'],
+  [`${TX}/Min`]: ['source'],
+  [`${TX}/Max`]: ['source'],
+  [`${TX}/Average`]: ['source'],
+  [`${TX}/Join`]: ['source'],
+  [`${TX}/Reverse`]: ['source'],
+  [`${TX}/IsString`]: ['kindCheck'],
+  [`${TX}/IsNumber`]: ['kindCheck'],
+  [`${TX}/IsReference`]: ['kindCheck'],
+  [`${TX}/IsList`]: ['kindCheck'],
+};
+
+/**
+ * Pair an expression with the trace `explain` produced for it. Throws an
+ * `ExpressionError` when the trace does not fit the expression — a node type
+ * that differs, a child count the group's shape does not allow — rather than
+ * ever returning a best-effort pairing that would label the wrong node.
+ */
+export function align(expr: ExprNode, trace: TraceNode): AlignedNode {
+  return alignNode(expr, trace, undefined, undefined, undefined);
+}
+
+function alignNode(
+  expr: ExprNode,
+  trace: TraceNode,
+  operandKey: string | undefined,
+  index: number | undefined,
+  element: { loopVar: string; value: Value } | undefined,
+): AlignedNode {
+  const where = operandKey === undefined ? 'at the root' : `at operand '${operandKey}'${index === undefined ? '' : `[${index}]`}`;
+  if (expr.type !== trace.type) {
+    throw new ExpressionError(`align: expression node ${expr.type} does not match trace node ${trace.type} ${where}`);
+  }
+  const node: AlignedNode = { expr, trace, children: [] };
+  if (operandKey !== undefined) node.operand = operandKey;
+  if (index !== undefined) node.index = index;
+  if (element !== undefined) node.element = element;
+
+  // IteratingExpression: [source, body×N], N = |source value coerced to a list|.
+  const body = ITERATOR_BODY[expr.type];
+  if (body) {
+    if (trace.children.length < 1) throw new ExpressionError(`align: ${expr.type} trace has no source child ${where}`);
+    node.children.push(alignNode(operand(expr, 'source'), trace.children[0]!, 'source', undefined, undefined));
+    const src = trace.children[0]!.value;
+    const elements = Array.isArray(src) ? src : [src];
+    if (trace.children.length !== 1 + elements.length) {
+      throw new ExpressionError(`align: ${expr.type} trace has ${trace.children.length - 1} body traces for ${elements.length} source elements ${where}`);
+    }
+    const loopVar = typeof expr.loopVar === 'string' ? expr.loopVar : '';
+    const bodyNode = operand(expr, body);
+    elements.forEach((el, k) => {
+      node.children.push(alignNode(bodyNode, trace.children[k + 1]!, body, k, { loopVar, value: el }));
+    });
+    return node;
+  }
+
+  const arity = OPERATOR_ARITY[expr.type];
+  // BooleanLogic: a PREFIX of `operands` — the tail was never evaluated.
+  if (arity && arity.kind === 'nary') {
+    const operands = expr[arity.operands];
+    if (!Array.isArray(operands)) throw new ExpressionError(`align: ${expr.type} is missing list operand '${arity.operands}'`);
+    if (trace.children.length > operands.length) {
+      throw new ExpressionError(`align: ${expr.type} trace has ${trace.children.length} children for ${operands.length} operands ${where}`);
+    }
+    trace.children.forEach((child, i) => {
+      node.children.push(alignNode(operands[i] as ExprNode, child, arity.operands, i, undefined));
+    });
+    return node;
+  }
+  // OrderedComparison: nothing beneath is traced.
+  if (ORDERED_COMPARISON.has(expr.type)) {
+    if (trace.children.length !== 0) throw new ExpressionError(`align: ${expr.type} trace must have no children ${where}`);
+    return node;
+  }
+  // Everything else with operands: positional, in the group's operand order.
+  const keys: readonly string[] | undefined = arity
+    ? arity.kind === 'unary' ? [arity.operand]
+      : arity.kind === 'binary' ? [arity.left, arity.right]
+      : [arity.a, arity.b, arity.c]
+    : DIRECT_CHILDREN[expr.type];
+  if (keys) {
+    if (trace.children.length !== keys.length) {
+      throw new ExpressionError(`align: ${expr.type} trace has ${trace.children.length} children, expected ${keys.length} ${where}`);
+    }
+    keys.forEach((key, i) => {
+      node.children.push(alignNode(operand(expr, key), trace.children[i]!, key, undefined, undefined));
+    });
+    return node;
+  }
+  // A leaf — literal, binding, caller leaf: the trace carries its value and nothing beneath.
+  if (trace.children.length !== 0) throw new ExpressionError(`align: ${expr.type} is a leaf but its trace has children ${where}`);
+  return node;
+}

@@ -17,10 +17,12 @@ from pathlib import Path
 from typing import Any
 
 from kanonak_expression import (
+    AlignedNode,
     EvalOptions,
     ExpressionError,
     Ref,
     TraceNode,
+    align,
     evaluate,
     explain,
 )
@@ -173,12 +175,70 @@ def run_file(vectors_dir: Path, name: str) -> tuple[int, int]:
     return passed, len(vectors)
 
 
+def aligned_matches(got: AlignedNode, want: dict) -> bool:
+    """Structural equality of an aligned tree against the vector's expected tree."""
+    if got.expr.get("type") != want.get("type") or got.trace.type != want.get("type"):
+        return False
+    if got.operand != want.get("operand") or got.index != want.get("index"):
+        return False
+    wel = want.get("element")
+    if (got.element is None) != (wel is None):
+        return False
+    if got.element is not None and (got.element["loopVar"] != wel.get("loopVar")
+                                    or not values_deep_equal(got.element["value"], value_of(wel["value"]))):
+        return False
+    if "value" not in want or not values_deep_equal(got.trace.value, value_of(want["value"])):
+        return False
+    want_children = want.get("children", [])
+    if len(want_children) != len(got.children):
+        return False
+    return all(aligned_matches(g, w) for g, w in zip(got.children, want_children))
+
+
+def run_align_file(vectors_dir: Path, name: str) -> tuple[int, int]:
+    """The alignment vectors: explain ``expr``, then ``align`` — the pairing
+    must be exactly the expected tree, or an error where one is expected."""
+    data = json.loads((vectors_dir / name).read_text(encoding="utf-8"))
+    vectors = data["vectors"]
+    passed = 0
+    for v in vectors:
+        vid = v["id"]
+        env = {k: value_of(x) for k, x in (v.get("env") or {}).items()}
+        graph = {uri: {p: value_of(x) for p, x in props.items()} for uri, props in (v.get("graph") or {}).items()}
+        options = EvalOptions(closures=v.get("closures"), resolve_ref=make_resolve_ref(dict(v.get("refEnv") or {})))
+        resolve = make_resolve(env, graph)
+        try:
+            trace = explain(v["expr"], None, resolve, options)
+        except ExpressionError as exc:
+            print(f"{name}/{vid}: explain raised {exc}")
+            continue
+        if v.get("expectError"):
+            try:
+                align(v.get("alignExpr") or v["expr"], trace)
+                print(f"{name}/{vid}: expected align to reject the trace")
+            except ExpressionError:
+                passed += 1
+            continue
+        try:
+            got = align(v["expr"], trace)
+        except ExpressionError as exc:
+            print(f"{name}/{vid}: align raised {exc}")
+            continue
+        if not aligned_matches(got, v["expected"]):
+            print(f"{name}/{vid}: alignment mismatch")
+            continue
+        passed += 1
+    print(f"{name}: {passed}/{len(vectors)} pass")
+    return passed, len(vectors)
+
+
 def main() -> int:
     vectors_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("../vectors")
     p1, t1 = run_file(vectors_dir, "expression-vectors.json")
     p2, t2 = run_file(vectors_dir, "expression-vectors-2.json")
-    if p1 != t1 or p2 != t2:
-        print(f"\n{(t1 - p1) + (t2 - p2)} FAILURES")
+    p3, t3 = run_align_file(vectors_dir, "expression-alignment-vectors.json")
+    if p1 != t1 or p2 != t2 or p3 != t3:
+        print(f"\n{(t1 - p1) + (t2 - p2) + (t3 - p3)} FAILURES")
         return 1
     print("ALL VECTORS PASS")
     return 0

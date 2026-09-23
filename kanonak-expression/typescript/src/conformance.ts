@@ -20,8 +20,10 @@
  */
 import { readFileSync } from 'node:fs';
 import {
+  align,
   evaluate,
   explain,
+  type AlignedNode,
   ExpressionError,
   type ClosureTable,
   type EvalOptions,
@@ -41,6 +43,8 @@ interface Vector {
   refEnv?: Record<string, string>;
   /** A host graph for the caller's `tx.PropertyRead` leaf: ref URI → property → Value. */
   graph?: Record<string, Record<string, Value>>;
+  /** Alignment vectors: align THIS expression against the trace of `expr` (an error is expected). */
+  alignExpr?: ExprNode;
   closures?: ClosureTable;
   expected?: Value;
   tolerance?: number;
@@ -159,10 +163,52 @@ function runFile(relPath: string, label: string): { pass: number; fail: number; 
   return { pass, fail, total: data.vectors.length };
 }
 
+/** Structural equality of an aligned tree against the vector's expected JSON tree. */
+function alignedEqual(got: AlignedNode, want: Record<string, unknown>): boolean {
+  if (got.expr.type !== want.type || got.trace.type !== want.type) return false;
+  if ((got.operand ?? null) !== (want.operand ?? null)) return false;
+  if ((got.index ?? null) !== (want.index ?? null)) return false;
+  const wantEl = want.element as { loopVar: string; value: Value } | undefined;
+  if ((got.element === undefined) !== (wantEl === undefined)) return false;
+  if (got.element && wantEl && (got.element.loopVar !== wantEl.loopVar || !valueEqual(got.element.value, wantEl.value))) return false;
+  if (!valueEqual(got.trace.value, want.value as Value)) return false;
+  const wantChildren = (want.children ?? []) as Record<string, unknown>[];
+  if (got.children.length !== wantChildren.length) return false;
+  return got.children.every((c, i) => alignedEqual(c, wantChildren[i]!));
+}
+
+/** The alignment vectors: explain `expr`, then `align` — the pairing must be exactly the expected tree, or an error where one is expected. */
+function runAlignFile(relPath: string, label: string): { pass: number; fail: number; total: number } {
+  const data = JSON.parse(readFileSync(new URL(relPath, import.meta.url), 'utf8')) as { vectors: Vector[] };
+  let pass = 0, fail = 0;
+  for (const v of data.vectors) {
+    const ctx: Ctx = { env: v.env ?? {}, refEnv: v.refEnv ?? {}, graph: v.graph ?? {} };
+    const options: EvalOptions<Ctx> = { closures: v.closures, resolveRef };
+    let trace: TraceNode;
+    try { trace = explain(v.expr, ctx, resolve, options); }
+    catch (e) { fail++; console.error(`${label}/${v.id}: explain threw ${(e as Error).message}`); continue; }
+    if (v.expectError) {
+      try { align(v.alignExpr ?? v.expr, trace); fail++; console.error(`${label}/${v.id}: expected align to reject the trace`); }
+      catch { pass++; }
+      continue;
+    }
+    let got: AlignedNode;
+    try { got = align(v.expr, trace); }
+    catch (e) { fail++; console.error(`${label}/${v.id}: align threw ${(e as Error).message}`); continue; }
+    if (!alignedEqual(got, v.expected as unknown as Record<string, unknown>)) {
+      fail++; console.error(`${label}/${v.id}: alignment mismatch`); continue;
+    }
+    pass++;
+  }
+  console.log(`${label}: ${pass}/${data.vectors.length} pass`);
+  return { pass, fail, total: data.vectors.length };
+}
+
 // v1 vectors are the regression gate: every one passes unchanged under v2.
 const v1 = runFile('../../vectors/expression-vectors.json', 'expression-vectors(v1)');
 const v2 = runFile('../../vectors/expression-vectors-2.json', 'expression-vectors-2');
+const va = runAlignFile('../../vectors/expression-alignment-vectors.json', 'expression-alignment-vectors');
 
-const fail = v1.fail + v2.fail;
+const fail = v1.fail + v2.fail + va.fail;
 if (fail > 0) { console.error(`\n${fail} FAILURES`); process.exit(1); }
 console.log('ALL VECTORS PASS');

@@ -964,3 +964,136 @@ private func trace<C>(
     }
     return TraceNode(typ, v)
 }
+
+
+// ---------------------------------------------------------------------------
+// align — the trace↔expression walk (runtime#26). A trace carries verdicts,
+// not labels, and it does not mirror the expression node-for-node: its shape
+// follows the operator's DISPATCH GROUP (README, "The trace↔expression
+// contract"). Every consumer that wants to label a verdict — "which property was
+// read, on which element" — must walk both trees under that contract; this is
+// that walk, once per port, pinned by vectors/expression-alignment-vectors.json
+// so all seven agree. It PAIRS; it never renders. A trace that does not fit the
+// expression is an error, never a best-effort pairing that would label the wrong
+// node.
+// ---------------------------------------------------------------------------
+
+/// The binding in force for an iterating body: the loopVar and element `index`
+/// of the source value coerced to a list.
+public struct AlignedElement {
+    public let loopVar: String
+    public let value: EvalValue
+}
+
+/// One node of the expression paired with its verdict. `operand` is the key on
+/// the PARENT expression through which the node was reached (nil at the root);
+/// `index` the position within a list operand or the element index of an
+/// iterating body; `element` is set for an iterating body only.
+public struct AlignedNode {
+    public let expr: ExprNode
+    public let trace: TraceNode
+    public let operand: String?
+    public let index: Int?
+    public let element: AlignedElement?
+    public let children: [AlignedNode]
+}
+
+private func isOrderedComparison(_ typ: String) -> Bool {
+    typ == "\(tx)/IsAtLeast" || typ == "\(tx)/Dominates"
+}
+
+/// Trace-child order for the direct and list operators — the order `explain`
+/// visits them. Data operands (Join's separator, Matches' pattern) are not children.
+private func directChildren(_ typ: String) -> [String]? {
+    switch typ {
+    case "\(tx)/Not": return ["operand"]
+    case "\(tx)/ListItemAt": return ["source", "itemIndex"]
+    case "\(tx)/Contains": return ["haystack", "needle"]
+    case "\(tx)/IsSet": return ["checkExpr"]
+    case "\(tx)/Matches": return ["matchSource"]
+    case "\(tx)/Count", "\(tx)/Sum", "\(tx)/Min", "\(tx)/Max", "\(tx)/Average", "\(tx)/Join", "\(tx)/Reverse":
+        return ["source"]
+    case "\(tx)/IsString", "\(tx)/IsNumber", "\(tx)/IsReference", "\(tx)/IsList":
+        return ["kindCheck"]
+    default: return nil
+    }
+}
+
+/// Pair an expression with the trace `explain` produced for it.
+public func align(_ expr: ExprNode, _ trace: TraceNode) throws -> AlignedNode {
+    try alignNode(expr, trace, nil, nil, nil)
+}
+
+private func alignNode(
+    _ expr: ExprNode, _ trace: TraceNode, _ operandKey: String?, _ index: Int?, _ element: AlignedElement?
+) throws -> AlignedNode {
+    let typ = try nodeType(expr)
+    let at: String
+    if let k = operandKey {
+        at = index.map { "at operand '\(k)'[\($0)]" } ?? "at operand '\(k)'"
+    } else {
+        at = "at the root"
+    }
+    guard typ == trace.type else {
+        throw ExpressionError("align: expression node \(typ) does not match trace node \(trace.type) \(at)")
+    }
+    var children: [AlignedNode] = []
+    // IteratingExpression: [source, body×N], N = |source value coerced to a list|.
+    if let body = iteratorBody(typ) {
+        guard !trace.children.isEmpty else { throw ExpressionError("align: \(typ) trace has no source child \(at)") }
+        children.append(try alignNode(try operand(expr, typ, "source"), trace.children[0], "source", nil, nil))
+        let elements: [EvalValue]
+        if case let .list(l) = trace.children[0].value { elements = l } else { elements = [trace.children[0].value] }
+        guard trace.children.count == 1 + elements.count else {
+            throw ExpressionError("align: \(typ) trace has \(trace.children.count - 1) body traces for \(elements.count) source elements \(at)")
+        }
+        let loopVar = expr["loopVar"] as? String ?? ""
+        let bodyNode = try operand(expr, typ, body)
+        for (k, el) in elements.enumerated() {
+            children.append(try alignNode(bodyNode, trace.children[k + 1], body, k, AlignedElement(loopVar: loopVar, value: el)))
+        }
+        return AlignedNode(expr: expr, trace: trace, operand: operandKey, index: index, element: element, children: children)
+    }
+    let arity = operatorArity(typ)
+    // BooleanLogic: a PREFIX of `operands` — the tail was never evaluated.
+    if case let .nary(key)? = arity {
+        guard let operands = expr[key] as? [Any] else { throw ExpressionError("align: \(typ) is missing list operand '\(key)'") }
+        guard trace.children.count <= operands.count else {
+            throw ExpressionError("align: \(typ) trace has \(trace.children.count) children for \(operands.count) operands \(at)")
+        }
+        for (i, child) in trace.children.enumerated() {
+            guard let sub = operands[i] as? ExprNode else { throw ExpressionError("align: \(typ) operand '\(key)'[\(i)] is not a node") }
+            children.append(try alignNode(sub, child, key, i, nil))
+        }
+        return AlignedNode(expr: expr, trace: trace, operand: operandKey, index: index, element: element, children: children)
+    }
+    // OrderedComparison: nothing beneath is traced.
+    if isOrderedComparison(typ) {
+        guard trace.children.isEmpty else { throw ExpressionError("align: \(typ) trace must have no children \(at)") }
+        return AlignedNode(expr: expr, trace: trace, operand: operandKey, index: index, element: element, children: [])
+    }
+    // Everything else with operands: positional, in the group's operand order.
+    var keys: [String]? = nil
+    if let a = arity {
+        switch a {
+        case let .unary(k): keys = [k]
+        case let .binary(l, r): keys = [l, r]
+        case let .ternary(x, y, z): keys = [x, y, z]
+        case .nary: keys = nil
+        }
+    } else {
+        keys = directChildren(typ)
+    }
+    if let keys = keys {
+        guard trace.children.count == keys.count else {
+            throw ExpressionError("align: \(typ) trace has \(trace.children.count) children, expected \(keys.count) \(at)")
+        }
+        for (i, key) in keys.enumerated() {
+            children.append(try alignNode(try operand(expr, typ, key), trace.children[i], key, nil, nil))
+        }
+        return AlignedNode(expr: expr, trace: trace, operand: operandKey, index: index, element: element, children: children)
+    }
+    // A leaf — literal, binding, caller leaf: the trace carries its value and nothing beneath.
+    guard trace.children.isEmpty else { throw ExpressionError("align: \(typ) is a leaf but its trace has children \(at)") }
+    return AlignedNode(expr: expr, trace: trace, operand: operandKey, index: index, element: element, children: [])
+}

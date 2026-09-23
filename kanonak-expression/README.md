@@ -310,6 +310,30 @@ produce it is the caller's business and is not traced. Pinned by
 `filter-trace-pairs-body-k-with-source-element-k` and
 `list-map-caller-leaf-reads-each-element`.
 
+### align — the walk, once per port (0.3.3)
+
+Every consumer that wants to LABEL a verdict — a generated `format(explanation)`
+in each language binding — must perform the walk above, and there are seven
+of them. So the walk ships here, next to the group table it depends on, and
+grows with it: `align(expr, trace)` pairs the two trees and returns, per node,
+the expression node (where `readProp`, `varName`, … live), its trace node,
+`operand` (the key on the parent expression through which the node was
+reached; absent at the root), `index` (the position within a list operand, or
+the element index of an iterating body), `element` (`{loopVar, value}` for an
+iterating body — element *index* of the source value coerced to a list) and
+`children`. It pairs; it never renders — no strings, no display choices — so
+it is portable and pinnable. A trace that does not fit the expression (a
+different node type, a child count the group's shape does not allow) is an
+ERROR, never a best-effort pairing that would label the wrong node.
+
+[`vectors/expression-alignment-vectors.json`](./vectors/expression-alignment-vectors.json)
+pins it in all seven ports — including the two cases that mislabel silently
+without it: a short-circuited `And` (the aligned tree has ONE child) and a
+scalar source (`element` is the scalar, not `[k]` of it) — plus every direct
+operator's child order, nested binders with the same `loopVar`, and the two
+rejections. `expectError` there means: the trace of `expr`, aligned against
+`alignExpr`, must be refused.
+
 ## Totality
 
 Evaluation always terminates: the operator set has no loops, no recursion

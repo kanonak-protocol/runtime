@@ -1150,3 +1150,167 @@ func Explain(node Node, ctx interface{}, resolve Resolve, opts *Options) (trace 
 	}()
 	return explainPanic(node, ctx, resolve, opts, nil), nil
 }
+
+
+// ---------------------------------------------------------------------------
+// align — the trace↔expression walk (runtime#26). A trace carries verdicts,
+// not labels, and it does not mirror the expression node-for-node: its shape
+// follows the operator's DISPATCH GROUP (README, "The trace↔expression
+// contract"). Every consumer that wants to label a verdict — "which property was
+// read, on which element" — must walk both trees under that contract; this is
+// that walk, once per port, pinned by vectors/expression-alignment-vectors.json
+// so all seven agree. It PAIRS; it never renders. A trace that does not fit the
+// expression is an error, never a best-effort pairing that would label the wrong
+// node.
+// ---------------------------------------------------------------------------
+
+// AlignedElement is the binding in force for an iterating body: the loopVar
+// and element Index of the source value coerced to a list.
+type AlignedElement struct {
+	LoopVar string
+	Value   Value
+}
+
+// AlignedNode is one node of the expression paired with its verdict. Operand
+// is the key on the PARENT expression through which the node was reached (""
+// at the root); Index (valid when HasIndex) is the position within a list
+// operand or the element index of an iterating body; Element is set for an
+// iterating body only.
+type AlignedNode struct {
+	Expr     Node
+	Trace    *TraceNode
+	Operand  string
+	Index    int
+	HasIndex bool
+	Element  *AlignedElement
+	Children []*AlignedNode
+}
+
+var orderedComparison = map[string]bool{tx + "/IsAtLeast": true, tx + "/Dominates": true}
+
+// Trace-child order for the direct and list operators — the order Explain
+// visits them. Data operands (Join's separator, Matches' pattern) are not children.
+var directChildren = map[string][]string{
+	tx + "/Not":         {"operand"},
+	tx + "/ListItemAt":  {"source", "itemIndex"},
+	tx + "/Contains":    {"haystack", "needle"},
+	tx + "/IsSet":       {"checkExpr"},
+	tx + "/Matches":     {"matchSource"},
+	tx + "/Count":       {"source"},
+	tx + "/Sum":         {"source"},
+	tx + "/Min":         {"source"},
+	tx + "/Max":         {"source"},
+	tx + "/Average":     {"source"},
+	tx + "/Join":        {"source"},
+	tx + "/Reverse":     {"source"},
+	tx + "/IsString":    {"kindCheck"},
+	tx + "/IsNumber":    {"kindCheck"},
+	tx + "/IsReference": {"kindCheck"},
+	tx + "/IsList":      {"kindCheck"},
+}
+
+// Align pairs an expression with the trace Explain produced for it.
+func Align(expr Node, trace *TraceNode) (aligned *AlignedNode, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if e, ok := r.(*Error); ok {
+				err = e
+				return
+			}
+			panic(r)
+		}
+	}()
+	return alignNode(expr, trace, "", -1, nil), nil
+}
+
+func alignNode(expr Node, trace *TraceNode, operandKey string, index int, element *AlignedElement) *AlignedNode {
+	typ := expr.Type()
+	where := "at the root"
+	if operandKey != "" {
+		where = fmt.Sprintf("at operand '%s'", operandKey)
+		if index >= 0 {
+			where = fmt.Sprintf("at operand '%s'[%d]", operandKey, index)
+		}
+	}
+	if typ != trace.Type {
+		raise("align: expression node %s does not match trace node %s %s", typ, trace.Type, where)
+	}
+	node := &AlignedNode{Expr: expr, Trace: trace, Operand: operandKey, Element: element}
+	if index >= 0 {
+		node.Index, node.HasIndex = index, true
+	}
+	// IteratingExpression: [source, body×N], N = |source value coerced to a list|.
+	if body, ok := iteratorBody(typ); ok {
+		if len(trace.Children) < 1 {
+			raise("align: %s trace has no source child %s", typ, where)
+		}
+		node.Children = append(node.Children, alignNode(operand(expr, "source"), trace.Children[0], "source", -1, nil))
+		elements, isList := trace.Children[0].Value.([]Value)
+		if !isList {
+			elements = []Value{trace.Children[0].Value}
+		}
+		if len(trace.Children) != 1+len(elements) {
+			raise("align: %s trace has %d body traces for %d source elements %s", typ, len(trace.Children)-1, len(elements), where)
+		}
+		loopVar, _ := expr["loopVar"].(string)
+		bodyNode := operand(expr, body)
+		for k, el := range elements {
+			node.Children = append(node.Children, alignNode(bodyNode, trace.Children[k+1], body, k, &AlignedElement{LoopVar: loopVar, Value: el}))
+		}
+		return node
+	}
+	a, hasArity := operatorArity(typ)
+	// BooleanLogic: a PREFIX of `operands` — the tail was never evaluated.
+	if hasArity && a.kind == "nary" {
+		raw, ok := expr[a.a].([]interface{})
+		if !ok {
+			raise("align: %s is missing list operand '%s'", typ, a.a)
+		}
+		if len(trace.Children) > len(raw) {
+			raise("align: %s trace has %d children for %d operands %s", typ, len(trace.Children), len(raw), where)
+		}
+		for i, child := range trace.Children {
+			sub, ok := raw[i].(map[string]interface{})
+			if !ok {
+				raise("align: %s operand '%s'[%d] is not a node", typ, a.a, i)
+			}
+			node.Children = append(node.Children, alignNode(Node(sub), child, a.a, i, nil))
+		}
+		return node
+	}
+	// OrderedComparison: nothing beneath is traced.
+	if orderedComparison[typ] {
+		if len(trace.Children) != 0 {
+			raise("align: %s trace must have no children %s", typ, where)
+		}
+		return node
+	}
+	// Everything else with operands: positional, in the group's operand order.
+	var keys []string
+	if hasArity {
+		switch a.kind {
+		case "unary":
+			keys = []string{a.a}
+		case "binary":
+			keys = []string{a.a, a.b}
+		case "ternary":
+			keys = []string{a.a, a.b, a.c}
+		}
+	} else if k, ok := directChildren[typ]; ok {
+		keys = k
+	}
+	if keys != nil {
+		if len(trace.Children) != len(keys) {
+			raise("align: %s trace has %d children, expected %d %s", typ, len(trace.Children), len(keys), where)
+		}
+		for i, key := range keys {
+			node.Children = append(node.Children, alignNode(operand(expr, key), trace.Children[i], key, -1, nil))
+		}
+		return node
+	}
+	// A leaf — literal, binding, caller leaf: the trace carries its value and nothing beneath.
+	if len(trace.Children) != 0 {
+		raise("align: %s is a leaf but its trace has children %s", typ, where)
+	}
+	return node
+}

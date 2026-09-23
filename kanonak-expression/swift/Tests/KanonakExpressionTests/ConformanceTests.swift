@@ -223,3 +223,68 @@ final class ExpressionVectorTests: XCTestCase {
         try runFile("expression-vectors-2.json")
     }
 }
+
+/// Structural equality of an aligned tree against the vector's expected JSON tree.
+private func alignedMatches(_ got: AlignedNode, _ want: [String: Any]) throws -> Bool {
+    let typ = want["type"] as? String ?? ""
+    guard got.expr["type"] as? String == typ, got.trace.type == typ else { return false }
+    guard got.operand == want["operand"] as? String else { return false }
+    guard got.index == (want["index"] as? NSNumber).map({ $0.intValue }) else { return false }
+    if let wel = want["element"] as? [String: Any] {
+        guard let el = got.element, el.loopVar == wel["loopVar"] as? String,
+              let wv = wel["value"], el.value == (try valueOf(wv)) else { return false }
+    } else if got.element != nil {
+        return false
+    }
+    guard let wv = want["value"], got.trace.value == (try valueOf(wv)) else { return false }
+    let wantChildren = want["children"] as? [[String: Any]] ?? []
+    guard wantChildren.count == got.children.count else { return false }
+    for (g, w) in zip(got.children, wantChildren) where !(try alignedMatches(g, w)) { return false }
+    return true
+}
+
+final class ExpressionAlignmentTests: XCTestCase {
+    /// The alignment vectors: explain `expr`, then `align` — the pairing must be
+    /// exactly the expected tree, or an error where one is expected.
+    func testAlignmentVectors() throws {
+        let name = "expression-alignment-vectors.json"
+        let doc = try loadJSON(name)
+        guard let vectors = doc["vectors"] as? [[String: Any]], !vectors.isEmpty else {
+            XCTFail("\(name): no vectors loaded — refusing to report a passing gate")
+            return
+        }
+        var pass = 0
+        for v in vectors {
+            let id = v["id"] as? String ?? "(no id)"
+            guard let expr = v["expr"] as? [String: Any] else { XCTFail("[\(name)/\(id)] missing expr"); continue }
+            var env: [String: EvalValue] = [:]
+            for (k, x) in (v["env"] as? [String: Any] ?? [:]) { env[k] = try valueOf(x) }
+            let refEnv = (v["refEnv"] as? [String: String]) ?? [:]
+            var graph: [String: [String: EvalValue]] = [:]
+            for (uri, props) in (v["graph"] as? [String: Any] ?? [:]) {
+                var m: [String: EvalValue] = [:]
+                for (prop, x) in (props as? [String: Any] ?? [:]) { m[prop] = try valueOf(x) }
+                graph[uri] = m
+            }
+            let ctx = Ctx(env: env, refEnv: refEnv, graph: graph)
+            let options = EvalOptions<Ctx>(closures: closuresOf(v), resolveRef: resolveRef)
+            let trace: TraceNode
+            do { trace = try explain(expr, ctx, resolve, options: options) }
+            catch { XCTFail("[\(name)/\(id)] explain: \(error)"); continue }
+            if v["expectError"] as? Bool ?? false {
+                let target = (v["alignExpr"] as? [String: Any]) ?? expr
+                if (try? align(target, trace)) != nil { XCTFail("[\(name)/\(id)] expected align to reject the trace"); continue }
+                pass += 1
+                continue
+            }
+            let got: AlignedNode
+            do { got = try align(expr, trace) }
+            catch { XCTFail("[\(name)/\(id)] align: \(error)"); continue }
+            guard let want = v["expected"] as? [String: Any], try alignedMatches(got, want) else {
+                XCTFail("[\(name)/\(id)] alignment mismatch"); continue
+            }
+            pass += 1
+        }
+        print("\(name): \(pass)/\(vectors.count) pass")
+    }
+}

@@ -30,6 +30,7 @@ class Program
 
         int fail = RunFile(Path.Combine(vectorsDir, "expression-vectors.json"));
         fail += RunFile(Path.Combine(vectorsDir, "expression-vectors-2.json"));
+        fail += RunAlignFile(Path.Combine(vectorsDir, "expression-alignment-vectors.json"));
         if (fail == 0) Console.WriteLine("ALL VECTORS PASS");
         return fail == 0 ? 0 : 1;
     }
@@ -300,6 +301,91 @@ class Program
             pass++;
         }
         Console.WriteLine($"{name}: {pass}/{total} pass" + (fail == 0 ? "" : $", {fail} fail"));
+        return fail;
+    }
+
+    /// <summary>Structural equality of an aligned tree against the vector's expected JSON tree.</summary>
+    static bool AlignedMatches(AlignedNode got, JsonElement want)
+    {
+        string typ = want.GetProperty("type").GetString();
+        if (got.Expr.Type != typ || got.Trace.Type != typ) return false;
+        string wantOperand = want.TryGetProperty("operand", out var wo) ? wo.GetString() : null;
+        if (got.Operand != wantOperand) return false;
+        int? wantIndex = want.TryGetProperty("index", out var wi) ? wi.GetInt32() : (int?)null;
+        if (got.Index != wantIndex) return false;
+        bool hasWantEl = want.TryGetProperty("element", out var wel);
+        if ((got.Element == null) != !hasWantEl) return false;
+        if (got.Element != null && (got.Element.LoopVar != wel.GetProperty("loopVar").GetString()
+            || !DeepEqual(got.Element.Value, ValueOf(wel.GetProperty("value"))))) return false;
+        if (!want.TryGetProperty("value", out var wv) || !DeepEqual(got.Trace.Value, ValueOf(wv))) return false;
+        var wantChildren = want.TryGetProperty("children", out var wc) ? wc : default;
+        int wantCount = wantChildren.ValueKind == JsonValueKind.Array ? wantChildren.GetArrayLength() : 0;
+        if (wantCount != got.Children.Count) return false;
+        int i = 0;
+        if (wantCount > 0)
+            foreach (var w in wantChildren.EnumerateArray()) { if (!AlignedMatches(got.Children[i++], w)) return false; }
+        return true;
+    }
+
+    /// <summary>The alignment vectors: explain expr, then Align — the pairing must be exactly the expected tree,
+    /// or an error where one is expected. Returns the failure count.</summary>
+    static int RunAlignFile(string path)
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllText(path));
+        var vectors = doc.RootElement.GetProperty("vectors");
+        string name = Path.GetFileName(path);
+        int total = 0, pass = 0, fail = 0;
+        foreach (var v in vectors.EnumerateArray())
+        {
+            total++;
+            string id = v.GetProperty("id").GetString();
+            var expr = NodeOf(v.GetProperty("expr"));
+            var ctx = new Ctx();
+            if (v.TryGetProperty("env", out var env))
+                foreach (var p in env.EnumerateObject()) ctx.Env[p.Name] = ValueOf(p.Value);
+            if (v.TryGetProperty("refEnv", out var refEnv))
+                foreach (var p in refEnv.EnumerateObject()) ctx.RefEnv[p.Name] = p.Value.GetString();
+            if (v.TryGetProperty("graph", out var graph))
+                foreach (var node in graph.EnumerateObject())
+                {
+                    var props = new Dictionary<string, object>();
+                    foreach (var p in node.Value.EnumerateObject()) props[p.Name] = ValueOf(p.Value);
+                    ctx.Graph[node.Name] = props;
+                }
+            Dictionary<string, Dictionary<string, List<string>>> closures = null;
+            if (v.TryGetProperty("closures", out var cl))
+            {
+                closures = new Dictionary<string, Dictionary<string, List<string>>>();
+                foreach (var prop in cl.EnumerateObject())
+                {
+                    var inner = new Dictionary<string, List<string>>();
+                    foreach (var member in prop.Value.EnumerateObject())
+                    {
+                        var reach = new List<string>();
+                        foreach (var x in member.Value.EnumerateArray()) reach.Add(x.GetString());
+                        inner[member.Name] = reach;
+                    }
+                    closures[prop.Name] = inner;
+                }
+            }
+            var options = new EvalOptions { Closures = closures, ResolveRef = ResolveRefHook };
+            TraceNode trace;
+            try { trace = Expr.Explain(expr, ctx, ResolveHook, options); }
+            catch (ExpressionError e) { fail++; Console.WriteLine($"  FAIL [{name}/{id}] explain: {e.Message}"); continue; }
+            if (v.TryGetProperty("expectError", out var ee) && ee.GetBoolean())
+            {
+                var target = v.TryGetProperty("alignExpr", out var ae) ? NodeOf(ae) : expr;
+                try { Expr.Align(target, trace); fail++; Console.WriteLine($"  FAIL [{name}/{id}] expected align to reject the trace"); }
+                catch (ExpressionError) { pass++; }
+                continue;
+            }
+            AlignedNode got;
+            try { got = Expr.Align(expr, trace); }
+            catch (ExpressionError e) { fail++; Console.WriteLine($"  FAIL [{name}/{id}] align: {e.Message}"); continue; }
+            if (!AlignedMatches(got, v.GetProperty("expected"))) { fail++; Console.WriteLine($"  FAIL [{name}/{id}] alignment mismatch"); continue; }
+            pass++;
+        }
+        Console.WriteLine($"{name}: {pass}/{total} pass");
         return fail;
     }
 }

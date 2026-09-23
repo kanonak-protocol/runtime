@@ -953,4 +953,131 @@ public final class Expression {
         for (TraceNode n : nodes) out.add(n);
         return out;
     }
+
+    // -----------------------------------------------------------------------
+    // align — the trace↔expression walk (runtime#26). A trace carries verdicts,
+    // not labels, and it does not mirror the expression node-for-node: its shape
+    // follows the operator's DISPATCH GROUP (README, "The trace↔expression
+    // contract"). Every consumer that wants to label a verdict — "which property was
+    // read, on which element" — must walk both trees under that contract; this is
+    // that walk, once per port, pinned by vectors/expression-alignment-vectors.json
+    // so all seven agree. It PAIRS; it never renders. A trace that does not fit the
+    // expression is an error, never a best-effort pairing that would label the wrong
+    // node.
+    // -----------------------------------------------------------------------
+
+    /** The binding in force for an iterating body: the loopVar and element index of the source value coerced to a list. */
+    public static final class AlignedElement {
+        public final String loopVar;
+        public final Object value;
+        AlignedElement(String loopVar, Object value) { this.loopVar = loopVar; this.value = value; }
+    }
+
+    /** One node of the expression paired with its verdict. {@code operand} is the key on the PARENT expression
+     *  through which the node was reached (null at the root); {@code index} the position within a list operand or
+     *  the element index of an iterating body; {@code element} is set for an iterating body only. */
+    public static final class AlignedNode {
+        public final Map<String, Object> expr;
+        public final TraceNode trace;
+        public final String operand;
+        public final Integer index;
+        public final AlignedElement element;
+        public final List<AlignedNode> children = new ArrayList<>();
+        AlignedNode(Map<String, Object> expr, TraceNode trace, String operand, Integer index, AlignedElement element) {
+            this.expr = expr; this.trace = trace; this.operand = operand; this.index = index; this.element = element;
+        }
+    }
+
+    private static boolean isOrderedComparison(String typ) {
+        return (TX + "/IsAtLeast").equals(typ) || (TX + "/Dominates").equals(typ);
+    }
+
+    /** Trace-child order for the direct and list operators — the order explain visits them. */
+    private static String[] directChildren(String typ) {
+        switch (typ) {
+            case TX + "/Not": return new String[] {"operand"};
+            case TX + "/ListItemAt": return new String[] {"source", "itemIndex"};
+            case TX + "/Contains": return new String[] {"haystack", "needle"};
+            case TX + "/IsSet": return new String[] {"checkExpr"};
+            case TX + "/Matches": return new String[] {"matchSource"};
+            case TX + "/Count": case TX + "/Sum": case TX + "/Min": case TX + "/Max": case TX + "/Average":
+            case TX + "/Join": case TX + "/Reverse":
+                return new String[] {"source"};
+            case TX + "/IsString": case TX + "/IsNumber": case TX + "/IsReference": case TX + "/IsList":
+                return new String[] {"kindCheck"};
+            default: return null;
+        }
+    }
+
+    /** Pair an expression with the trace {@link #explain} produced for it. */
+    public static AlignedNode align(Map<String, Object> expr, TraceNode trace) {
+        return alignNode(expr, trace, null, null, null);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static AlignedNode alignNode(Map<String, Object> expr, TraceNode trace, String operandKey, Integer index,
+                                         AlignedElement element) {
+        String typ = expr.get("type") instanceof String s ? s : "";
+        String at = operandKey == null ? "at the root"
+            : "at operand '" + operandKey + "'" + (index == null ? "" : "[" + index + "]");
+        if (!typ.equals(trace.type)) {
+            throw err("align: expression node " + typ + " does not match trace node " + trace.type + " " + at);
+        }
+        AlignedNode node = new AlignedNode(expr, trace, operandKey, index, element);
+        // IteratingExpression: [source, body×N], N = |source value coerced to a list|.
+        String body = iteratorBody(typ);
+        if (body != null) {
+            if (trace.children.isEmpty()) throw err("align: " + typ + " trace has no source child " + at);
+            node.children.add(alignNode(operand(expr, typ, "source"), trace.children.get(0), "source", null, null));
+            Object src = trace.children.get(0).value;
+            List<Object> elements = src instanceof List<?> l ? (List<Object>) l : List.of(src);
+            if (trace.children.size() != 1 + elements.size()) {
+                throw err("align: " + typ + " trace has " + (trace.children.size() - 1) + " body traces for "
+                    + elements.size() + " source elements " + at);
+            }
+            String loopVar = expr.get("loopVar") instanceof String lv ? lv : "";
+            Map<String, Object> bodyNode = operand(expr, typ, body);
+            for (int k = 0; k < elements.size(); k++) {
+                node.children.add(alignNode(bodyNode, trace.children.get(k + 1), body, k,
+                    new AlignedElement(loopVar, elements.get(k))));
+            }
+            return node;
+        }
+        Arity a = operatorArity(typ);
+        // BooleanLogic: a PREFIX of `operands` — the tail was never evaluated.
+        if (a != null && "nary".equals(a.kind)) {
+            if (!(expr.get(a.a) instanceof List<?> raw)) throw err("align: " + typ + " is missing list operand '" + a.a + "'");
+            if (trace.children.size() > raw.size()) {
+                throw err("align: " + typ + " trace has " + trace.children.size() + " children for " + raw.size()
+                    + " operands " + at);
+            }
+            for (int i = 0; i < trace.children.size(); i++) {
+                node.children.add(alignNode((Map<String, Object>) raw.get(i), trace.children.get(i), a.a, i, null));
+            }
+            return node;
+        }
+        // OrderedComparison: nothing beneath is traced.
+        if (isOrderedComparison(typ)) {
+            if (!trace.children.isEmpty()) throw err("align: " + typ + " trace must have no children " + at);
+            return node;
+        }
+        // Everything else with operands: positional, in the group's operand order.
+        String[] keys = a != null
+            ? ("unary".equals(a.kind) ? new String[] {a.a}
+                : "binary".equals(a.kind) ? new String[] {a.a, a.b}
+                : new String[] {a.a, a.b, a.c})
+            : directChildren(typ);
+        if (keys != null) {
+            if (trace.children.size() != keys.length) {
+                throw err("align: " + typ + " trace has " + trace.children.size() + " children, expected " + keys.length + " " + at);
+            }
+            for (int i = 0; i < keys.length; i++) {
+                node.children.add(alignNode(operand(expr, typ, keys[i]), trace.children.get(i), keys[i], null, null));
+            }
+            return node;
+        }
+        // A leaf — literal, binding, caller leaf: the trace carries its value and nothing beneath.
+        if (!trace.children.isEmpty()) throw err("align: " + typ + " is a leaf but its trace has children " + at);
+        return node;
+    }
 }
