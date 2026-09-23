@@ -1388,6 +1388,203 @@
         }
       },
       "expected": 11
+    },
+    {
+      "id": "filter-trace-pairs-body-k-with-source-element-k",
+      "description": "runtime#26: the trace↔expression contract for an IteratingExpression. children[0] is the source trace; body trace k pairs with element k of the source value — EVERY element, including the one the predicate rejects (value 0): the trace is truthful about what ran, so \"which element failed\" is positional. What was read (readProp) is on the paired expression node, not repeated here",
+      "expr": {
+        "type": "kanonak.org/transformations/Count",
+        "source": {
+          "type": "kanonak.org/transformations/Filter",
+          "source": {
+            "type": "kanonak.org/transformations/VarRef",
+            "varName": "items"
+          },
+          "loopVar": "it",
+          "predicate": {
+            "type": "kanonak.org/transformations/Equals",
+            "compareLeft": {
+              "type": "kanonak.org/transformations/PropertyRead",
+              "readSource": {
+                "type": "kanonak.org/transformations/VarRef",
+                "varName": "it"
+              },
+              "readProp": "size"
+            },
+            "compareRight": {
+              "type": "kanonak.org/transformations/IntegerLiteral",
+              "integerLiteral": 20
+            }
+          }
+        }
+      },
+      "env": {
+        "items": [
+          {
+            "ref": "example.org/inv/item-1"
+          },
+          {
+            "ref": "example.org/inv/item-2"
+          }
+        ]
+      },
+      "graph": {
+        "example.org/inv/item-1": {
+          "size": 10,
+          "tags": [
+            "a",
+            "b"
+          ]
+        },
+        "example.org/inv/item-2": {
+          "size": 20,
+          "tags": "c",
+          "owner": {
+            "ref": "example.org/inv/ann"
+          }
+        }
+      },
+      "expected": 1,
+      "trace": {
+        "type": "kanonak.org/transformations/Count",
+        "value": 1,
+        "children": [
+          {
+            "type": "kanonak.org/transformations/Filter",
+            "value": [
+              {
+                "ref": "example.org/inv/item-2"
+              }
+            ],
+            "children": [
+              {
+                "type": "kanonak.org/transformations/VarRef",
+                "value": [
+                  {
+                    "ref": "example.org/inv/item-1"
+                  },
+                  {
+                    "ref": "example.org/inv/item-2"
+                  }
+                ],
+                "children": []
+              },
+              {
+                "type": "kanonak.org/transformations/Equals",
+                "value": 0,
+                "children": [
+                  {
+                    "type": "kanonak.org/transformations/PropertyRead",
+                    "value": 10,
+                    "children": []
+                  },
+                  {
+                    "type": "kanonak.org/transformations/IntegerLiteral",
+                    "value": 20,
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "type": "kanonak.org/transformations/Equals",
+                "value": 1,
+                "children": [
+                  {
+                    "type": "kanonak.org/transformations/PropertyRead",
+                    "value": 20,
+                    "children": []
+                  },
+                  {
+                    "type": "kanonak.org/transformations/IntegerLiteral",
+                    "value": 20,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "filter-trace-scalar-source-is-coerced-to-a-list",
+      "description": "The coercion hole in the pairing rule: a source that resolves to ONE value (the caller convention: one → itself) is iterated as a one-element list, but the source trace carries the SCALAR. So the rule is \"element k of the source value coerced to a list\" — a consumer indexing children[0].value directly indexes a scalar. Pinned here so no port and no consumer gets it wrong",
+      "expr": {
+        "type": "kanonak.org/transformations/Filter",
+        "source": {
+          "type": "kanonak.org/transformations/PropertyRead",
+          "readSource": {
+            "type": "kanonak.org/transformations/VarRef",
+            "varName": "x"
+          },
+          "readProp": "tags"
+        },
+        "loopVar": "t",
+        "predicate": {
+          "type": "kanonak.org/transformations/Equals",
+          "compareLeft": {
+            "type": "kanonak.org/transformations/VarRef",
+            "varName": "t"
+          },
+          "compareRight": {
+            "type": "kanonak.org/transformations/StringLiteral",
+            "stringLiteral": "c"
+          }
+        }
+      },
+      "env": {
+        "x": {
+          "ref": "example.org/inv/item-2"
+        }
+      },
+      "graph": {
+        "example.org/inv/item-1": {
+          "size": 10,
+          "tags": [
+            "a",
+            "b"
+          ]
+        },
+        "example.org/inv/item-2": {
+          "size": 20,
+          "tags": "c",
+          "owner": {
+            "ref": "example.org/inv/ann"
+          }
+        }
+      },
+      "expected": [
+        "c"
+      ],
+      "trace": {
+        "type": "kanonak.org/transformations/Filter",
+        "value": [
+          "c"
+        ],
+        "children": [
+          {
+            "type": "kanonak.org/transformations/PropertyRead",
+            "value": "c",
+            "children": []
+          },
+          {
+            "type": "kanonak.org/transformations/Equals",
+            "value": 1,
+            "children": [
+              {
+                "type": "kanonak.org/transformations/VarRef",
+                "value": "c",
+                "children": []
+              },
+              {
+                "type": "kanonak.org/transformations/StringLiteral",
+                "value": "c",
+                "children": []
+              }
+            ]
+          }
+        ]
+      }
     }
   ]
 }

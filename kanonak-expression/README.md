@@ -268,16 +268,47 @@ the meaning of persisted rules.
 
 `explain(node, ctx, resolve, options)` evaluates and returns a trace mirroring
 the expression — the regex-debugger view: each evaluated node with its own
-verdict (`type`, `value`, `children`; ordered comparisons carry the resolved
-`leftRef`/`rightRef` instead of children; an iterating operator's children are
-its source trace followed by one body trace per visited element).
-Short-circuited operands are absent — the trace is truthful about what ran.
-`evaluate` stays a bare value and is untouched by tracing; every parity vector
-runs through both entry points and their values must agree, so they cannot
-drift. The trace is a runtime return shape, not an ontology class — nothing
-authors one. (A host assembling an AUTHORED report — e.g. a SHACL
-ValidationReport — builds it FROM these traces; the report vocabulary lives
-with the host's ontology, not here.)
+verdict (`type`, `value`, `children`). `evaluate` stays a bare value and is
+untouched by tracing; every parity vector runs through both entry points and
+their values must agree, so they cannot drift. The trace is a runtime return
+shape, not an ontology class — nothing authors one. (A host assembling an
+AUTHORED report — e.g. a SHACL ValidationReport — builds it FROM these traces;
+the report vocabulary lives with the host's ontology, not here.)
+
+### The trace↔expression contract (runtime#26)
+
+A trace node carries a verdict, not a label: it says `PropertyRead = 10`, not
+*which property* was read or *on which element*. Both are recoverable, but
+only by walking the trace and the expression together — and the two trees do
+NOT mirror node-for-node. The trace's shape follows the operator's **dispatch
+group** (the table above), and a walker keyed on the group stays correct when
+the group gains operators (the reserved iterating family is additive for
+`evaluate` AND for every trace consumer only under this rule). There are
+exactly four shapes:
+
+| Group | Trace children | Pairing with the expression |
+|---|---|---|
+| every other group (`UnaryNumericOp`, `BinaryArithmetic`, `BinaryComparison`, `ListAggregate`, `ListSourced`, `KindPredicate`, the direct operators) | one per operand, in the operand order of the table above | positional: child *i* ↔ operand *i* |
+| `BooleanLogic` (`And`, `Or`) | a **prefix** of `operands` — operands after the deciding one are ABSENT (the same short-circuit as `evaluate`; the trace is truthful about what ran) | child *i* ↔ `operands[i]`; a missing tail means "never evaluated", never "evaluated to nothing" |
+| `OrderedComparison` (`IsAtLeast`, `Dominates`) | **none** — the node carries the resolved `leftRef` / `rightRef` identities instead | nothing to pair; the verdict is on the node |
+| `IteratingExpression` (`Filter`, `ListMap`, `ForEach`, and the reserved family) | the **source** trace, then **one body trace per element** — every element, including one a `Filter` rejects (its body verdict is `0`) | `children[0]` ↔ `source`; body trace *k* ↔ the body operand, evaluated with `loopVar` bound to **element *k* of the source value coerced to a list** |
+
+The coercion in the last row is the one place a walker silently goes wrong: a
+source that resolves to ONE value (the caller convention — absent → `[]`, one
+→ itself, many → a list) is iterated as a one-element list, but the source
+trace carries the scalar. `children[0].value[k]` is the element only when the
+value IS a list; the rule is "element *k* of the source value coerced to a
+list". Pinned by `filter-trace-scalar-source-is-coerced-to-a-list`.
+
+So, to answer "which element failed and what was read" for
+`Count(Filter(items, it => PropertyRead(it, size) == 20))`: the Filter's
+`children[0].value` is the element list; body trace *k* is the verdict for
+element *k*; inside it, the `PropertyRead` leaf's `value` is what came back
+and the paired expression node's `readProp` is what was asked for. A caller
+leaf appears as a leaf carrying its resolved value — what the caller did to
+produce it is the caller's business and is not traced. Pinned by
+`filter-trace-pairs-body-k-with-source-element-k` and
+`list-map-caller-leaf-reads-each-element`.
 
 ## Totality
 
