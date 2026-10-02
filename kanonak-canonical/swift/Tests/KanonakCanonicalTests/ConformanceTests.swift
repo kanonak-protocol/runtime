@@ -116,6 +116,21 @@ final class CoordinateVectorTests: XCTestCase {
             XCTAssertEqual(displayName(input), expected, "[\(id)]")
         }
     }
+
+    func testReadableVectors() throws {
+        let doc = try loadJSON("coordinate-vectors.json")
+        let vectors = doc["readableVectors"] as! [[String: Any]]
+        XCTAssertFalse(vectors.isEmpty)
+        func ver(_ raw: Any?) -> CoordinateVersion {
+            let m = raw as! [String: Any]
+            return CoordinateVersion(major: m["major"] as! Int, minor: m["minor"] as! Int, patch: m["patch"] as! Int)
+        }
+        for v in vectors {
+            let id = v["id"] as! String
+            let expected = v["readable"] as! Bool
+            XCTAssertEqual(isReadableBy(ver(v["written"]), ver(v["reader"])), expected, "[\(id)]")
+        }
+    }
 }
 
 private func decodeSubjects(_ input: [String: Any]) -> Package {

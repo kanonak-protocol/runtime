@@ -138,8 +138,23 @@ public final class Conformance {
             if (expected.equals(got)) pass++;
             else { fail++; System.out.println("  FAIL [" + id + "] expected '" + expected + "', got '" + got + "'"); }
         }
+        for (Object o : (List<Object>) doc.get("readableVectors")) {
+            Map<String, Object> v = (Map<String, Object>) o;
+            total++;
+            String id = (String) v.get("id");
+            boolean expected = (Boolean) v.get("readable");
+            boolean got = Coordinate.isReadableBy(version(v.get("written")), version(v.get("reader")));
+            if (expected == got) pass++;
+            else { fail++; System.out.println("  FAIL [" + id + "] isReadableBy expected " + expected + ", got " + got); }
+        }
         System.out.println("coordinate-vectors: " + pass + "/" + total + " pass, " + fail + " fail");
         return fail;
+    }
+
+    @SuppressWarnings("unchecked")
+    static Coordinate.Version version(Object raw) {
+        Map<String, Object> m = (Map<String, Object>) raw;
+        return new Coordinate.Version(((Number) m.get("major")).intValue(), ((Number) m.get("minor")).intValue(), ((Number) m.get("patch")).intValue());
     }
 
     @SuppressWarnings("unchecked")

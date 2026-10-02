@@ -67,4 +67,6 @@ and drives the SAME shared golden vectors as the six native ports —
 `../vectors/codec-vectors.json`, `codec-vectors-embedded.json`, and
 `codec-vectors-types.json` (including the `$ref` object-reference and `$extra`
 open-world cases, and the `$types` reject-on-all-three-surfaces + round-trip
-contract) — through the component's WIT surface.
+contract) — through the component's WIT surface, plus the deserialize and hash
+sections of `codec-vectors-compat.json` (reading a node typed at an earlier
+compatible version; hashing stays exact-version).

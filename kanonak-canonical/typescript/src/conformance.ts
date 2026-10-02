@@ -11,7 +11,7 @@ import {
   versionlessKey,
   localName,
   displayName,
-  lenientVersionlessKey,
+  lenientVersionlessKey, isReadableBy,
 } from './Coordinate.js';
 
 const vdir = new URL('../../vectors/', import.meta.url);
@@ -105,7 +105,12 @@ for (const v of co.displayNameVectors) {
   if (got === v.expected) cpass++;
   else { fails++; console.error(`coordinate ${v.id}: expected ${JSON.stringify(v.expected)} got ${JSON.stringify(got)}`); }
 }
-console.log(`coordinate-vectors: ${cpass}/${co.parseVectors.length + co.lenientKeyVectors.length + co.displayNameVectors.length} pass`);
+for (const v of co.readableVectors) {
+  const got = isReadableBy(v.written, v.reader);
+  if (got === v.readable) cpass++;
+  else { fails++; console.error(`coordinate ${v.id}: isReadableBy expected ${v.readable} got ${got}`); }
+}
+console.log(`coordinate-vectors: ${cpass}/${co.parseVectors.length + co.lenientKeyVectors.length + co.displayNameVectors.length + co.readableVectors.length} pass`);
 
 if (fails > 0) { console.error(`\n${fails} FAILURES`); process.exit(1); }
 console.log('\nALL VECTORS PASS');

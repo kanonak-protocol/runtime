@@ -121,6 +121,13 @@ type Prop struct {
 type Class struct {
 	TypeURI string          `json:"typeUri"`
 	Props   map[string]Prop `json:"props"`
+	// Ancestors is every superclass of the class, transitively, by durable
+	// VERSIONED URI (0.6.1, runtime#28) - what lets TypeMatches accept a
+	// subclass node for a superclass check (an Application check accepts a
+	// TerminalApplication). Optional and additive: a schema without it is still
+	// valid, and canonicalization never reads it. Absent, a type match is by the
+	// class itself only - stricter, never looser.
+	Ancestors []string `json:"ancestors,omitempty"`
 }
 
 // EnumMember is one member of a closed set of named individuals. A struct even
@@ -257,9 +264,9 @@ func embeddedValue(prop Prop, m map[string]interface{}, schema CodecSchema) (can
 			"codec: cannot map embedded value under %s: it carries no $type and the "+
 				"property declares no range", prop.Predicate)
 	}
-	cls, ok := schema.Classes[clsURI]
-	if !ok {
-		return nil, fmt.Errorf("codec: no schema for embedded type %s", clsURI)
+	cls, err := hashClassFor(schema, clsURI, "embedded type")
+	if err != nil {
+		return nil, err
 	}
 
 	stmts, err := fieldStatements(m, cls, schema)
@@ -362,9 +369,9 @@ func statements(node map[string]interface{}, schema CodecSchema) ([]canonical.St
 	if typeURI == "" {
 		return nil, fmt.Errorf("codec: node is missing $type")
 	}
-	cls, ok := schema.Classes[typeURI]
-	if !ok {
-		return nil, fmt.Errorf("codec: no schema for type %s", typeURI)
+	cls, err := hashClassFor(schema, typeURI, "type")
+	if err != nil {
+		return nil, err
 	}
 
 	// The rdf:type triple(s) every subject carries: one per $types member for a
@@ -479,6 +486,11 @@ func Serialize(node map[string]interface{}) (map[string]interface{}, error) {
 // Deserialize parses normalized JSON into a typed node. $-envelope keys and
 // fields modeled on the node's $type stay top-level; every other key is
 // collected into $extra so a strongly-typed consumer round-trips it losslessly.
+//
+// Requires a class in the schema that can read $type: the exact class, or the
+// same class at a compatible later version (runtime#28 - see classFor). The
+// node keeps the $type it was WRITTEN with; the producer's bytes are the
+// producer's.
 func Deserialize(jsonObj map[string]interface{}, schema CodecSchema) (map[string]interface{}, error) {
 	typeURI, ok := jsonObj["$type"].(string)
 	if !ok {
@@ -495,9 +507,9 @@ func Deserialize(jsonObj map[string]interface{}, schema CodecSchema) (map[string
 	if err := assertTypesEnvelopes(jsonObj, "deserialize "+where); err != nil {
 		return nil, err
 	}
-	cls, ok := schema.Classes[typeURI]
-	if !ok {
-		return nil, fmt.Errorf("codec: cannot deserialize: no schema for type %s", typeURI)
+	cls, err := classFor(schema, typeURI)
+	if err != nil {
+		return nil, fmt.Errorf("codec: cannot deserialize: %w", err)
 	}
 
 	node := map[string]interface{}{"$type": typeURI}
@@ -517,4 +529,218 @@ func Deserialize(jsonObj map[string]interface{}, schema CodecSchema) (map[string
 		node["$extra"] = extra
 	}
 	return node, nil
+}
+
+// --- Compatible-version lookup (0.6.1, runtime#28) ---------------------------
+
+// coordinateOf parses uri with canonical's STRICT coordinate grammar, reporting
+// false when it is not one (never errors).
+func coordinateOf(uri string) (canonical.Coordinate, bool) {
+	c, err := canonical.ParseCoordinate(uri)
+	return c, err == nil
+}
+
+func keyOf(c canonical.Coordinate) string {
+	return c.Publisher + "/" + c.Package + "/" + c.Name
+}
+
+func compareVersions(a, b canonical.CoordinateVersion) int {
+	switch {
+	case a.Major != b.Major:
+		return a.Major - b.Major
+	case a.Minor != b.Minor:
+		return a.Minor - b.Minor
+	default:
+		return a.Patch - b.Patch
+	}
+}
+
+func formatVersion(v canonical.CoordinateVersion) string {
+	return fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch)
+}
+
+// classFor is THE class lookup (runtime#28). A node is typed with the version
+// of the class its producer's import resolved to; a codec generated from a
+// later COMPATIBLE version of the same package must still read it. So: the
+// exact versioned key first, then the class with the same publisher, package
+// and name whose version can read the written one - canonical.IsReadableBy,
+// the protocol's single compatibility rule, pinned in every port. When nothing
+// matches, the error says why, ending in a bracketed kind the conformance
+// vectors pin: [unknown-type], [newer-version] (the data may use terms this
+// schema lacks), [other-major], or [other-minor-line] (below 1.0.0 the minor is
+// the incompatible line).
+func classFor(schema CodecSchema, typeURI string) (Class, error) {
+	if exact, ok := schema.Classes[typeURI]; ok {
+		return exact, nil
+	}
+	written, ok := coordinateOf(typeURI)
+	if !ok || written.Version == nil {
+		return Class{}, fmt.Errorf("no schema for type %s [unknown-type]", typeURI)
+	}
+	key := keyOf(written)
+
+	var readable Class
+	var readableVersion, nearest *canonical.CoordinateVersion
+	for uri, cls := range schema.Classes {
+		c, ok := coordinateOf(uri)
+		if !ok || c.Version == nil || keyOf(c) != key {
+			continue
+		}
+		if canonical.IsReadableBy(*written.Version, *c.Version) {
+			if readableVersion == nil || compareVersions(*c.Version, *readableVersion) > 0 {
+				readable, readableVersion = cls, c.Version
+			}
+		} else if nearest == nil || compareVersions(*c.Version, *nearest) > 0 {
+			nearest = c.Version
+		}
+	}
+	if readableVersion != nil {
+		return readable, nil
+	}
+	if nearest == nil {
+		return Class{}, fmt.Errorf("no schema for type %s [unknown-type]", typeURI)
+	}
+	return Class{}, incompatibleVersion(typeURI, *written.Version, *nearest)
+}
+
+func incompatibleVersion(typeURI string, w, r canonical.CoordinateVersion) error {
+	ws, rs := formatVersion(w), formatVersion(r)
+	if w.Major != r.Major {
+		return fmt.Errorf(
+			"%s is written at %s, a different major version than this codec's schema (%s) [other-major]",
+			typeURI, ws, rs)
+	}
+	if w.Major == 0 && w.Minor != r.Minor {
+		return fmt.Errorf(
+			"%s is written at %s; below 1.0.0 a different minor is a different version line than this "+
+				"codec's schema (%s) [other-minor-line]",
+			typeURI, ws, rs)
+	}
+	return fmt.Errorf(
+		"%s is written at %s, newer than this codec's schema (%s); upgrade the codec to read it [newer-version]",
+		typeURI, ws, rs)
+}
+
+// hashClassFor returns the class to HASH a node or embedded value with: the
+// exact versioned class only. A content hash is computed over the producer's
+// predicate and type URIs, versions included, so a node written at an earlier
+// compatible version cannot be re-hashed with a later schema - its predicates
+// would carry the later version and the hash would differ. When only a
+// compatible class exists, say so ([hash-needs-exact-version]) rather than
+// produce a different hash or the bare "no schema" error.
+func hashClassFor(schema CodecSchema, typeURI, what string) (Class, error) {
+	if exact, ok := schema.Classes[typeURI]; ok {
+		return exact, nil
+	}
+	cls, err := classFor(schema, typeURI)
+	if err != nil {
+		return Class{}, fmt.Errorf("codec: no schema for %s %s [unknown-type]", what, typeURI)
+	}
+	return Class{}, fmt.Errorf(
+		"codec: cannot hash %s %s: this codec's schema has it at %s, and a content hash is computed "+
+			"with the producer's schema version — hashing needs the exact class [hash-needs-exact-version]",
+		what, typeURI, cls.TypeURI)
+}
+
+// TypeMatches reports whether a node is an instance of the class classURI -
+// what a generated type guard asks (runtime#28). Each of the node's types
+// ($types, else its $type) is resolved through the same compatible lookup
+// Deserialize uses, so a node written at an earlier compatible version
+// satisfies the later version's guard; it matches when that class IS classURI
+// or has it among its Ancestors. Classes compare by versionless identity. A
+// type this schema cannot read (unknown, newer, another major) never matches.
+// Errors only when classURI is not a class coordinate. For a typed instance,
+// KanonakNode.TypeMatches asks the same question of its envelope.
+func TypeMatches(node map[string]interface{}, classURI string, schema CodecSchema) (bool, error) {
+	var members []string
+	switch raw := node["$types"].(type) {
+	case []string:
+		members = raw
+	case []interface{}:
+		for _, m := range raw {
+			if s, isStr := m.(string); isStr {
+				members = append(members, s)
+			}
+		}
+	default:
+		if primary, _ := node["$type"].(string); primary != "" {
+			members = []string{primary}
+		}
+	}
+	return typeMatchesMembers(members, classURI, schema)
+}
+
+// typeMatchesMembers is the one type-match walk over a node's type members
+// ($types, else $type), shared by the map and typed surfaces.
+func typeMatchesMembers(members []string, classURI string, schema CodecSchema) (bool, error) {
+	target, ok := coordinateOf(classURI)
+	if !ok {
+		return false, fmt.Errorf("codec: TypeMatches: %q is not a class coordinate", classURI)
+	}
+	targetKey := keyOf(target)
+	matches := func(uri string) bool {
+		c, ok := coordinateOf(uri)
+		return ok && keyOf(c) == targetKey
+	}
+	for _, member := range members {
+		cls, err := classFor(schema, member)
+		if err != nil {
+			continue
+		}
+		if matches(cls.TypeURI) {
+			return true, nil
+		}
+		for _, a := range cls.Ancestors {
+			if matches(a) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// EnumMemberMatch is an enumeration member found by LookupEnumMember.
+type EnumMemberMatch struct {
+	// EnumType is the enumeration class's durable URI (its key in Enums).
+	EnumType string
+	// URI is the member's durable URI as this schema keys it.
+	URI    string
+	Member EnumMember
+}
+
+// LookupEnumMember returns the enumeration member a {"$ref": ...} names
+// (runtime#28): the exact versioned key first, then the same member at a
+// version that can read the written one - so a member referenced at an earlier
+// compatible version of the package resolves against a later schema. ok is
+// false when this schema has no such member, which, as for Enums itself, means
+// "not mine", never "invalid". (Named Lookup* because EnumMember is the member
+// type.)
+func LookupEnumMember(schema CodecSchema, ref string) (EnumMemberMatch, bool) {
+	for enumType, e := range schema.Enums {
+		if member, ok := e.Members[ref]; ok {
+			return EnumMemberMatch{EnumType: enumType, URI: ref, Member: member}, true
+		}
+	}
+	written, ok := coordinateOf(ref)
+	if !ok || written.Version == nil {
+		return EnumMemberMatch{}, false
+	}
+	key := keyOf(written)
+	var best EnumMemberMatch
+	var bestVersion *canonical.CoordinateVersion
+	for enumType, e := range schema.Enums {
+		for uri, member := range e.Members {
+			c, ok := coordinateOf(uri)
+			if !ok || c.Version == nil || keyOf(c) != key {
+				continue
+			}
+			if !canonical.IsReadableBy(*written.Version, *c.Version) {
+				continue
+			}
+			if bestVersion == nil || compareVersions(*c.Version, *bestVersion) > 0 {
+				best, bestVersion = EnumMemberMatch{EnumType: enumType, URI: uri, Member: member}, c.Version
+			}
+		}
+	}
+	return best, bestVersion != nil
 }

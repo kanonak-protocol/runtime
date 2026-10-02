@@ -171,3 +171,14 @@ func LenientVersionlessKey(uri string) (string, bool) {
 	}
 	return publisher + "/" + pkg + "/" + name, true
 }
+
+// IsReadableBy reports whether data whose terms were written at version `written` can be read by a reader whose schema is at version `reader` (runtime#28), pinned by readableVectors: a different major is never readable; from 1.0.0 the reader needs a minor at least the writer's (a patch changes no term, so it is not compared); below 1.0.0 the minor is the incompatible line and the reader needs the same minor and a patch at least the writer's.
+func IsReadableBy(written, reader CoordinateVersion) bool {
+	if written.Major != reader.Major {
+		return false
+	}
+	if written.Major == 0 {
+		return reader.Minor == written.Minor && reader.Patch >= written.Patch
+	}
+	return reader.Minor >= written.Minor
+}

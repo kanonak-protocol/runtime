@@ -60,4 +60,30 @@ collections are ordered lists — list order is semantic and hashed. An empty
 list contributes no statement (absent and empty are identical at the canonical
 layer). Gated by `vectors/codec-vectors-embedded.json`.
 
+## Reading earlier compatible versions (0.6.1)
+
+A node is typed with the version of the class its producer's import resolved
+to. A codec generated from a later **compatible** version of the same package
+still reads it: `deserialize` takes the exact versioned class first, then the
+same class at the highest schema version that `isReadableBy` (from
+`@kanonak-protocol/canonical`) says can read the written one. The node keeps
+the `$type` it was written with.
+
+- **`typeMatches(node, classUri, schema)`** — what a generated type guard asks.
+  Each of the node's types (`$types`, else `$type`) goes through the same
+  compatible lookup and matches when the class is `classUri` or has it among
+  its `ancestors`, the optional transitive superclass list a `CodecClass` may
+  carry. Classes compare by versionless identity.
+- **`enumMember(schema, ref)`** — the enumeration member a `{"$ref"}` names,
+  exact first, then the same member at a compatible later version.
+- **Hashing stays exact-version.** A content hash covers the producer's
+  predicate and type URIs, versions included, so a schema at a later version
+  cannot reproduce it. Hashing a node whose exact class is missing fails with
+  `[hash-needs-exact-version]` when only a compatible class exists.
+
+Errors end in a bracketed kind: `[unknown-type]`, `[newer-version]` (the data
+may use terms this schema lacks), `[other-major]`, `[other-minor-line]` (below
+1.0.0 the minor is the incompatible line) and `[hash-needs-exact-version]`.
+Gated by `vectors/codec-vectors-compat.json`.
+
 Source & issues: https://github.com/kanonak-protocol/runtime

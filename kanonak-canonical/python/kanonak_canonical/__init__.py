@@ -34,6 +34,7 @@ CANONICAL_FORM_VERSION = "1"
 # routes to no carrier (raw token preserved), never to a guess. No ordering
 # API on purpose: runtime consumers compare coordinates for equality only.
 # ``#`` is reserved for embedded resources and rejected by the strict parser.
+# One version relation lives here too (runtime#28): ``is_readable_by``.
 
 
 @dataclass(frozen=True)
@@ -119,6 +120,20 @@ def display_name(uri: str) -> str:
         return parse_coordinate(uri).name
     except ValueError:
         return uri
+
+
+def is_readable_by(written: "CoordinateVersion", reader: "CoordinateVersion") -> bool:
+    """Whether data whose terms were written at version ``written`` can be read
+    by a reader whose schema is at version ``reader`` (runtime#28), pinned by
+    ``readableVectors``: a different major is never readable; from 1.0.0 the
+    reader needs a minor at least the writer's (a patch changes no term, so it
+    is not compared); below 1.0.0 the minor is the incompatible line and the
+    reader needs the same minor and a patch at least the writer's."""
+    if written.major != reader.major:
+        return False
+    if written.major == 0:
+        return reader.minor == written.minor and reader.patch >= written.patch
+    return reader.minor >= written.minor
 
 
 def lenient_versionless_key(uri: str) -> Optional[str]:

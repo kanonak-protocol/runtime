@@ -20,14 +20,26 @@ ONE of a reference to a named resource (``ref``) or an embedded node
 (``embed``); the choice between the arms is authorial and HASH-RELEVANT, so it
 is explicit here, never inferred. An embedded value's authored dict-key rides
 ``$name`` and is likewise hash-relevant.
+
+Reading data typed at an earlier COMPATIBLE version of the schema's own package
+(0.6.1, runtime#28): ``deserialize``, ``type_matches`` and ``enum_member``
+resolve a type or member URI through the exact versioned key first, then the
+same publisher/package/name at the highest schema version that can read the
+written one (``is_readable_by`` from ``kanonak-canonical``). Hashing stays
+exact-version only. Every rejection message ends in a bracketed kind:
+``[unknown-type]``, ``[newer-version]``, ``[other-major]``,
+``[other-minor-line]``, ``[hash-needs-exact-version]``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from kanonak_canonical import (
+    Coordinate,
+    CoordinateVersion,
     Embedded,
     KList,
     Package,
@@ -39,6 +51,8 @@ from kanonak_canonical import (
     canonical_form as _canonical_form,
     canonical_hash as _canonical_hash,
     carrier_of,
+    is_readable_by,
+    parse_coordinate,
 )
 
 # The reserved ``$``-envelope keys, which never become statements/predicates.
@@ -115,6 +129,200 @@ def _lexical(value: Any) -> str:
     return str(value)
 
 
+# ---------------------------------------------------------------------------
+# Compatible-version lookup (0.6.1, runtime#28)
+# ---------------------------------------------------------------------------
+#
+# A schema class may carry an optional ``ancestors`` list: every superclass of
+# the class, transitively, by durable VERSIONED URI. It is what lets
+# ``type_matches`` accept a subclass node for a superclass check. Additive and
+# canonicalization-INERT: a schema without it is still valid, and absent, a
+# type match is by the class itself only — stricter, never looser.
+
+
+class _Unreadable(Exception):
+    """``_class_for``'s miss: the message ends in the bracketed kind."""
+
+
+def _coordinate_of(uri: Any) -> Optional[Coordinate]:
+    """The parsed coordinate (STRICT grammar), or None when ``uri`` is not one."""
+    if not isinstance(uri, str):
+        return None
+    try:
+        return parse_coordinate(uri)
+    except ValueError:
+        return None
+
+
+def _key_of(c: Coordinate) -> str:
+    return f"{c.publisher}/{c.package}/{c.name}"
+
+
+def _version_tuple(v: CoordinateVersion) -> "tuple[int, int, int]":
+    return (v.major, v.minor, v.patch)
+
+
+def _format_version(v: CoordinateVersion) -> str:
+    return f"{v.major}.{v.minor}.{v.patch}"
+
+
+def _incompatible_version(type_uri: str, w: CoordinateVersion, r: CoordinateVersion) -> str:
+    ws, rs = _format_version(w), _format_version(r)
+    if w.major != r.major:
+        return (
+            f"{type_uri} is written at {ws}, a different major version than this "
+            f"codec's schema ({rs}) [other-major]"
+        )
+    if w.major == 0 and w.minor != r.minor:
+        return (
+            f"{type_uri} is written at {ws}; below 1.0.0 a different minor is a "
+            f"different version line than this codec's schema ({rs}) [other-minor-line]"
+        )
+    return (
+        f"{type_uri} is written at {ws}, newer than this codec's schema ({rs}); "
+        "upgrade the codec to read it [newer-version]"
+    )
+
+
+def _class_for(schema: Dict[str, Any], type_uri: Any) -> Dict[str, Any]:
+    """THE class lookup (runtime#28). A node is typed with the version of the
+    class its producer's import resolved to; a codec generated from a later
+    COMPATIBLE version of the same package must still read it. So: the exact
+    versioned key first, then the class with the same publisher, package and
+    name whose version can read the written one — ``is_readable_by`` from
+    ``kanonak-canonical``, the protocol's single compatibility rule. When
+    nothing matches, raises ``_Unreadable`` whose message ends in a bracketed
+    kind: ``[unknown-type]``, ``[newer-version]`` (the data may use terms this
+    schema lacks), ``[other-major]``, or ``[other-minor-line]`` (below 1.0.0
+    the minor is the incompatible line)."""
+    classes = schema["classes"]
+    if isinstance(type_uri, str):
+        exact = classes.get(type_uri)
+        if exact is not None:
+            return exact
+    written = _coordinate_of(type_uri)
+    if written is None or written.version is None:
+        raise _Unreadable(f"no schema for type {type_uri} [unknown-type]")
+    key = _key_of(written)
+
+    readable: Optional[Dict[str, Any]] = None
+    readable_version: Optional[CoordinateVersion] = None
+    nearest: Optional[CoordinateVersion] = None
+    for uri, cls in classes.items():
+        c = _coordinate_of(uri)
+        if c is None or c.version is None or _key_of(c) != key:
+            continue
+        if is_readable_by(written.version, c.version):
+            if readable_version is None or _version_tuple(c.version) > _version_tuple(readable_version):
+                readable, readable_version = cls, c.version
+        elif nearest is None or _version_tuple(c.version) > _version_tuple(nearest):
+            nearest = c.version
+    if readable is not None:
+        return readable
+    if nearest is None:
+        raise _Unreadable(f"no schema for type {type_uri} [unknown-type]")
+    raise _Unreadable(_incompatible_version(type_uri, written.version, nearest))
+
+
+def _hash_class_for(schema: Dict[str, Any], type_uri: str, what: str) -> Dict[str, Any]:
+    """The class to HASH a node or embedded value with: the exact versioned
+    class only. A content hash is computed over the producer's predicate and
+    type URIs, versions included, so a node written at an earlier compatible
+    version cannot be re-hashed with a later schema — its predicates would
+    carry the later version and the hash would differ. When only a compatible
+    class exists, say so (``[hash-needs-exact-version]``) rather than produce a
+    different hash or the bare "no schema" error."""
+    exact = schema["classes"].get(type_uri)
+    if exact is not None:
+        return exact
+    try:
+        cls = _class_for(schema, type_uri)
+    except _Unreadable:
+        raise ValueError(f"No schema for {what} {type_uri} [unknown-type]") from None
+    raise ValueError(
+        f"Cannot hash {what} {type_uri}: this codec's schema has it at {cls['typeUri']}, "
+        "and a content hash is computed with the producer's schema version — "
+        "hashing needs the exact class [hash-needs-exact-version]"
+    )
+
+
+def type_matches(node: Mapping, class_uri: str, schema: Dict[str, Any]) -> bool:
+    """Whether a node is an instance of the class ``class_uri`` — what a
+    generated type guard asks (runtime#28). Each of the node's types
+    (``$types``, else its ``$type``) is resolved through the same compatible
+    lookup ``deserialize`` uses, so a node written at an earlier compatible
+    version satisfies the later version's guard; it matches when that class IS
+    ``class_uri`` or has it among its ``ancestors``. Classes compare by
+    versionless identity. A type this schema cannot read (unknown, newer,
+    another major) never matches. Raises ``ValueError`` when ``class_uri`` is
+    not a class coordinate."""
+    target = _coordinate_of(class_uri)
+    if target is None:
+        raise ValueError(f"type_matches: {class_uri!r} is not a class coordinate")
+    target_key = _key_of(target)
+
+    def matches(uri: Any) -> bool:
+        c = _coordinate_of(uri)
+        return c is not None and _key_of(c) == target_key
+
+    members = node.get("$types")
+    if members is None:
+        primary = node.get("$type")
+        members = [primary] if primary else []
+    for member in members:
+        try:
+            cls = _class_for(schema, member)
+        except _Unreadable:
+            continue
+        if matches(cls["typeUri"]):
+            return True
+        if any(matches(a) for a in cls.get("ancestors") or []):
+            return True
+    return False
+
+
+@dataclass(frozen=True)
+class EnumMemberMatch:
+    """An enumeration member found by ``enum_member``."""
+
+    enum_type: str
+    """The enumeration class's durable URI (its key in ``schema["enums"]``)."""
+    uri: str
+    """The member's durable URI as this schema keys it."""
+    member: Dict[str, Any]
+    """The member entry (``{"label": ...}``)."""
+
+
+def enum_member(schema: Dict[str, Any], ref: str) -> Optional[EnumMemberMatch]:
+    """The enumeration member a ``{"$ref": ...}`` names (runtime#28): the exact
+    versioned key first, then the same member at a version that can read the
+    written one — so a member referenced at an earlier compatible version of
+    the package resolves against a later schema. None when this schema has no
+    such member, which, as for ``enums`` itself, means "not mine", never
+    "invalid"."""
+    enums = schema.get("enums") or {}
+    for enum_type, en in enums.items():
+        member = en["members"].get(ref)
+        if member is not None:
+            return EnumMemberMatch(enum_type, ref, member)
+    written = _coordinate_of(ref)
+    if written is None or written.version is None:
+        return None
+    key = _key_of(written)
+    best: Optional[EnumMemberMatch] = None
+    best_version: Optional[CoordinateVersion] = None
+    for enum_type, en in enums.items():
+        for uri, member in en["members"].items():
+            c = _coordinate_of(uri)
+            if c is None or c.version is None or _key_of(c) != key:
+                continue
+            if not is_readable_by(written.version, c.version):
+                continue
+            if best_version is None or _version_tuple(c.version) > _version_tuple(best_version):
+                best, best_version = EnumMemberMatch(enum_type, uri, member), c.version
+    return best
+
+
 def _value(prop: Dict[str, Any], raw: Any, schema: Dict[str, Any]):
     if prop["kind"] == "object":
         # A node: a reference (``{"$ref"}``) or an embedded resource.
@@ -153,9 +361,7 @@ def _embedded_value(prop: Dict[str, Any], mapping: Dict[str, Any], schema: Dict[
             f"Cannot map embedded value under {prop['predicate']}: it carries "
             "no $type and the property declares no range."
         )
-    cls = schema["classes"].get(cls_uri)
-    if cls is None:
-        raise ValueError(f"no schema for embedded type {cls_uri}")
+    cls = _hash_class_for(schema, cls_uri, "embedded type")
 
     statements = _field_statements(mapping, cls, schema)
     if types is not None:
@@ -206,9 +412,7 @@ def _statements(node: Dict[str, Any], schema: Dict[str, Any]) -> List[Statement]
     type_uri = node.get("$type")
     if not type_uri:
         raise ValueError("node is missing $type")
-    cls = schema["classes"].get(type_uri)
-    if cls is None:
-        raise ValueError(f"no schema for type {type_uri}")
+    cls = _hash_class_for(schema, type_uri, "type")
 
     # The rdf:type triple(s) every subject carries: one per $types member for a
     # multi-typed node (in $types' UTF-8 sorted order), else the single $type.
@@ -271,7 +475,12 @@ def serialize(node: Dict[str, Any]) -> Dict[str, Any]:
 def deserialize(json_obj: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
     """Parse normalized JSON into a typed node. ``$``-envelope keys and fields
     modeled on the node's ``$type`` stay top-level; every other key is collected
-    into ``$extra`` so a strongly-typed consumer round-trips it losslessly."""
+    into ``$extra`` so a strongly-typed consumer round-trips it losslessly.
+
+    Requires a class in the schema that can read ``$type``: the exact class, or
+    the same class at a compatible later version (runtime#28 — see
+    ``_class_for``). The node keeps the ``$type`` it was WRITTEN with; the
+    producer's bytes are the producer's."""
     type_uri = json_obj.get("$type")
     if not isinstance(type_uri, str):
         raise ValueError("Cannot deserialize: missing string $type")
@@ -280,9 +489,10 @@ def deserialize(json_obj: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, A
     # determinism belongs to the producer, and a lenient reader would mask a
     # nondeterministic emitter.
     _assert_types_envelopes(json_obj, f"deserialize {json_obj.get('$id') or type_uri}")
-    cls = schema["classes"].get(type_uri)
-    if cls is None:
-        raise ValueError(f"Cannot deserialize: no schema for type {type_uri}")
+    try:
+        cls = _class_for(schema, type_uri)
+    except _Unreadable as err:
+        raise ValueError(f"Cannot deserialize: {err}") from None
 
     node: Dict[str, Any] = {"$type": type_uri}
     extra: Dict[str, Any] = {}

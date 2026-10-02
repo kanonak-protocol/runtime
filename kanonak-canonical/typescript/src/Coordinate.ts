@@ -16,10 +16,13 @@
  *   unparseable datatype URI routes to no carrier (raw token preserved),
  *   never to a guess and never to a crash.
  *
- * No ordering API on purpose: runtime consumers compare coordinates for
- * equality only. Version ranges, compatibility, and resolution live in the
- * SDK, not here. `#` is reserved for embedded resources and rejected by the
- * strict parser.
+ * One version relation, and only one (runtime#28): `isReadableBy(written,
+ * reader)` — can data whose terms were written at `written` be read by a
+ * reader whose schema is at `reader`? A codec needs exactly this to read a
+ * node typed at an earlier compatible version of its own package, and every
+ * port must answer it identically, so it lives here with the coordinate
+ * grammar and is pinned by the same vector file. There is still no general
+ * ordering or range API: import resolution (`^ ~ = *`) stays in the SDK.
  */
 
 export interface CoordinateVersion {
@@ -147,4 +150,26 @@ export function lenientVersionlessKey(uri: string): string | undefined {
   const pkg = at === -1 ? middle : middle.slice(0, at);
   if (!pkg) return undefined;
   return `${publisher}/${pkg}/${name}`;
+}
+
+/**
+ * Whether data whose terms were written at version `written` can be read by a
+ * reader whose schema is at version `reader` — the protocol's compatibility
+ * rule for READING (runtime#28), pinned by `readableVectors`:
+ *
+ *  - a different major is a different, incompatible line;
+ *  - from 1.0.0, a minor adds terms compatibly and a patch changes no term
+ *    (the protocol's versioning convention), so the reader needs the same
+ *    major and a minor at least the writer's — the patch is not compared;
+ *  - below 1.0.0 the MINOR is the incompatible line and the PATCH carries the
+ *    additions, so the reader needs the same minor and a patch at least the
+ *    writer's (the SDK's `^0.y.z` rule, 0.0.z included).
+ *
+ * A reader older than the writer is never compatible: the data may use terms
+ * the reader's schema does not have.
+ */
+export function isReadableBy(written: CoordinateVersion, reader: CoordinateVersion): boolean {
+  if (written.major !== reader.major) return false;
+  if (written.major === 0) return reader.minor === written.minor && reader.patch >= written.patch;
+  return reader.minor >= written.minor;
 }

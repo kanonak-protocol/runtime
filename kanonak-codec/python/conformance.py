@@ -17,9 +17,11 @@ from kanonak_codec import (  # noqa: E402
     content_hash,
     deserialize,
     embed,
+    enum_member,
     ref,
     serialize,
     to_node,
+    type_matches,
 )
 
 VECTOR_FILES = [
@@ -29,6 +31,7 @@ VECTOR_FILES = [
 
 TYPES_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-types.json")
 ENUMS_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-enums.json")
+COMPAT_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-compat.json")
 
 
 def run_file(vectors: str) -> "tuple[int, int]":
@@ -225,6 +228,80 @@ def run_enums_file(vectors: str) -> "tuple[int, int]":
     return passed, failed
 
 
+def run_compat_file(vectors: str) -> "tuple[int, int]":
+    """The 0.6.1 compatibility file (runtime#28): deserialize / type_matches /
+    enum_member / hashing over a node typed at an earlier compatible version of
+    the schema's package. A rejection must end in the bracketed kind the vector
+    names — the one part of an error message every port reproduces."""
+    with io.open(vectors, encoding="utf-8") as fh:
+        data = json.load(fh)
+    schemas = data["schemas"]
+    pkg = data["pkg"]
+    passed = 0
+    failed = 0
+
+    def rejected(run, kind: str, cid: str) -> bool:
+        try:
+            run()
+        except ValueError as err:
+            if str(err).endswith("[{}]".format(kind)):
+                return True
+            print("FAIL [{}] expected [{}], got: {}".format(cid, kind, err))
+            return False
+        print("FAIL [{}] expected a [{}] rejection, got a value".format(cid, kind))
+        return False
+
+    for case in data["deserializeCases"]:
+        cid = case["id"]
+        schema = schemas[case["schema"]]
+        if case.get("expectError"):
+            ok = rejected(lambda: deserialize(case["input"], schema), case["expectError"], cid)
+        else:
+            got = deserialize(case["input"], schema)
+            ok = got == case["expected"]
+            if not ok:
+                print("FAIL [{}] deserialize\n  got: {}\n  exp: {}".format(cid, got, case["expected"]))
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+
+    for case in data["typeMatchesCases"]:
+        got = type_matches(case["node"], case["classUri"], schemas[case["schema"]])
+        if got is case["expected"]:
+            passed += 1
+        else:
+            failed += 1
+            print("FAIL [{}] type_matches expected {} got {}".format(case["id"], case["expected"], got))
+
+    for case in data["enumMemberCases"]:
+        m = enum_member(schemas[case["schema"]], case["ref"])
+        got = None if m is None else {"enumType": m.enum_type, "uri": m.uri, "label": m.member.get("label")}
+        if got == case["expected"]:
+            passed += 1
+        else:
+            failed += 1
+            print("FAIL [{}] enum_member expected {} got {}".format(case["id"], case["expected"], got))
+
+    for case in data["hashCases"]:
+        cid = case["id"]
+        schema = schemas[case["schema"]]
+        if case.get("expectError"):
+            ok = rejected(lambda: content_hash(case["nodes"], schema, pkg), case["expectError"], cid)
+        else:
+            got = content_hash(case["nodes"], schema, pkg)
+            ok = got == case["expectedHash"]
+            if not ok:
+                print("FAIL [{}] hash got {} exp {}".format(cid, got, case["expectedHash"]))
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+
+    print("{}: {} passed, {} failed".format(os.path.basename(vectors), passed, failed))
+    return passed, failed
+
+
 def run_types_typed() -> "tuple[int, int]":
     """Typed-surface $types cases (0.4.0, runtime#10): the multi-typed set rides
     the wire dict as $types only (no unprefixed accessor) and reproduces the
@@ -393,6 +470,10 @@ def main() -> int:
     failed += f
 
     p, f = run_enums_file(ENUMS_VECTOR_FILE)
+    passed += p
+    failed += f
+
+    p, f = run_compat_file(COMPAT_VECTOR_FILE)
     passed += p
     failed += f
 

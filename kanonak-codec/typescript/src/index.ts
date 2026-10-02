@@ -19,8 +19,8 @@
  * entry — TypeScript references `@kanonak-protocol/canonical`. The only depend-
  * ency is that one lightweight canonical-form library.
  */
-import { canonicalForm, canonicalHash } from '@kanonak-protocol/canonical';
-import type { CanonicalInput, CanonicalInputStatement, CanonicalInputValue } from '@kanonak-protocol/canonical';
+import { canonicalForm, canonicalHash, parseCoordinate, isReadableBy } from '@kanonak-protocol/canonical';
+import type { CanonicalInput, CanonicalInputStatement, CanonicalInputValue, CoordinateVersion } from '@kanonak-protocol/canonical';
 
 /** Reserved `$`-envelope keys — never emitted as ontology statements. */
 const ENVELOPE_KEYS = new Set(['$type', '$types', '$id', '$name', '$contentHash', '$version', '$extra']);
@@ -108,6 +108,15 @@ export interface CodecClass {
   typeUri: string;
   /** Properties keyed by local name (the wire field name). */
   props: Record<string, CodecProp>;
+  /**
+   * Every superclass of the class, transitively, by durable VERSIONED URI
+   * (0.6.1, runtime#28) — what lets {@link typeMatches} accept a subclass
+   * node for a superclass check (an `Application` check accepts a
+   * `TerminalApplication`). Optional and additive: a schema without it is
+   * still valid, and canonicalization never reads it. Absent, a type match is
+   * by the class itself only — stricter, never looser.
+   */
+  ancestors?: string[];
 }
 
 /**
@@ -269,6 +278,161 @@ function lexical(value: unknown): string {
 }
 
 /**
+ * THE class lookup (runtime#28). A node is typed with the version of the
+ * class its producer's import resolved to; a codec generated from a later
+ * COMPATIBLE version of the same package must still read it. So: the exact
+ * versioned key first, then the class with the same publisher, package and
+ * name whose version can read the written one — `isReadableBy` from
+ * `@kanonak-protocol/canonical`, the protocol's single compatibility rule,
+ * pinned in every port. When nothing matches, the error says why, with a
+ * bracketed kind the conformance vectors pin: `[unknown-type]`,
+ * `[newer-version]` (the data may use terms this schema lacks),
+ * `[other-major]`, or `[other-minor-line]` (below 1.0.0 the minor is the
+ * incompatible line).
+ */
+function classFor(schema: CodecSchema, typeUri: string): { cls: CodecClass } | { error: string } {
+  const exact = schema.classes[typeUri];
+  if (exact) return { cls: exact };
+  const written = coordinateOf(typeUri);
+  if (!written?.version) return { error: `no schema for type ${typeUri} [unknown-type]` };
+  const key = `${written.publisher}/${written.package_}/${written.name}`;
+
+  let readable: { cls: CodecClass; version: CoordinateVersion } | undefined;
+  let nearest: CoordinateVersion | undefined;
+  for (const [uri, cls] of Object.entries(schema.classes)) {
+    const c = coordinateOf(uri);
+    if (!c?.version || `${c.publisher}/${c.package_}/${c.name}` !== key) continue;
+    if (isReadableBy(written.version, c.version)) {
+      if (!readable || compareVersions(c.version, readable.version) > 0) readable = { cls, version: c.version };
+    } else if (!nearest || compareVersions(c.version, nearest) > 0) {
+      nearest = c.version;
+    }
+  }
+  if (readable) return { cls: readable.cls };
+  if (!nearest) return { error: `no schema for type ${typeUri} [unknown-type]` };
+  return { error: incompatibleVersion(typeUri, written.version, nearest) };
+}
+
+function incompatibleVersion(typeUri: string, w: CoordinateVersion, r: CoordinateVersion): string {
+  const ws = formatVersion(w);
+  const rs = formatVersion(r);
+  if (w.major !== r.major) {
+    return `${typeUri} is written at ${ws}, a different major version than this codec's schema (${rs}) [other-major]`;
+  }
+  if (w.major === 0 && w.minor !== r.minor) {
+    return `${typeUri} is written at ${ws}; below 1.0.0 a different minor is a different version line than this codec's schema (${rs}) [other-minor-line]`;
+  }
+  return `${typeUri} is written at ${ws}, newer than this codec's schema (${rs}); upgrade the codec to read it [newer-version]`;
+}
+
+/** The parsed coordinate, or undefined when the string is not one (never throws). */
+function coordinateOf(uri: string): ReturnType<typeof parseCoordinate> | undefined {
+  try {
+    return parseCoordinate(uri);
+  } catch {
+    return undefined;
+  }
+}
+
+function compareVersions(a: CoordinateVersion, b: CoordinateVersion): number {
+  return a.major - b.major || a.minor - b.minor || a.patch - b.patch;
+}
+
+function formatVersion(v: CoordinateVersion): string {
+  return `${v.major}.${v.minor}.${v.patch}`;
+}
+
+/**
+ * The class to HASH a node or embedded value with: the exact versioned class
+ * only. A content hash is computed over the producer's predicate and type
+ * URIs, versions included, so a node written at an earlier compatible version
+ * cannot be re-hashed with a later schema — its predicates would carry the
+ * later version and the hash would differ. When only a compatible class
+ * exists, say so (`[hash-needs-exact-version]`) rather than produce a
+ * different hash or the bare "no schema" error.
+ */
+function hashClassFor(schema: CodecSchema, typeUri: string, what: string): CodecClass {
+  const exact = schema.classes[typeUri];
+  if (exact) return exact;
+  const match = classFor(schema, typeUri);
+  if ('cls' in match) {
+    throw new Error(
+      `Cannot hash ${what} ${typeUri}: this codec's schema has it at ${match.cls.typeUri}, and a content hash is ` +
+        `computed with the producer's schema version — hashing needs the exact class [hash-needs-exact-version]`,
+    );
+  }
+  throw new Error(`No schema for ${what} ${typeUri} [unknown-type]`);
+}
+
+/**
+ * Whether a node is an instance of the class `classUri` — what a generated
+ * type guard asks (runtime#28). Each of the node's types (`$types`, else its
+ * `$type`) is resolved through the same compatible lookup `deserialize` uses,
+ * so a node written at an earlier compatible version satisfies the later
+ * version's guard; it matches when that class IS `classUri` or has it among
+ * its `ancestors`. Classes compare by versionless identity. A type this
+ * schema cannot read (unknown, newer, another major) never matches.
+ */
+export function typeMatches(
+  node: { $type?: string; $types?: string[] },
+  classUri: string,
+  schema: CodecSchema,
+): boolean {
+  const target = coordinateOf(classUri);
+  if (!target) throw new Error(`typeMatches: '${classUri}' is not a class coordinate`);
+  const targetKey = `${target.publisher}/${target.package_}/${target.name}`;
+  const keyOf = (uri: string): string | undefined => {
+    const c = coordinateOf(uri);
+    return c ? `${c.publisher}/${c.package_}/${c.name}` : undefined;
+  };
+  for (const member of node.$types ?? (node.$type ? [node.$type] : [])) {
+    const match = classFor(schema, member);
+    if (!('cls' in match)) continue;
+    if (keyOf(match.cls.typeUri) === targetKey) return true;
+    if (match.cls.ancestors?.some((a) => keyOf(a) === targetKey)) return true;
+  }
+  return false;
+}
+
+/** An enumeration member found by {@link enumMember}. */
+export interface EnumMemberMatch {
+  /** The enumeration class's durable URI (its key in `schema.enums`). */
+  enumType: string;
+  /** The member's durable URI as this schema keys it. */
+  uri: string;
+  member: CodecEnumMember;
+}
+
+/**
+ * The enumeration member a `{"$ref": …}` names (runtime#28): the exact
+ * versioned key first, then the same member at a version that can read the
+ * written one — so a member referenced at an earlier compatible version of the
+ * package resolves against a later schema. Undefined when this schema has no
+ * such member, which, as for `enums` itself, means "not mine", never
+ * "invalid".
+ */
+export function enumMember(schema: CodecSchema, ref: string): EnumMemberMatch | undefined {
+  const enums = schema.enums ?? {};
+  for (const [enumType, e] of Object.entries(enums)) {
+    const member = e.members[ref];
+    if (member) return { enumType, uri: ref, member };
+  }
+  const written = coordinateOf(ref);
+  if (!written?.version) return undefined;
+  const key = `${written.publisher}/${written.package_}/${written.name}`;
+  let best: (EnumMemberMatch & { version: CoordinateVersion }) | undefined;
+  for (const [enumType, e] of Object.entries(enums)) {
+    for (const [uri, member] of Object.entries(e.members)) {
+      const c = coordinateOf(uri);
+      if (!c?.version || `${c.publisher}/${c.package_}/${c.name}` !== key) continue;
+      if (!isReadableBy(written.version, c.version)) continue;
+      if (!best || compareVersions(c.version, best.version) > 0) best = { enumType, uri, member, version: c.version };
+    }
+  }
+  return best ? { enumType: best.enumType, uri: best.uri, member: best.member } : undefined;
+}
+
+/**
  * Validate a node-or-embedded's `$types` envelope and return the validated set,
  * or undefined when the node is single-typed (no `$types`). Enforced wherever
  * the envelope is touched — serialize, deserialize, and canonicalization — so a
@@ -379,8 +543,7 @@ function embeddedValue(
         'and the property declares no range.'
     );
   }
-  const cls = schema.classes[clsUri];
-  if (!cls) throw new Error(`No schema for embedded type ${clsUri}`);
+  const cls = hashClassFor(schema, clsUri, 'embedded type');
 
   const statements = fieldStatements(map, cls, schema);
   if (types) {
@@ -447,8 +610,7 @@ function statementsFor(node: CodecNode, schema: CodecSchema): CanonicalInputStat
   const types = validatedTypes(node, `Node ${node.$id ?? '(no $id)'}`);
   const typeUri = node.$type;
   if (!typeUri) throw new Error(`Node ${node.$id ?? '(no $id)'} is missing $type`);
-  const cls = schema.classes[typeUri];
-  if (!cls) throw new Error(`No schema for type ${typeUri}`);
+  const cls = hashClassFor(schema, typeUri, 'type');
 
   return [
     // The rdf:type triple(s) every resource carries: one per $types member for
@@ -537,7 +699,10 @@ export function serialize(node: CodecNode): Record<string, unknown> {
  * modeled on the node's `$type` stay top-level; every other key is an
  * open-world assertion collected into `$extra` so a strongly-typed consumer
  * round-trips it losslessly. Requires `$type` (the one field that cannot be
- * inferred) and its class in the schema.
+ * inferred) and a class in the schema that can read it: the exact class, or
+ * the same class at a compatible later version (runtime#28 — see
+ * {@link classFor}). The node keeps the `$type` it was WRITTEN with; the
+ * producer's bytes are the producer's.
  */
 export function deserialize(json: Record<string, unknown>, schema: CodecSchema): CodecNode {
   const typeUri = json.$type;
@@ -547,8 +712,9 @@ export function deserialize(json: Record<string, unknown>, schema: CodecSchema):
   // determinism belongs to the producer, and a lenient reader would mask a
   // nondeterministic emitter.
   assertTypesEnvelopes(json, `deserialize ${typeof json.$id === 'string' ? json.$id : typeUri}`);
-  const cls = schema.classes[typeUri];
-  if (!cls) throw new Error(`Cannot deserialize: no schema for type ${typeUri}`);
+  const match = classFor(schema, typeUri);
+  if (!('cls' in match)) throw new Error(`Cannot deserialize: ${match.error}`);
+  const cls = match.cls;
 
   const node: CodecNode = { $type: typeUri };
   const fields = node as Record<string, unknown>;

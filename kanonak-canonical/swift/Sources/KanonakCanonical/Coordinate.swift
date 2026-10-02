@@ -144,3 +144,10 @@ public func lenientVersionlessKey(_ uri: String) -> String? {
     if pkg.isEmpty { return nil }
     return "\(publisher)/\(pkg)/\(name)"
 }
+
+/// Whether whether data whose terms were written at version `written` can be read by a reader whose schema is at version `reader` (runtime#28), pinned by readableVectors: a different major is never readable; from 1.0.0 the reader needs a minor at least the writer's (a patch changes no term, so it is not compared); below 1.0.0 the minor is the incompatible line and the reader needs the same minor and a patch at least the writer's.
+public func isReadableBy(_ written: CoordinateVersion, _ reader: CoordinateVersion) -> Bool {
+    if written.major != reader.major { return false }
+    if written.major == 0 { return reader.minor == written.minor && reader.patch >= written.patch }
+    return reader.minor >= written.minor
+}

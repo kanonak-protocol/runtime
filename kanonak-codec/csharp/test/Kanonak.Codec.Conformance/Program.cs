@@ -81,6 +81,18 @@ class Program
             Console.WriteLine($"{Path.GetFileName(enumsPath)}: {enumsPassed} passed, {enumsFailed} failed");
             passed += enumsPassed;
             failed += enumsFailed;
+
+            string compatPath = FindVectors("codec-vectors-compat.json");
+            if (compatPath == null)
+            {
+                Console.Error.WriteLine("codec-vectors-compat.json not found; pass the vector files as arguments");
+                return 2;
+            }
+            int compatPassed, compatFailed;
+            RunCompatFile(compatPath, out compatPassed, out compatFailed);
+            Console.WriteLine($"{Path.GetFileName(compatPath)}: {compatPassed} passed, {compatFailed} failed");
+            passed += compatPassed;
+            failed += compatFailed;
         }
 
         Console.WriteLine($"\n{passed} passed, {failed} failed");
@@ -281,6 +293,110 @@ class Program
                 { ok = false; Console.WriteLine($"FAIL [{id}] serialize[{i}] mismatch"); }
             }
             if (ok) passed++; else failed++;
+        }
+    }
+
+    /// <summary>
+    /// The 0.6.1 compatibility file (runtime#28): Deserialize / TypeMatches /
+    /// EnumMember / hashing over a node typed at an earlier compatible version
+    /// of the schema's package. A rejection must END in the bracketed kind the
+    /// vector names — the one part of an error message every port reproduces.
+    /// </summary>
+    static void RunCompatFile(string vectorsPath, out int passed, out int failed)
+    {
+        passed = 0;
+        failed = 0;
+        using var doc = JsonDocument.Parse(File.ReadAllText(vectorsPath));
+        JsonElement root = doc.RootElement;
+
+        var schemas = new Dictionary<string, CodecSchema>();
+        foreach (var s in root.GetProperty("schemas").EnumerateObject())
+            schemas[s.Name] = DecodeSchema(s.Value);
+        PackageContext pkg = DecodePkg(root.GetProperty("pkg"));
+
+        foreach (var c in root.GetProperty("deserializeCases").EnumerateArray())
+        {
+            string id = c.GetProperty("id").GetString();
+            CodecSchema schema = schemas[c.GetProperty("schema").GetString()];
+            var input = (IReadOnlyDictionary<string, object>)DecodeJson(c.GetProperty("input"));
+            bool ok;
+            if (c.TryGetProperty("expectError", out var kind))
+            {
+                ok = RejectsWithKind(() => Codec.Deserialize(input, schema), kind.GetString(), id);
+            }
+            else
+            {
+                var got = Codec.Deserialize(input, schema);
+                object exp = DecodeJson(c.GetProperty("expected"));
+                ok = DeepEquals(got, exp);
+                if (!ok) Console.WriteLine($"FAIL [{id}] deserialize\n  got: {Show(got)}\n  exp: {Show(exp)}");
+            }
+            if (ok) passed++; else failed++;
+        }
+
+        foreach (var c in root.GetProperty("typeMatchesCases").EnumerateArray())
+        {
+            string id = c.GetProperty("id").GetString();
+            var node = (IReadOnlyDictionary<string, object>)DecodeJson(c.GetProperty("node"));
+            bool got = Codec.TypeMatches(node, c.GetProperty("classUri").GetString(),
+                schemas[c.GetProperty("schema").GetString()]);
+            bool exp = c.GetProperty("expected").GetBoolean();
+            if (got == exp) passed++;
+            else { failed++; Console.WriteLine($"FAIL [{id}] typeMatches expected {exp} got {got}"); }
+        }
+
+        foreach (var c in root.GetProperty("enumMemberCases").EnumerateArray())
+        {
+            string id = c.GetProperty("id").GetString();
+            EnumMemberMatch m = Codec.EnumMember(schemas[c.GetProperty("schema").GetString()], c.GetProperty("ref").GetString());
+            Dictionary<string, object> got = m == null ? null : new Dictionary<string, object>
+            {
+                ["enumType"] = m.EnumType,
+                ["uri"] = m.Uri,
+                ["label"] = m.Member.Label,
+            };
+            object exp = DecodeJson(c.GetProperty("expected"));
+            if (DeepEquals(got, exp)) passed++;
+            else { failed++; Console.WriteLine($"FAIL [{id}] enumMember\n  got: {Show(got)}\n  exp: {Show(exp)}"); }
+        }
+
+        foreach (var c in root.GetProperty("hashCases").EnumerateArray())
+        {
+            string id = c.GetProperty("id").GetString();
+            CodecSchema schema = schemas[c.GetProperty("schema").GetString()];
+            var nodes = new List<IReadOnlyDictionary<string, object>>();
+            foreach (var n in c.GetProperty("nodes").EnumerateArray())
+                nodes.Add((IReadOnlyDictionary<string, object>)DecodeJson(n));
+            bool ok;
+            if (c.TryGetProperty("expectError", out var kind))
+            {
+                ok = RejectsWithKind(() => Codec.ContentHash(nodes, schema, pkg), kind.GetString(), id);
+            }
+            else
+            {
+                string got = Codec.ContentHash(nodes, schema, pkg);
+                string exp = c.GetProperty("expectedHash").GetString();
+                ok = got == exp;
+                if (!ok) Console.WriteLine($"FAIL [{id}] hash expected {exp} got {got}");
+            }
+            if (ok) passed++; else failed++;
+        }
+    }
+
+    /// <summary>Whether <paramref name="run"/> throws with a message ending in <c>[kind]</c>; reports otherwise.</summary>
+    static bool RejectsWithKind(Action run, string kind, string id)
+    {
+        try
+        {
+            run();
+            Console.WriteLine($"FAIL [{id}] expected a [{kind}] rejection, got a value");
+            return false;
+        }
+        catch (Exception err)
+        {
+            bool ok = err.Message.EndsWith("[" + kind + "]", StringComparison.Ordinal);
+            if (!ok) Console.WriteLine($"FAIL [{id}] expected [{kind}], got: {err.Message}");
+            return ok;
         }
     }
 

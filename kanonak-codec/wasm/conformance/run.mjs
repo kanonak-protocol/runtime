@@ -165,9 +165,39 @@ function runTypesFile(file) {
   }
 }
 
+// The compatibility file (runtime#28) through the WIT surface: the deserialize
+// and hash sections. typeMatches / enumMember are library helpers for
+// generated code, not part of the component's interface.
+function runCompatFile(file) {
+  const doc = readDoc(file);
+  const rejected = (r, kind, id, what) => {
+    if (r.err === undefined) {
+      fail(`[${id}] ${what} expected a [${kind}] rejection, got ${r.ok}`);
+    } else if (!r.err.endsWith(`[${kind}]`)) {
+      fail(`[${id}] ${what} rejected, but not as [${kind}]: ${r.err}`);
+    }
+  };
+  for (const c of doc.deserializeCases) {
+    const r = tryCall("deserialize", c.input, doc.schemas[c.schema]);
+    if (c.expectError) rejected(r, c.expectError, c.id, "deserialize");
+    else if (r.err !== undefined) fail(`[${c.id}] deserialize errored: ${r.err}`);
+    else if (!deepEqual(JSON.parse(r.ok), c.expected)) {
+      fail(`[${c.id}] deserialize mismatch: ${r.ok}`);
+    }
+  }
+  for (const c of doc.hashCases) {
+    const r = tryCall("contentHash", c.nodes, doc.schemas[c.schema], doc.pkg);
+    if (c.expectError) rejected(r, c.expectError, c.id, "contentHash");
+    else if (r.err !== undefined || r.ok !== c.expectedHash) {
+      fail(`[${c.id}] hash expected ${c.expectedHash} got ${r.err ?? r.ok}`);
+    }
+  }
+}
+
 runFile("codec-vectors.json");
 runFile("codec-vectors-embedded.json");
 runTypesFile("codec-vectors-types.json");
+runCompatFile("codec-vectors-compat.json");
 
 if (fails > 0) {
   console.error(`kanonak-codec wasm component: ${fails} vector check(s) failed`);

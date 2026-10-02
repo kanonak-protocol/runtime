@@ -23,8 +23,9 @@ ordering, or wire layout requires a NEW version, never an edit in place.
 - `vectors/coordinate-vectors.json` — coordinate parsing (issue #17): the strict
   `parseCoordinate` grammar (`publisher/package[@major.minor.patch]/name`, throw
   on malformed — never a plausible tail), the total lenient versionless key
-  that carrier routing uses, and the total `displayName` accessor (valid →
-  local name; anything else → the input verbatim, never a throw).
+  that carrier routing uses, the total `displayName` accessor (valid →
+  local name; anything else → the input verbatim, never a throw), and
+  `readableVectors` for the one version relation, `isReadableBy` (runtime#28).
 
 ## Ports
 
@@ -71,9 +72,17 @@ the codec consume it (it is no longer bundled inside the SDK).
    coordinate to a human there is the total **`displayName`** accessor: a
    valid coordinate displays as its local name, anything else is returned
    verbatim (never a throw, never a best-effort tail — a renderer must not
-   fail on a string it did not construct). Deliberately NO ordering / range /
-   compatibility API: runtime consumers compare coordinates for equality
-   only; version math stays in the SDK.
+   fail on a string it did not construct).
+
+5. **One version relation** (runtime#28) — `isReadableBy(written, reader)`:
+   whether data whose terms were written at one version of a package can be
+   read by a schema at another. A different major never; from 1.0.0 the
+   reader's minor must be at least the writer's (a patch changes no term, so
+   it is not compared); below 1.0.0 the minor is the incompatible line, so the
+   reader needs the same minor and a patch at least the writer's. A codec
+   uses it to read a node typed at an earlier compatible version of its own
+   package. It is the ONLY ordering this library exposes: import ranges and
+   resolution (`^ ~ = *`) stay in the SDK.
 
 The `ephemeral` namespace-neutralization for EphemeralPackage body hashes is a
 *caller* concern (the producer/codec), not part of `canonicalForm` itself.

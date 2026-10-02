@@ -15,7 +15,8 @@
 
 use kanonak_canonical::{
     canonical_form as canonical_form_pkg, canonical_hash as canonical_hash_pkg, carrier_of,
-    CanonError, Package, Statement, Subject, Value,
+    is_readable_by, parse_coordinate, versionless_key, CanonError, CoordinateVersion, Package,
+    Statement, Subject, Value,
 };
 use serde_json::{Map, Value as Json};
 
@@ -85,6 +86,284 @@ fn lexical(value: &Json) -> String {
         Json::Number(n) => n.to_string(),
         other => other.to_string(),
     }
+}
+
+/// The schema's `classes` map. A class entry may carry an optional
+/// `ancestors` list (0.6.1, runtime#28): every superclass, transitively, by
+/// durable VERSIONED URI — what lets [`type_matches`] accept a subclass node
+/// for a superclass check. Additive and canonicalization-INERT: a schema
+/// without it is still valid, and absent, a type match is by the class itself
+/// only — stricter, never looser.
+fn classes_of(schema: &Json) -> Result<&Map<String, Json>, CodecError> {
+    schema
+        .get("classes")
+        .and_then(|c| c.as_object())
+        .ok_or_else(|| CodecError::Malformed("schema is missing 'classes'".into()))
+}
+
+/// A coordinate's versionless key and version, or `None` when the string is
+/// not a STRICTLY well-formed coordinate or carries no version (never errors).
+fn versioned_coordinate(uri: &str) -> Option<(String, CoordinateVersion)> {
+    let c = parse_coordinate(uri).ok()?;
+    let version = c.version?;
+    Some((format!("{}/{}/{}", c.publisher, c.package, c.name), version))
+}
+
+/// The versionless identity of a coordinate (versioned or not), or `None`
+/// when the string is not one.
+fn identity_of(uri: &str) -> Option<String> {
+    versionless_key(uri).ok()
+}
+
+fn version_order(v: CoordinateVersion) -> (u64, u64, u64) {
+    (v.major, v.minor, v.patch)
+}
+
+fn format_version(v: CoordinateVersion) -> String {
+    format!("{}.{}.{}", v.major, v.minor, v.patch)
+}
+
+/// THE class lookup (runtime#28). A node is typed with the version of the
+/// class its producer's import resolved to; a codec generated from a later
+/// COMPATIBLE version of the same package must still read it. So: the exact
+/// versioned key first, then the class with the same publisher, package and
+/// name whose version can read the written one — `is_readable_by` from
+/// `kanonak-canonical`, the protocol's single compatibility rule, pinned in
+/// every port. Returns the class's schema key and entry. When nothing
+/// matches, the error says why, ending in a bracketed kind the conformance
+/// vectors pin: `[unknown-type]`, `[newer-version]` (the data may use terms
+/// this schema lacks), `[other-major]`, or `[other-minor-line]` (below 1.0.0
+/// the minor is the incompatible line).
+fn class_for<'a>(
+    classes: &'a Map<String, Json>,
+    type_uri: &str,
+) -> Result<(&'a str, &'a Json), String> {
+    if let Some((key, cls)) = classes.get_key_value(type_uri) {
+        return Ok((key.as_str(), cls));
+    }
+    let unknown = || format!("no schema for type {} [unknown-type]", type_uri);
+    let (key, written) = match versioned_coordinate(type_uri) {
+        Some(found) => found,
+        None => return Err(unknown()),
+    };
+
+    let mut readable: Option<(&'a str, &'a Json, CoordinateVersion)> = None;
+    let mut nearest: Option<CoordinateVersion> = None;
+    for (uri, cls) in classes.iter() {
+        let version = match versioned_coordinate(uri) {
+            Some((k, v)) if k == key => v,
+            _ => continue,
+        };
+        if is_readable_by(written, version) {
+            if readable.map_or(true, |(_, _, best)| {
+                version_order(version) > version_order(best)
+            }) {
+                readable = Some((uri.as_str(), cls, version));
+            }
+        } else if nearest.map_or(true, |n| version_order(version) > version_order(n)) {
+            nearest = Some(version);
+        }
+    }
+    if let Some((uri, cls, _)) = readable {
+        return Ok((uri, cls));
+    }
+    match nearest {
+        Some(r) => Err(incompatible_version(type_uri, written, r)),
+        None => Err(unknown()),
+    }
+}
+
+fn incompatible_version(type_uri: &str, w: CoordinateVersion, r: CoordinateVersion) -> String {
+    let (ws, rs) = (format_version(w), format_version(r));
+    if w.major != r.major {
+        return format!(
+            "{} is written at {}, a different major version than this codec's schema ({}) \
+             [other-major]",
+            type_uri, ws, rs
+        );
+    }
+    if w.major == 0 && w.minor != r.minor {
+        return format!(
+            "{} is written at {}; below 1.0.0 a different minor is a different version line \
+             than this codec's schema ({}) [other-minor-line]",
+            type_uri, ws, rs
+        );
+    }
+    format!(
+        "{} is written at {}, newer than this codec's schema ({}); upgrade the codec to read it \
+         [newer-version]",
+        type_uri, ws, rs
+    )
+}
+
+/// The class to HASH a node or embedded value with: the exact versioned class
+/// only. A content hash is computed over the producer's predicate and type
+/// URIs, versions included, so a node written at an earlier compatible
+/// version cannot be re-hashed with a later schema — its predicates would
+/// carry the later version and the hash would differ. When only a compatible
+/// class exists, say so (`[hash-needs-exact-version]`) rather than produce a
+/// different hash or the bare "no schema" error.
+fn hash_class_for<'a>(
+    schema: &'a Json,
+    type_uri: &str,
+    what: &str,
+) -> Result<&'a Json, CodecError> {
+    let classes = classes_of(schema)?;
+    if let Some(cls) = classes.get(type_uri) {
+        return Ok(cls);
+    }
+    match class_for(classes, type_uri) {
+        Ok((found, _)) => err(format!(
+            "Cannot hash {} {}: this codec's schema has it at {}, and a content hash is \
+             computed with the producer's schema version — hashing needs the exact class \
+             [hash-needs-exact-version]",
+            what, type_uri, found
+        )),
+        Err(_) => err(format!(
+            "no schema for {} {} [unknown-type]",
+            what, type_uri
+        )),
+    }
+}
+
+/// Whether a node is an instance of the class `class_uri` — what a generated
+/// type guard asks (runtime#28). Each of the node's types (`$types`, else its
+/// `$type`) is resolved through the same compatible lookup [`deserialize`]
+/// uses, so a node written at an earlier compatible version satisfies the
+/// later version's guard; it matches when that class IS `class_uri` or has it
+/// among its `ancestors`. Classes compare by versionless identity. A type this
+/// schema cannot read (unknown, newer, another major) never matches. Errors
+/// when `class_uri` is not a class coordinate or the schema is malformed.
+/// For a typed instance, [`KanonakNode::type_matches`] asks the same question
+/// of its envelope.
+pub fn type_matches(node: &Node, class_uri: &str, schema: &Json) -> Result<bool, CodecError> {
+    let members: Vec<&str> = match node.get("$types") {
+        None | Some(Json::Null) => node
+            .get("$type")
+            .and_then(|t| t.as_str())
+            .filter(|t| !t.is_empty())
+            .into_iter()
+            .collect(),
+        Some(Json::Array(items)) => items
+            .iter()
+            .map(|t| t.as_str())
+            .collect::<Option<Vec<&str>>>()
+            .ok_or_else(|| {
+                CodecError::Malformed("type_matches: $types must be a list of type URIs".into())
+            })?,
+        Some(_) => return err("type_matches: $types must be a list of type URIs"),
+    };
+    type_matches_members(&members, class_uri, schema)
+}
+
+/// The one type-match walk, over a node's type members (`$types`, else
+/// `$type`), shared by the dictionary and typed surfaces.
+pub(crate) fn type_matches_members(
+    members: &[&str],
+    class_uri: &str,
+    schema: &Json,
+) -> Result<bool, CodecError> {
+    let target = identity_of(class_uri).ok_or_else(|| {
+        CodecError::Malformed(format!(
+            "type_matches: '{}' is not a class coordinate",
+            class_uri
+        ))
+    })?;
+    let classes = classes_of(schema)?;
+
+    for &member in members {
+        let (key, cls) = match class_for(classes, member) {
+            Ok(found) => found,
+            Err(_) => continue,
+        };
+        let type_uri = cls
+            .get("typeUri")
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| CodecError::Malformed(format!("class {} is missing 'typeUri'", key)))?;
+        if identity_of(type_uri).as_deref() == Some(target.as_str()) {
+            return Ok(true);
+        }
+        match cls.get("ancestors") {
+            None | Some(Json::Null) => {}
+            Some(Json::Array(ancestors)) => {
+                for ancestor in ancestors {
+                    let ancestor = ancestor.as_str().ok_or_else(|| {
+                        CodecError::Malformed(format!(
+                            "class {}: 'ancestors' must be a list of class URIs",
+                            key
+                        ))
+                    })?;
+                    if identity_of(ancestor).as_deref() == Some(target.as_str()) {
+                        return Ok(true);
+                    }
+                }
+            }
+            Some(_) => {
+                return err(format!(
+                    "class {}: 'ancestors' must be a list of class URIs",
+                    key
+                ))
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// An enumeration member found by [`enum_member`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumMemberMatch {
+    /// The enumeration class's durable URI (its key in the schema's `enums`).
+    pub enum_type: String,
+    /// The member's durable URI as this schema keys it.
+    pub uri: String,
+    /// The member's schema entry (`{"label": ...}`).
+    pub member: Json,
+}
+
+/// The enumeration member a `{"$ref": …}` names (runtime#28): the exact
+/// versioned key first, then the same member at a version that can read the
+/// written one — so a member referenced at an earlier compatible version of
+/// the package resolves against a later schema. `None` when this schema has
+/// no such member, which, as for `enums` itself, means "not mine", never
+/// "invalid".
+pub fn enum_member(schema: &Json, reference: &str) -> Option<EnumMemberMatch> {
+    let enums = schema.get("enums").and_then(|e| e.as_object())?;
+    for (enum_type, e) in enums.iter() {
+        if let Some(member) = e.get("members").and_then(|m| m.get(reference)) {
+            return Some(EnumMemberMatch {
+                enum_type: enum_type.clone(),
+                uri: reference.to_string(),
+                member: member.clone(),
+            });
+        }
+    }
+    let (key, written) = versioned_coordinate(reference)?;
+    let mut best: Option<(&str, &str, &Json, CoordinateVersion)> = None;
+    for (enum_type, e) in enums.iter() {
+        let members = match e.get("members").and_then(|m| m.as_object()) {
+            Some(members) => members,
+            None => continue,
+        };
+        for (uri, member) in members.iter() {
+            let version = match versioned_coordinate(uri) {
+                Some((k, v)) if k == key => v,
+                _ => continue,
+            };
+            if !is_readable_by(written, version) {
+                continue;
+            }
+            if best.map_or(true, |(_, _, _, b)| {
+                version_order(version) > version_order(b)
+            }) {
+                best = Some((enum_type.as_str(), uri.as_str(), member, version));
+            }
+        }
+    }
+    best.map(|(enum_type, uri, member, _)| EnumMemberMatch {
+        enum_type: enum_type.to_string(),
+        uri: uri.to_string(),
+        member: member.clone(),
+    })
 }
 
 /// Validate a node-or-embedded's `$types` envelope (0.4.0, runtime#10) and
@@ -249,10 +528,7 @@ fn embedded_value(
             )
         }
     };
-    let cls = schema
-        .get("classes")
-        .and_then(|c| c.get(cls_uri))
-        .ok_or_else(|| CodecError::Malformed(format!("no schema for embedded type {}", cls_uri)))?;
+    let cls = hash_class_for(schema, cls_uri, "embedded type")?;
     let props = cls
         .get("props")
         .ok_or_else(|| CodecError::Malformed(format!("class {} is missing 'props'", cls_uri)))?;
@@ -371,12 +647,7 @@ fn statements(node: &Node, schema: &Json) -> Result<Vec<Statement>, CodecError> 
         .filter(|s| !s.is_empty())
         .ok_or_else(|| CodecError::Malformed("node is missing $type".into()))?;
 
-    let classes = schema
-        .get("classes")
-        .ok_or_else(|| CodecError::Malformed("schema is missing 'classes'".into()))?;
-    let cls = classes
-        .get(type_uri)
-        .ok_or_else(|| CodecError::Malformed(format!("no schema for type {}", type_uri)))?;
+    let cls = hash_class_for(schema, type_uri, "type")?;
     let props = cls
         .get("props")
         .ok_or_else(|| CodecError::Malformed(format!("class {} is missing 'props'", type_uri)))?;
@@ -513,7 +784,12 @@ pub fn serialize(node: &Node) -> Result<Node, CodecError> {
 
 /// Parse normalized JSON into a typed node. `$`-envelope keys and fields modeled
 /// on the node's `$type` stay top-level; every other key is collected into
-/// `$extra` so a strongly-typed consumer round-trips it losslessly.
+/// `$extra` so a strongly-typed consumer round-trips it losslessly. Requires
+/// `$type` (the one field that cannot be inferred) and a class in the schema
+/// that can read it: the exact class, or the same class at a compatible later
+/// version (runtime#28 — see [`type_matches`] for the same rule). The node
+/// keeps the `$type` it was WRITTEN with; the producer's bytes are the
+/// producer's.
 pub fn deserialize(json_obj: &Node, schema: &Json) -> Result<Node, CodecError> {
     let type_uri = json_obj
         .get("$type")
@@ -532,18 +808,11 @@ pub fn deserialize(json_obj: &Node, schema: &Json) -> Result<Node, CodecError> {
         assert_types_envelopes_map(json_obj, &format!("deserialize {}", where_))?;
     }
 
-    let classes = schema
-        .get("classes")
-        .ok_or_else(|| CodecError::Malformed("schema is missing 'classes'".into()))?;
-    let cls = classes.get(type_uri).ok_or_else(|| {
-        CodecError::Malformed(format!(
-            "Cannot deserialize: no schema for type {}",
-            type_uri
-        ))
-    })?;
+    let (cls_uri, cls) = class_for(classes_of(schema)?, type_uri)
+        .map_err(|e| CodecError::Malformed(format!("Cannot deserialize: {}", e)))?;
     let props = cls
         .get("props")
-        .ok_or_else(|| CodecError::Malformed(format!("class {} is missing 'props'", type_uri)))?;
+        .ok_or_else(|| CodecError::Malformed(format!("class {} is missing 'props'", cls_uri)))?;
 
     let mut node = Map::new();
     node.insert("$type".to_string(), Json::String(type_uri.to_string()));

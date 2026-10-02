@@ -1,6 +1,6 @@
 {
   "canonicalFormVersion": "1",
-  "description": "Golden conformance vectors for Kanonak coordinate parsing (issue #17). Two operations, two sections. parseVectors: the STRICT parser — parseCoordinate(input) -> {publisher, package, name, version} where version is {major, minor, patch} for the versioned form and null for the versionless form, OR expectError for inputs that must fail loud (a strict parser throws rather than returning a plausible-looking tail). Grammar: exactly three '/'-separated non-empty segments; the middle segment is package[@version]; the version, when present, is exactly major.minor.patch — decimal digits, no leading zeros (a lone 0 is valid), no signs, no operators; at most one '@', and only in the middle segment; '#' is reserved for embedded resources and rejected everywhere; whitespace is rejected everywhere (no trimming). For every valid vector a port must also assert versionlessKey(input) == publisher + '/' + package + '/' + name and localName(input) == name. lenientKeyVectors: the NON-THROWING structural variant that carrier routing (carrierOf) uses — lenientVersionlessKey(input) -> the versionless key when the input has exactly three non-empty segments (the middle segment's version content is NOT validated; everything from the first '@' on is discarded, and the part before it must be non-empty), or null otherwise. The lenient variant exists so carrierOf stays total and byte-identical under canonicalFormVersion \"1\": an unparseable or out-of-set datatype URI routes to no carrier and the raw token is preserved, never guessed. The vectors named divergence-* pin the two inputs on which shipped ports actually disagreed (Rust panicked where TypeScript silently produced a garbage key). displayNameVectors: the TOTAL display accessor (issue #17 reopening) — displayName(input) -> the strict parse's local name when the input is a valid coordinate, and the INPUT RETURNED VERBATIM when it is not (never a best-effort tail, never a throw; a renderer displaying a coordinate it did not construct must not fail, and a full URI where a short name was expected is an honest signal of upstream malformation). Every parseVector appears here too, so the strict and display accessors cannot drift on the happy path, and the display fallback is pinned on exactly the inputs the strict parser rejects — including the divergence-* pair, pinned on all three operations. Note display uses the STRICT grammar: an input the lenient carrier key would route (e.g. an unvalidated version) still displays verbatim, because only a full parse earns a shortened name. Expected values are authoritative — they define the grammar.",
+  "description": "Golden conformance vectors for Kanonak coordinate parsing (issue #17). Two operations, two sections. parseVectors: the STRICT parser — parseCoordinate(input) -> {publisher, package, name, version} where version is {major, minor, patch} for the versioned form and null for the versionless form, OR expectError for inputs that must fail loud (a strict parser throws rather than returning a plausible-looking tail). Grammar: exactly three '/'-separated non-empty segments; the middle segment is package[@version]; the version, when present, is exactly major.minor.patch — decimal digits, no leading zeros (a lone 0 is valid), no signs, no operators; at most one '@', and only in the middle segment; '#' is reserved for embedded resources and rejected everywhere; whitespace is rejected everywhere (no trimming). For every valid vector a port must also assert versionlessKey(input) == publisher + '/' + package + '/' + name and localName(input) == name. lenientKeyVectors: the NON-THROWING structural variant that carrier routing (carrierOf) uses — lenientVersionlessKey(input) -> the versionless key when the input has exactly three non-empty segments (the middle segment's version content is NOT validated; everything from the first '@' on is discarded, and the part before it must be non-empty), or null otherwise. The lenient variant exists so carrierOf stays total and byte-identical under canonicalFormVersion \"1\": an unparseable or out-of-set datatype URI routes to no carrier and the raw token is preserved, never guessed. The vectors named divergence-* pin the two inputs on which shipped ports actually disagreed (Rust panicked where TypeScript silently produced a garbage key). displayNameVectors: the TOTAL display accessor (issue #17 reopening) — displayName(input) -> the strict parse's local name when the input is a valid coordinate, and the INPUT RETURNED VERBATIM when it is not (never a best-effort tail, never a throw; a renderer displaying a coordinate it did not construct must not fail, and a full URI where a short name was expected is an honest signal of upstream malformation). Every parseVector appears here too, so the strict and display accessors cannot drift on the happy path, and the display fallback is pinned on exactly the inputs the strict parser rejects — including the divergence-* pair, pinned on all three operations. Note display uses the STRICT grammar: an input the lenient carrier key would route (e.g. an unvalidated version) still displays verbatim, because only a full parse earns a shortened name. Expected values are authoritative — they define the grammar. readableVectors (runtime#28): isReadableBy(written, reader) -> readable — whether data whose terms were written at `written` can be read by a reader whose schema is at `reader`: same major; from 1.0.0 reader minor >= written minor (patch not compared); below 1.0.0 same minor and reader patch >= written patch.",
   "parseVectors": [
     {
       "id": "versioned-canonical",
@@ -459,6 +459,248 @@
       "id": "display-version-garbage-verbatim",
       "input": "example.org/pkg@garbage/Name",
       "expected": "example.org/pkg@garbage/Name"
+    }
+  ],
+  "readableVectors": [
+    {
+      "id": "older-minor",
+      "written": {
+        "major": 5,
+        "minor": 0,
+        "patch": 0
+      },
+      "reader": {
+        "major": 5,
+        "minor": 1,
+        "patch": 0
+      },
+      "readable": true,
+      "why": "a minor adds terms compatibly: a 5.1 reader reads 5.0 data"
+    },
+    {
+      "id": "same-version",
+      "written": {
+        "major": 5,
+        "minor": 1,
+        "patch": 0
+      },
+      "reader": {
+        "major": 5,
+        "minor": 1,
+        "patch": 0
+      },
+      "readable": true,
+      "why": "identical versions"
+    },
+    {
+      "id": "writer-patch-newer",
+      "written": {
+        "major": 5,
+        "minor": 1,
+        "patch": 2
+      },
+      "reader": {
+        "major": 5,
+        "minor": 1,
+        "patch": 0
+      },
+      "readable": true,
+      "why": "from 1.0.0 a patch changes no term, so the patch is not compared"
+    },
+    {
+      "id": "reader-patch-newer",
+      "written": {
+        "major": 5,
+        "minor": 1,
+        "patch": 0
+      },
+      "reader": {
+        "major": 5,
+        "minor": 1,
+        "patch": 2
+      },
+      "readable": true,
+      "why": "the reader is at a later patch of the same minor"
+    },
+    {
+      "id": "older-minor-older-patch-reader",
+      "written": {
+        "major": 5,
+        "minor": 0,
+        "patch": 7
+      },
+      "reader": {
+        "major": 5,
+        "minor": 1,
+        "patch": 0
+      },
+      "readable": true,
+      "why": "the minor decides; the patch is not compared"
+    },
+    {
+      "id": "newer-minor",
+      "written": {
+        "major": 5,
+        "minor": 2,
+        "patch": 0
+      },
+      "reader": {
+        "major": 5,
+        "minor": 1,
+        "patch": 0
+      },
+      "readable": false,
+      "why": "the data may use terms a 5.1 reader does not have"
+    },
+    {
+      "id": "older-major",
+      "written": {
+        "major": 4,
+        "minor": 9,
+        "patch": 0
+      },
+      "reader": {
+        "major": 5,
+        "minor": 0,
+        "patch": 0
+      },
+      "readable": false,
+      "why": "a different major is a different line"
+    },
+    {
+      "id": "newer-major",
+      "written": {
+        "major": 6,
+        "minor": 0,
+        "patch": 0
+      },
+      "reader": {
+        "major": 5,
+        "minor": 9,
+        "patch": 0
+      },
+      "readable": false,
+      "why": "a different major is a different line"
+    },
+    {
+      "id": "one-zero",
+      "written": {
+        "major": 1,
+        "minor": 0,
+        "patch": 0
+      },
+      "reader": {
+        "major": 1,
+        "minor": 0,
+        "patch": 0
+      },
+      "readable": true,
+      "why": "identical versions at 1.0.0"
+    },
+    {
+      "id": "zero-x-same-line-newer-reader",
+      "written": {
+        "major": 0,
+        "minor": 5,
+        "patch": 0
+      },
+      "reader": {
+        "major": 0,
+        "minor": 5,
+        "patch": 3
+      },
+      "readable": true,
+      "why": "below 1.0.0 the patch carries additions: a 0.5.3 reader reads 0.5.0 data"
+    },
+    {
+      "id": "zero-x-same-line-newer-writer",
+      "written": {
+        "major": 0,
+        "minor": 5,
+        "patch": 3
+      },
+      "reader": {
+        "major": 0,
+        "minor": 5,
+        "patch": 0
+      },
+      "readable": false,
+      "why": "below 1.0.0 a newer patch may use terms the reader lacks"
+    },
+    {
+      "id": "zero-x-older-line",
+      "written": {
+        "major": 0,
+        "minor": 4,
+        "patch": 0
+      },
+      "reader": {
+        "major": 0,
+        "minor": 5,
+        "patch": 0
+      },
+      "readable": false,
+      "why": "below 1.0.0 a different minor is a different line"
+    },
+    {
+      "id": "zero-x-newer-line",
+      "written": {
+        "major": 0,
+        "minor": 5,
+        "patch": 0
+      },
+      "reader": {
+        "major": 0,
+        "minor": 4,
+        "patch": 9
+      },
+      "readable": false,
+      "why": "below 1.0.0 a different minor is a different line"
+    },
+    {
+      "id": "zero-zero-newer-reader",
+      "written": {
+        "major": 0,
+        "minor": 0,
+        "patch": 3
+      },
+      "reader": {
+        "major": 0,
+        "minor": 0,
+        "patch": 4
+      },
+      "readable": true,
+      "why": "the 0.y rule holds at 0.0.z too: same minor, reader patch at least the writer's"
+    },
+    {
+      "id": "zero-zero-newer-writer",
+      "written": {
+        "major": 0,
+        "minor": 0,
+        "patch": 4
+      },
+      "reader": {
+        "major": 0,
+        "minor": 0,
+        "patch": 3
+      },
+      "readable": false,
+      "why": "a newer patch below 1.0.0 is a newer writer"
+    },
+    {
+      "id": "zero-to-one",
+      "written": {
+        "major": 0,
+        "minor": 9,
+        "patch": 0
+      },
+      "reader": {
+        "major": 1,
+        "minor": 0,
+        "patch": 0
+      },
+      "readable": false,
+      "why": "0.x and 1.x are different majors"
     }
   ]
 }

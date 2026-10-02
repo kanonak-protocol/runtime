@@ -1,0 +1,468 @@
+{
+  "description": "Reading nodes typed at an earlier COMPATIBLE version of the schema's own package (kanonak-codec 0.6.1, runtime#28). deserialize resolves $type exactly, then through isReadableBy (kanonak-canonical) to the same class at a version that can read it, and keeps the written $type; typeMatches answers a generated guard the same way, subclass-aware through the optional, canonicalization-inert `ancestors` field; enumMember resolves a $ref the same way; hashing stays exact-version only. Every rejection message ends in a bracketed kind, which a port must reproduce: [unknown-type], [newer-version], [other-major], [other-minor-line], [hash-needs-exact-version]. See gen-compat-vectors/gen.ts for the full contract.",
+  "canonicalFormVersion": "1",
+  "pkg": {
+    "publisher": "data.example",
+    "packageName": "apps",
+    "version": "1.0.0",
+    "label": "Apps"
+  },
+  "schemas": {
+    "five-one": {
+      "typePredicate": "kanonak.org/core-rdf@1.1.0/type",
+      "labelPredicate": "kanonak.org/core-rdf@1.1.0/label",
+      "packageTypeUri": "kanonak.org/core-kanonak@2.2.0/Package",
+      "classes": {
+        "example.com/vocab@5.1.0/Application": {
+          "typeUri": "example.com/vocab@5.1.0/Application",
+          "props": {
+            "name": {
+              "predicate": "example.com/vocab@5.1.0/name",
+              "kind": "datatype",
+              "datatype": "kanonak.org/core-xsd/string"
+            },
+            "region": {
+              "predicate": "example.com/vocab@5.1.0/region",
+              "kind": "object",
+              "range": "example.com/vocab@5.1.0/Region"
+            },
+            "components": {
+              "predicate": "example.com/vocab@5.1.0/components",
+              "kind": "object",
+              "range": "example.com/vocab@5.1.0/Application"
+            }
+          }
+        },
+        "example.com/vocab@5.1.0/TerminalApplication": {
+          "typeUri": "example.com/vocab@5.1.0/TerminalApplication",
+          "props": {
+            "name": {
+              "predicate": "example.com/vocab@5.1.0/name",
+              "kind": "datatype",
+              "datatype": "kanonak.org/core-xsd/string"
+            },
+            "shell": {
+              "predicate": "example.com/vocab@5.1.0/shell",
+              "kind": "datatype",
+              "datatype": "kanonak.org/core-xsd/string"
+            }
+          },
+          "ancestors": [
+            "example.com/vocab@5.1.0/Application"
+          ]
+        }
+      },
+      "enums": {
+        "example.com/vocab@5.1.0/Region": {
+          "typeUri": "example.com/vocab@5.1.0/Region",
+          "members": {
+            "example.com/vocab@5.1.0/north": {
+              "label": "North"
+            },
+            "example.com/vocab@5.1.0/south": {
+              "label": "South"
+            }
+          }
+        }
+      }
+    },
+    "zero-five-two": {
+      "typePredicate": "kanonak.org/core-rdf@1.1.0/type",
+      "labelPredicate": "kanonak.org/core-rdf@1.1.0/label",
+      "packageTypeUri": "kanonak.org/core-kanonak@2.2.0/Package",
+      "classes": {
+        "example.com/early@0.5.2/Widget": {
+          "typeUri": "example.com/early@0.5.2/Widget",
+          "props": {
+            "name": {
+              "predicate": "example.com/early@0.5.2/name",
+              "kind": "datatype",
+              "datatype": "kanonak.org/core-xsd/string"
+            }
+          }
+        }
+      }
+    }
+  },
+  "deserializeCases": [
+    {
+      "id": "exact",
+      "schema": "five-one",
+      "input": {
+        "$type": "example.com/vocab@5.1.0/Application",
+        "$id": "data.example/apps@1.0.0/a1",
+        "name": "Editor",
+        "color": "red"
+      },
+      "why": "the exact versioned class; an unmodeled key lands in $extra",
+      "expected": {
+        "$type": "example.com/vocab@5.1.0/Application",
+        "$id": "data.example/apps@1.0.0/a1",
+        "name": "Editor",
+        "$extra": {
+          "color": "red"
+        }
+      }
+    },
+    {
+      "id": "older-minor",
+      "schema": "five-one",
+      "input": {
+        "$type": "example.com/vocab@5.0.0/Application",
+        "$id": "data.example/apps@1.0.0/a1",
+        "name": "Editor",
+        "color": "red"
+      },
+      "why": "written at 5.0.0, read with the 5.1.0 schema; the node keeps its written $type",
+      "expected": {
+        "$type": "example.com/vocab@5.0.0/Application",
+        "$id": "data.example/apps@1.0.0/a1",
+        "name": "Editor",
+        "$extra": {
+          "color": "red"
+        }
+      }
+    },
+    {
+      "id": "older-minor-other-patch",
+      "schema": "five-one",
+      "input": {
+        "$type": "example.com/vocab@5.0.3/Application",
+        "$id": "data.example/apps@1.0.0/a1",
+        "name": "Editor",
+        "color": "red"
+      },
+      "why": "the minor decides; the patch is not compared",
+      "expected": {
+        "$type": "example.com/vocab@5.0.3/Application",
+        "$id": "data.example/apps@1.0.0/a1",
+        "name": "Editor",
+        "$extra": {
+          "color": "red"
+        }
+      }
+    },
+    {
+      "id": "newer-patch",
+      "schema": "five-one",
+      "input": {
+        "$type": "example.com/vocab@5.1.4/Application",
+        "$id": "data.example/apps@1.0.0/a1",
+        "name": "Editor",
+        "color": "red"
+      },
+      "why": "from 1.0.0 a patch changes no term, so 5.1.4 data reads with the 5.1.0 schema",
+      "expected": {
+        "$type": "example.com/vocab@5.1.4/Application",
+        "$id": "data.example/apps@1.0.0/a1",
+        "name": "Editor",
+        "$extra": {
+          "color": "red"
+        }
+      }
+    },
+    {
+      "id": "newer-minor",
+      "schema": "five-one",
+      "input": {
+        "$type": "example.com/vocab@5.2.0/Application",
+        "$id": "data.example/apps@1.0.0/a1",
+        "name": "Editor",
+        "color": "red"
+      },
+      "why": "the data may use terms the 5.1.0 schema lacks",
+      "expectError": "newer-version"
+    },
+    {
+      "id": "older-major",
+      "schema": "five-one",
+      "input": {
+        "$type": "example.com/vocab@4.2.0/Application",
+        "$id": "data.example/apps@1.0.0/a1",
+        "name": "Editor",
+        "color": "red"
+      },
+      "why": "a different major is a different line",
+      "expectError": "other-major"
+    },
+    {
+      "id": "newer-major",
+      "schema": "five-one",
+      "input": {
+        "$type": "example.com/vocab@6.0.0/Application",
+        "$id": "data.example/apps@1.0.0/a1",
+        "name": "Editor",
+        "color": "red"
+      },
+      "why": "a different major is a different line",
+      "expectError": "other-major"
+    },
+    {
+      "id": "unknown-class",
+      "schema": "five-one",
+      "input": {
+        "$type": "example.com/vocab@5.1.0/Nope",
+        "$id": "data.example/apps@1.0.0/n1"
+      },
+      "why": "no such class at any version",
+      "expectError": "unknown-type"
+    },
+    {
+      "id": "other-package",
+      "schema": "five-one",
+      "input": {
+        "$type": "other.example/vocab@5.1.0/Application",
+        "$id": "data.example/apps@1.0.0/o1"
+      },
+      "why": "same local name, another package",
+      "expectError": "unknown-type"
+    },
+    {
+      "id": "versionless-type",
+      "schema": "five-one",
+      "input": {
+        "$type": "example.com/vocab/Application",
+        "$id": "data.example/apps@1.0.0/v1"
+      },
+      "why": "a versionless $type has no version to check, so only an exact key could match",
+      "expectError": "unknown-type"
+    },
+    {
+      "id": "zero-x-older-patch",
+      "schema": "zero-five-two",
+      "input": {
+        "$type": "example.com/early@0.5.0/Widget",
+        "$id": "data.example/apps@1.0.0/w1",
+        "name": "Knob"
+      },
+      "why": "below 1.0.0 the patch carries additions: 0.5.2 reads 0.5.0",
+      "expected": {
+        "$type": "example.com/early@0.5.0/Widget",
+        "$id": "data.example/apps@1.0.0/w1",
+        "name": "Knob"
+      }
+    },
+    {
+      "id": "zero-x-newer-patch",
+      "schema": "zero-five-two",
+      "input": {
+        "$type": "example.com/early@0.5.3/Widget",
+        "$id": "data.example/apps@1.0.0/w1",
+        "name": "Knob"
+      },
+      "why": "below 1.0.0 a newer patch is a newer writer",
+      "expectError": "newer-version"
+    },
+    {
+      "id": "zero-x-older-line",
+      "schema": "zero-five-two",
+      "input": {
+        "$type": "example.com/early@0.4.9/Widget",
+        "$id": "data.example/apps@1.0.0/w1",
+        "name": "Knob"
+      },
+      "why": "below 1.0.0 a different minor is a different line",
+      "expectError": "other-minor-line"
+    },
+    {
+      "id": "zero-x-newer-line",
+      "schema": "zero-five-two",
+      "input": {
+        "$type": "example.com/early@0.6.0/Widget",
+        "$id": "data.example/apps@1.0.0/w1",
+        "name": "Knob"
+      },
+      "why": "below 1.0.0 a different minor is a different line",
+      "expectError": "other-minor-line"
+    }
+  ],
+  "typeMatchesCases": [
+    {
+      "id": "subclass-older-minor",
+      "schema": "five-one",
+      "node": {
+        "$type": "example.com/vocab@5.0.0/TerminalApplication"
+      },
+      "classUri": "example.com/vocab@5.1.0/Application",
+      "why": "an Application check accepts a TerminalApplication written at an earlier compatible minor",
+      "expected": true
+    },
+    {
+      "id": "same-class",
+      "schema": "five-one",
+      "node": {
+        "$type": "example.com/vocab@5.1.0/TerminalApplication"
+      },
+      "classUri": "example.com/vocab@5.1.0/TerminalApplication",
+      "why": "the class itself",
+      "expected": true
+    },
+    {
+      "id": "superclass-is-not-subclass",
+      "schema": "five-one",
+      "node": {
+        "$type": "example.com/vocab@5.0.0/Application"
+      },
+      "classUri": "example.com/vocab@5.1.0/TerminalApplication",
+      "why": "an Application is not a TerminalApplication",
+      "expected": false
+    },
+    {
+      "id": "newer-minor-never-matches",
+      "schema": "five-one",
+      "node": {
+        "$type": "example.com/vocab@5.2.0/Application"
+      },
+      "classUri": "example.com/vocab@5.1.0/Application",
+      "why": "a type this schema cannot read never matches",
+      "expected": false
+    },
+    {
+      "id": "multi-typed-member",
+      "schema": "five-one",
+      "node": {
+        "$type": "example.com/vocab@5.0.0/Application",
+        "$types": [
+          "example.com/vocab@5.0.0/Application",
+          "other.example/tags@1.0.0/Tagged"
+        ]
+      },
+      "classUri": "example.com/vocab@5.1.0/Application",
+      "why": "any member of $types may match",
+      "expected": true
+    },
+    {
+      "id": "foreign-member",
+      "schema": "five-one",
+      "node": {
+        "$type": "example.com/vocab@5.0.0/Application",
+        "$types": [
+          "example.com/vocab@5.0.0/Application",
+          "other.example/tags@1.0.0/Tagged"
+        ]
+      },
+      "classUri": "other.example/tags@1.0.0/Tagged",
+      "why": "a class this schema does not have is never matched",
+      "expected": false
+    },
+    {
+      "id": "untyped-node",
+      "schema": "five-one",
+      "node": {},
+      "classUri": "example.com/vocab@5.1.0/Application",
+      "why": "a node with no type matches nothing",
+      "expected": false
+    }
+  ],
+  "enumMemberCases": [
+    {
+      "id": "exact-member",
+      "schema": "five-one",
+      "ref": "example.com/vocab@5.1.0/north",
+      "why": "the exact versioned key",
+      "expected": {
+        "enumType": "example.com/vocab@5.1.0/Region",
+        "uri": "example.com/vocab@5.1.0/north",
+        "label": "North"
+      }
+    },
+    {
+      "id": "older-minor-member",
+      "schema": "five-one",
+      "ref": "example.com/vocab@5.0.0/north",
+      "why": "referenced at an earlier compatible minor",
+      "expected": {
+        "enumType": "example.com/vocab@5.1.0/Region",
+        "uri": "example.com/vocab@5.1.0/north",
+        "label": "North"
+      }
+    },
+    {
+      "id": "newer-minor-member",
+      "schema": "five-one",
+      "ref": "example.com/vocab@5.2.0/north",
+      "why": "a member referenced at a newer minor is not this schema's",
+      "expected": null
+    },
+    {
+      "id": "unknown-member",
+      "schema": "five-one",
+      "ref": "example.com/vocab@5.1.0/east",
+      "why": "no such member",
+      "expected": null
+    },
+    {
+      "id": "other-package-member",
+      "schema": "five-one",
+      "ref": "other.example/vocab@5.1.0/north",
+      "why": "another package",
+      "expected": null
+    },
+    {
+      "id": "versionless-member",
+      "schema": "five-one",
+      "ref": "example.com/vocab/north",
+      "why": "a versionless reference has no version to check",
+      "expected": null
+    }
+  ],
+  "hashCases": [
+    {
+      "id": "exact-hashes",
+      "schema": "five-one",
+      "nodes": [
+        {
+          "$type": "example.com/vocab@5.1.0/Application",
+          "$id": "data.example/apps@1.0.0/a1",
+          "name": "Editor"
+        }
+      ],
+      "why": "the exact class: hashing is unchanged",
+      "expectedHash": "sha256:48893cca62836a868de55269ff2ab59e4ba59bd72fd1de572c7747b669a3f440"
+    },
+    {
+      "id": "compatible-node-cannot-hash",
+      "schema": "five-one",
+      "nodes": [
+        {
+          "$type": "example.com/vocab@5.0.0/Application",
+          "$id": "data.example/apps@1.0.0/a1",
+          "name": "Editor"
+        }
+      ],
+      "why": "the predicates would carry 5.1.0 where the producer hashed 5.0.0",
+      "expectError": "hash-needs-exact-version"
+    },
+    {
+      "id": "compatible-embedded-cannot-hash",
+      "schema": "five-one",
+      "nodes": [
+        {
+          "$type": "example.com/vocab@5.1.0/Application",
+          "$id": "data.example/apps@1.0.0/a2",
+          "name": "Suite",
+          "components": [
+            {
+              "$type": "example.com/vocab@5.0.0/TerminalApplication",
+              "name": "Shell"
+            }
+          ]
+        }
+      ],
+      "why": "the same holds for an embedded value written at the earlier minor",
+      "expectError": "hash-needs-exact-version"
+    },
+    {
+      "id": "unknown-cannot-hash",
+      "schema": "five-one",
+      "nodes": [
+        {
+          "$type": "example.com/vocab@5.1.0/Nope",
+          "$id": "data.example/apps@1.0.0/n1"
+        }
+      ],
+      "why": "no such class",
+      "expectError": "unknown-type"
+    }
+  ]
+}

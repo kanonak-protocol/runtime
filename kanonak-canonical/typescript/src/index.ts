@@ -16,6 +16,7 @@ export {
   localName,
   displayName,
   lenientVersionlessKey,
+  isReadableBy,
 } from './Coordinate.js';
 export type { Coordinate, CoordinateVersion } from './Coordinate.js';
 export type {

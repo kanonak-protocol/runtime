@@ -32,7 +32,27 @@ hash, err := codec.ContentHash(nodes, schema, pkg)   // "sha256:..."
 
 wire := codec.Serialize(node)                 // typed node -> normalized JSON
 node, err := codec.Deserialize(wire, schema)  // normalized JSON -> typed node
+
+ok, err := codec.TypeMatches(node, classURI, schema) // generated type guard
+ok, err = typed.KanonakNode.TypeMatches(classURI, schema) // same, on a typed instance
+m, found := codec.LookupEnumMember(schema, ref)      // {"$ref": ...} -> enum member
 ```
+
+### Compatible versions
+
+A node is typed with the class version its producer resolved; a codec generated
+from a later COMPATIBLE version of the same package still reads it.
+`Deserialize` resolves `$type` through the exact versioned class first, then the
+same publisher/package/name at the highest schema version that can read the
+written one (`canonical.IsReadableBy`), and keeps the `$type` it was written
+with. `TypeMatches` answers a generated type guard the same way, subclass-aware
+through a class's optional `Ancestors` (`"ancestors"`: every superclass's
+versioned URI; canonicalization never reads it); it errors only when `classURI`
+is not a class coordinate. `LookupEnumMember` resolves a member reference the
+same way (`EnumMemberMatch{EnumType, URI, Member}`, or `found == false` for
+"not this schema's"). Hashing stays exact-version only. Every rejection message
+ends in a bracketed kind: `[unknown-type]`, `[newer-version]`, `[other-major]`,
+`[other-minor-line]`, `[hash-needs-exact-version]`.
 
 Embedded object values are not yet supported — pass a reference
 (`{"$ref": "..."}`) instead. Malformed input fails loudly; there are no silent
@@ -50,6 +70,6 @@ go test ./...
 ```
 
 Conformance is driven by the shared vectors at
-`../vectors/codec-vectors.json` (the same vectors every `kanonak-codec` port
-runs). The basic case hash is
+`../vectors/codec-vectors*.json` (the same vectors every `kanonak-codec` port
+runs; `codec-vectors-compat.json` pins the compatible-version contract). The basic case hash is
 `sha256:6ed4e664dbaf7d3331d71af297f48da23994af34d081a86f555cb34706de2913`.

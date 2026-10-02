@@ -184,3 +184,14 @@ func ToNode(typed interface{}, schema CodecSchema) (map[string]interface{}, erro
 	}
 	return Deserialize(obj, schema)
 }
+
+// TypeMatches reports whether this instance is of the class classURI -
+// TypeMatches over the envelope's Types, else its Type (runtime#28). What a
+// generated type guard calls on its embedded KanonakNode.
+func (n KanonakNode) TypeMatches(classURI string, schema CodecSchema) (bool, error) {
+	members := n.Types
+	if len(members) == 0 && n.Type != "" {
+		members = []string{n.Type}
+	}
+	return typeMatchesMembers(members, classURI, schema)
+}

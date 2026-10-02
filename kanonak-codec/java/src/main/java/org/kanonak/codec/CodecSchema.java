@@ -35,8 +35,27 @@ public record CodecSchema(
         this(typePredicate, labelPredicate, packageTypeUri, classes, Map.of());
     }
 
-    /** A class's canonicalization schema: its durable URI + its (flattened) props. */
-    public record CodecClass(String typeUri, Map<String, CodecProp> props) {}
+    /**
+     * A class's canonicalization schema: its durable URI + its (flattened) props.
+     *
+     * <p>{@code ancestors} (0.6.1, runtime#28) lists every superclass of the
+     * class, transitively, by durable VERSIONED URI — what lets
+     * {@link Codec#typeMatches} accept a subclass node for a superclass check
+     * (an {@code Application} check accepts a {@code TerminalApplication}).
+     * Optional and additive: a schema without it is still valid (it reads as
+     * the empty list), and canonicalization never reads it. Absent, a type
+     * match is by the class itself only — stricter, never looser.
+     */
+    public record CodecClass(String typeUri, Map<String, CodecProp> props, List<String> ancestors) {
+        public CodecClass {
+            ancestors = ancestors == null ? List.of() : List.copyOf(ancestors);
+        }
+
+        /** Source-compatible 2-arg form for callers written before 0.6.1 added {@code ancestors}. */
+        public CodecClass(String typeUri, Map<String, CodecProp> props) {
+            this(typeUri, props, List.of());
+        }
+    }
 
     /**
      * One member of a closed set of named individuals. A record even when
@@ -102,7 +121,15 @@ public record CodecSchema(
                             (String) p.get("range")));
                     }
                 }
-                classes.put(e.getKey(), new CodecClass((String) c.get("typeUri"), props));
+                // Superclasses (0.6.1, runtime#28). Optional: absent reads as none.
+                List<String> ancestors = new ArrayList<>();
+                List<Object> rawAncestors = (List<Object>) c.get("ancestors");
+                if (rawAncestors != null) {
+                    for (Object a : rawAncestors) {
+                        ancestors.add((String) a);
+                    }
+                }
+                classes.put(e.getKey(), new CodecClass((String) c.get("typeUri"), props, ancestors));
             }
         }
         // Closed sets (0.5.0, runtime#21). Optional: a schema written before

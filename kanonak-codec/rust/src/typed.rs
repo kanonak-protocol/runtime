@@ -60,6 +60,24 @@ pub struct KanonakNode {
     pub extra: Map<String, Json>,
 }
 
+impl KanonakNode {
+    /// Whether this instance is of the class `class_uri` — [`crate::type_matches`]
+    /// over the envelope's `$types`, else its `$type` (runtime#28). What a
+    /// generated type guard calls through [`KanonakResource::kanonak_node`].
+    pub fn type_matches(&self, class_uri: &str, schema: &Json) -> Result<bool, CodecError> {
+        let members: Vec<&str> = match &self.types {
+            Some(types) => types.iter().map(String::as_str).collect(),
+            None => self
+                .type_uri
+                .as_deref()
+                .filter(|t| !t.is_empty())
+                .into_iter()
+                .collect(),
+        };
+        crate::type_matches_members(&members, class_uri, schema)
+    }
+}
+
 /// Implemented by generated typed structs (over their flattened
 /// [`KanonakNode`]) so the runtime can read/write an instance's envelope —
 /// what lets [`Ref::to_resource`] resolve identity and

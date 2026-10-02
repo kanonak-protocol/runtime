@@ -31,6 +31,17 @@ namespace Kanonak.Codec
 
         /// <summary>Properties keyed by local name (the wire field name).</summary>
         public Dictionary<string, CodecProp> Props = new Dictionary<string, CodecProp>();
+
+        /// <summary>
+        /// Every superclass of the class, transitively, by durable VERSIONED URI
+        /// (0.6.1, runtime#28) — what lets <see cref="Codec.TypeMatches(IReadOnlyDictionary{string, object}, string, CodecSchema)"/>
+        /// accept a subclass node for a superclass check (an <c>Application</c>
+        /// check accepts a <c>TerminalApplication</c>). Optional and additive: a
+        /// schema without it is still valid (it reads as empty), and
+        /// canonicalization never reads it. Empty, a type match is by the class
+        /// itself only — stricter, never looser.
+        /// </summary>
+        public List<string> Ancestors = new List<string>();
     }
 
     /// <summary>
@@ -145,6 +156,11 @@ namespace Kanonak.Codec
                     if (p.Value.TryGetProperty("datatype", out var dt)) prop.Datatype = dt.GetString();
                     if (p.Value.TryGetProperty("range", out var rg)) prop.Range = rg.GetString();
                     cc.Props[p.Name] = prop;
+                }
+                // Superclasses (0.6.1, runtime#28). Optional: absent reads as none.
+                if (cls.Value.TryGetProperty("ancestors", out var ancestors) && ancestors.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var a in ancestors.EnumerateArray()) cc.Ancestors.Add(a.GetString());
                 }
                 schema.Classes[cls.Name] = cc;
             }

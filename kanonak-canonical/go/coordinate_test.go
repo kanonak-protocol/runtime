@@ -81,3 +81,23 @@ func TestCoordinateDisplayNameVectors(t *testing.T) {
 		}
 	}
 }
+
+func TestCoordinateReadableVectors(t *testing.T) {
+	doc := readVectors(t, "coordinate-vectors.json")
+	ver := func(raw interface{}) CoordinateVersion {
+		m := raw.(map[string]interface{})
+		return CoordinateVersion{Major: int(m["major"].(float64)), Minor: int(m["minor"].(float64)), Patch: int(m["patch"].(float64))}
+	}
+	vectors := doc["readableVectors"].([]interface{})
+	if len(vectors) == 0 {
+		t.Fatal("no readableVectors")
+	}
+	for _, raw := range vectors {
+		v := raw.(map[string]interface{})
+		id := v["id"].(string)
+		expected := v["readable"].(bool)
+		if got := IsReadableBy(ver(v["written"]), ver(v["reader"])); got != expected {
+			t.Errorf("[%s] IsReadableBy expected %v, got %v", id, expected, got)
+		}
+	}
+}

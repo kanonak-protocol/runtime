@@ -22,6 +22,8 @@ Codec.canonicalForm(nodes, schema, pkg);  // the {subjects:[...]} JSON
 Codec.contentHash(nodes, schema, pkg);    // "sha256:..." — matches `kanonak hash`
 Codec.serialize(node);                    // node -> normalized-JSON wire Map
 Codec.deserialize(json, schema);          // normalized-JSON Map -> node
+Codec.typeMatches(node, classUri, schema); // a generated type guard (also takes a KanonakNode)
+Codec.enumMember(schema, ref);            // -> EnumMemberMatch(enumType, uri, member), or null
 ```
 
 `Codec.buildPackage` synthesizes the `rdf:type` triple for each node and the
@@ -43,6 +45,25 @@ embedded value (0.2.0): a map with no `$id`, an optional `$name` (the authored
 dict-key — hash-relevant), an optional `$type` (emits a type statement when
 present), and schema-mapped fields. Without `$type`, fields map via the
 containing property's `range` (inference only — no type statement is emitted).
+
+### Reading an earlier compatible version (0.6.1)
+
+A node is typed with the class version its producer resolved; a codec built
+from a later COMPATIBLE version of the same package still reads it.
+`deserialize` resolves `$type` by the exact key first, then by the same
+publisher/package/name at the highest schema version for which
+`Coordinate.isReadableBy(written, schemaVersion)` (kanonak-canonical) holds,
+and the node keeps its WRITTEN `$type`. A rejection message ends in a
+bracketed kind: `[unknown-type]`, `[newer-version]`, `[other-major]` or
+`[other-minor-line]`. `typeMatches` resolves each of the node's types
+(`$types`, else `$type`) the same way and matches the class itself or any
+entry of the optional `CodecClass.ancestors()` (every superclass, by versioned
+URI; canonicalization never reads it, and a schema without it still parses);
+unreadable types never match. `enumMember` resolves a `$ref` exactly, then to
+the same member at a version that can read it. Hashing stays EXACT-version
+only: a node or embedded value whose `$type` is only compatibly present is
+rejected with `[hash-needs-exact-version]`, since its predicates would carry
+the schema's version instead of the producer's.
 
 ## Typed surface (0.3.0)
 
@@ -76,8 +97,8 @@ javac -d out \
   ../../kanonak-canonical/java/src/main/java/org/kanonak/canonical/*.java \
   src/main/java/org/kanonak/codec/*.java \
   conformance/Conformance.java conformance/TypedConformance.java
-java -cp out Conformance        # runs ../vectors/codec-vectors.json AND
-                                # ../vectors/codec-vectors-embedded.json
+java -cp out Conformance        # runs every ../vectors/codec-vectors*.json file
+                                # (base, embedded, types, enums, compat)
 java -cp out TypedConformance   # the typed surface (KanonakNode / Ref /
                                 # TypedNodes) against the same vectors
 ```

@@ -12,8 +12,11 @@ import org.kanonak.canonical.CanonicalForm.Statement;
 import org.kanonak.canonical.CanonicalForm.Subject;
 import org.kanonak.canonical.CanonicalForm.Value;
 import org.kanonak.canonical.Carrier;
+import org.kanonak.canonical.Coordinate;
 
 import org.kanonak.codec.CodecSchema.CodecClass;
+import org.kanonak.codec.CodecSchema.CodecEnum;
+import org.kanonak.codec.CodecSchema.CodecEnumMember;
 import org.kanonak.codec.CodecSchema.CodecProp;
 
 /**
@@ -128,6 +131,246 @@ public final class Codec {
         }
     }
 
+    // -- The compatible class lookup (runtime#28) --------------------------------
+
+    /** {@link #classFor}'s outcome: exactly one of {@code cls} (found) or {@code error} (why not). */
+    private record ClassMatch(CodecClass cls, String error) {}
+
+    /**
+     * THE class lookup (runtime#28). A node is typed with the version of the
+     * class its producer's import resolved to; a codec generated from a later
+     * COMPATIBLE version of the same package must still read it. So: the exact
+     * versioned key first, then the class with the same publisher, package and
+     * name whose version can read the written one —
+     * {@link Coordinate#isReadableBy} from kanonak-canonical, the protocol's
+     * single compatibility rule, pinned in every port. When nothing matches,
+     * the error says why, with a bracketed kind the conformance vectors pin:
+     * {@code [unknown-type]}, {@code [newer-version]} (the data may use terms
+     * this schema lacks), {@code [other-major]}, or {@code [other-minor-line]}
+     * (below 1.0.0 the minor is the incompatible line).
+     */
+    private static ClassMatch classFor(CodecSchema schema, String typeUri) {
+        CodecClass exact = schema.classes().get(typeUri);
+        if (exact != null) {
+            return new ClassMatch(exact, null);
+        }
+        Coordinate written = coordinateOf(typeUri);
+        if (written == null || written.version() == null) {
+            return new ClassMatch(null, "no schema for type " + typeUri + " [unknown-type]");
+        }
+        String key = keyOf(written);
+
+        CodecClass readable = null;
+        Coordinate.Version readableVersion = null;
+        Coordinate.Version nearest = null;
+        for (Map.Entry<String, CodecClass> e : schema.classes().entrySet()) {
+            Coordinate c = coordinateOf(e.getKey());
+            if (c == null || c.version() == null || !keyOf(c).equals(key)) {
+                continue;
+            }
+            if (Coordinate.isReadableBy(written.version(), c.version())) {
+                if (readable == null || compareVersions(c.version(), readableVersion) > 0) {
+                    readable = e.getValue();
+                    readableVersion = c.version();
+                }
+            } else if (nearest == null || compareVersions(c.version(), nearest) > 0) {
+                nearest = c.version();
+            }
+        }
+        if (readable != null) {
+            return new ClassMatch(readable, null);
+        }
+        if (nearest == null) {
+            return new ClassMatch(null, "no schema for type " + typeUri + " [unknown-type]");
+        }
+        return new ClassMatch(null, incompatibleVersion(typeUri, written.version(), nearest));
+    }
+
+    private static String incompatibleVersion(String typeUri, Coordinate.Version w, Coordinate.Version r) {
+        String ws = formatVersion(w);
+        String rs = formatVersion(r);
+        if (w.major() != r.major()) {
+            return typeUri + " is written at " + ws + ", a different major version than this codec's schema ("
+                + rs + ") [other-major]";
+        }
+        if (w.major() == 0 && w.minor() != r.minor()) {
+            return typeUri + " is written at " + ws + "; below 1.0.0 a different minor is a different version "
+                + "line than this codec's schema (" + rs + ") [other-minor-line]";
+        }
+        return typeUri + " is written at " + ws + ", newer than this codec's schema (" + rs
+            + "); upgrade the codec to read it [newer-version]";
+    }
+
+    /** The parsed coordinate (strict), or {@code null} when the string is not one — never throws. */
+    private static Coordinate coordinateOf(String uri) {
+        if (uri == null) {
+            return null;
+        }
+        try {
+            return Coordinate.parse(uri);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /** The versionless identity {@code publisher/package/name} of a parsed coordinate. */
+    private static String keyOf(Coordinate c) {
+        return c.publisher() + "/" + c.packageName() + "/" + c.name();
+    }
+
+    /** The versionless identity of a URI, or {@code null} when it is not a coordinate. */
+    private static String keyOf(String uri) {
+        Coordinate c = coordinateOf(uri);
+        return c == null ? null : keyOf(c);
+    }
+
+    private static int compareVersions(Coordinate.Version a, Coordinate.Version b) {
+        if (a.major() != b.major()) {
+            return Integer.compare(a.major(), b.major());
+        }
+        if (a.minor() != b.minor()) {
+            return Integer.compare(a.minor(), b.minor());
+        }
+        return Integer.compare(a.patch(), b.patch());
+    }
+
+    private static String formatVersion(Coordinate.Version v) {
+        return v.major() + "." + v.minor() + "." + v.patch();
+    }
+
+    /**
+     * The class to HASH a node or embedded value with: the exact versioned
+     * class only. A content hash is computed over the producer's predicate and
+     * type URIs, versions included, so a node written at an earlier compatible
+     * version cannot be re-hashed with a later schema — its predicates would
+     * carry the later version and the hash would differ. When only a
+     * compatible class exists, say so ({@code [hash-needs-exact-version]})
+     * rather than produce a different hash or the bare "no schema" error.
+     */
+    private static CodecClass hashClassFor(CodecSchema schema, String typeUri, String what) {
+        CodecClass exact = schema.classes().get(typeUri);
+        if (exact != null) {
+            return exact;
+        }
+        ClassMatch match = classFor(schema, typeUri);
+        if (match.cls() != null) {
+            throw new IllegalArgumentException(
+                "Cannot hash " + what + " " + typeUri + ": this codec's schema has it at "
+                    + match.cls().typeUri() + ", and a content hash is computed with the producer's "
+                    + "schema version — hashing needs the exact class [hash-needs-exact-version]");
+        }
+        throw new IllegalArgumentException("No schema for " + what + " " + typeUri + " [unknown-type]");
+    }
+
+    /**
+     * Whether a node is an instance of the class {@code classUri} — what a
+     * generated type guard asks (runtime#28). Each of the node's types
+     * ({@code $types}, else its {@code $type}) is resolved through the same
+     * compatible lookup {@link #deserialize} uses, so a node written at an
+     * earlier compatible version satisfies the later version's guard; it
+     * matches when that class IS {@code classUri} or has it among its
+     * {@link CodecClass#ancestors() ancestors}. Classes compare by versionless
+     * identity. A type this schema cannot read (unknown, newer, another major)
+     * never matches.
+     *
+     * @throws IllegalArgumentException when {@code classUri} is not a class coordinate
+     */
+    public static boolean typeMatches(Map<String, Object> node, String classUri, CodecSchema schema) {
+        Coordinate target = coordinateOf(classUri);
+        if (target == null) {
+            throw new IllegalArgumentException("typeMatches: '" + classUri + "' is not a class coordinate");
+        }
+        String targetKey = keyOf(target);
+        List<String> members = new ArrayList<>();
+        Object types = node.get("$types");
+        if (types instanceof List<?> list) {
+            for (Object m : list) {
+                if (m instanceof String s) {
+                    members.add(s);
+                }
+            }
+        } else if (node.get("$type") instanceof String t && !t.isEmpty()) {
+            members.add(t);
+        }
+        for (String member : members) {
+            ClassMatch match = classFor(schema, member);
+            if (match.cls() == null) {
+                continue;
+            }
+            if (targetKey.equals(keyOf(match.cls().typeUri()))) {
+                return true;
+            }
+            for (String ancestor : match.cls().ancestors()) {
+                if (targetKey.equals(keyOf(ancestor))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * {@link #typeMatches(Map, String, CodecSchema)} over a typed instance —
+     * its {@code $types} ({@link KanonakNode#getTypes()}), else its
+     * {@code $type} ({@link KanonakNode#getTypeUri()}).
+     */
+    public static boolean typeMatches(KanonakNode node, String classUri, CodecSchema schema) {
+        Map<String, Object> envelope = new LinkedHashMap<>();
+        envelope.put("$type", node.getTypeUri());
+        envelope.put("$types", node.getTypes());
+        return typeMatches(envelope, classUri, schema);
+    }
+
+    /**
+     * An enumeration member found by {@link #enumMember}: the enumeration
+     * class's durable URI (its key in {@code enums}), the member's durable URI
+     * as this schema keys it, and the member itself.
+     */
+    public record EnumMemberMatch(String enumType, String uri, CodecEnumMember member) {}
+
+    /**
+     * The enumeration member a {@code {"$ref": ...}} names (runtime#28): the
+     * exact versioned key first, then the same member at a version that can
+     * read the written one — so a member referenced at an earlier compatible
+     * version of the package resolves against a later schema. {@code null}
+     * when this schema has no such member, which, as for {@code enums} itself,
+     * means "not mine", never "invalid".
+     */
+    public static EnumMemberMatch enumMember(CodecSchema schema, String ref) {
+        if (ref == null || schema.enums() == null) {
+            return null;
+        }
+        for (Map.Entry<String, CodecEnum> e : schema.enums().entrySet()) {
+            CodecEnumMember member = e.getValue().members().get(ref);
+            if (member != null) {
+                return new EnumMemberMatch(e.getKey(), ref, member);
+            }
+        }
+        Coordinate written = coordinateOf(ref);
+        if (written == null || written.version() == null) {
+            return null;
+        }
+        String key = keyOf(written);
+        EnumMemberMatch best = null;
+        Coordinate.Version bestVersion = null;
+        for (Map.Entry<String, CodecEnum> e : schema.enums().entrySet()) {
+            for (Map.Entry<String, CodecEnumMember> m : e.getValue().members().entrySet()) {
+                Coordinate c = coordinateOf(m.getKey());
+                if (c == null || c.version() == null || !keyOf(c).equals(key)) {
+                    continue;
+                }
+                if (!Coordinate.isReadableBy(written.version(), c.version())) {
+                    continue;
+                }
+                if (best == null || compareVersions(c.version(), bestVersion) > 0) {
+                    best = new EnumMemberMatch(e.getKey(), m.getKey(), m.getValue());
+                    bestVersion = c.version();
+                }
+            }
+        }
+        return best;
+    }
+
     /**
      * The raw lexical token of a scalar — the input the canonical form normalizes.
      * Boolean → {@code "true"}/{@code "false"}; String → verbatim; Number → a plain
@@ -204,10 +447,7 @@ public final class Codec {
                 "Cannot map embedded value under " + prop.predicate() + ": it carries no $type "
                     + "and the property declares no range.");
         }
-        CodecClass cls = schema.classes().get(clsUri);
-        if (cls == null) {
-            throw new IllegalArgumentException("no schema for embedded type " + clsUri);
-        }
+        CodecClass cls = hashClassFor(schema, clsUri, "embedded type");
 
         List<Statement> statements = fieldStatements(map, cls, schema);
         if (types != null) {
@@ -281,10 +521,7 @@ public final class Codec {
         if (!(typeUri instanceof String) || ((String) typeUri).isEmpty()) {
             throw new IllegalArgumentException("node is missing $type");
         }
-        CodecClass cls = schema.classes().get(typeUri);
-        if (cls == null) {
-            throw new IllegalArgumentException("no schema for type " + typeUri);
-        }
+        CodecClass cls = hashClassFor(schema, (String) typeUri, "type");
 
         List<Statement> statements = new ArrayList<>();
         // The rdf:type triple(s) every resource carries: one per $types member for
@@ -367,7 +604,11 @@ public final class Codec {
      * Parse normalized JSON into a typed node. {@code $}-envelope keys and the
      * fields modeled on the node's {@code $type} stay top-level; every other key
      * is an open-world assertion collected into {@code $extra}. Requires a string
-     * {@code $type} whose class is present in the schema.
+     * {@code $type} (the one field that cannot be inferred) and a class in the
+     * schema that can read it: the exact class, or the same class at a
+     * compatible later version (runtime#28 — the same lookup {@link #typeMatches}
+     * uses). The node keeps the {@code $type} it was WRITTEN with; the
+     * producer's bytes are the producer's.
      */
     public static Map<String, Object> deserialize(Map<String, Object> json, CodecSchema schema) {
         Object typeUri = json.get("$type");
@@ -380,10 +621,11 @@ public final class Codec {
         // nondeterministic emitter.
         Object where = json.get("$id") instanceof String s && !s.isEmpty() ? s : typeUri;
         assertTypesEnvelopes(json, "deserialize " + where);
-        CodecClass cls = schema.classes().get(typeUri);
-        if (cls == null) {
-            throw new IllegalArgumentException("Cannot deserialize: no schema for type " + typeUri);
+        ClassMatch match = classFor(schema, (String) typeUri);
+        if (match.cls() == null) {
+            throw new IllegalArgumentException("Cannot deserialize: " + match.error());
         }
+        CodecClass cls = match.cls();
 
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("$type", typeUri);

@@ -151,6 +151,20 @@ fn coordinate_vectors() {
             eprintln!("FAIL [{}] expected {:?} got {:?}", id, expected, got);
         }
     }
+    let ver = |j: &J| CoordinateVersion {
+        major: j["major"].as_u64().unwrap(),
+        minor: j["minor"].as_u64().unwrap(),
+        patch: j["patch"].as_u64().unwrap(),
+    };
+    for v in doc["readableVectors"].as_array().unwrap() {
+        let id = v["id"].as_str().unwrap();
+        let expected = v["readable"].as_bool().unwrap();
+        let got = is_readable_by(ver(&v["written"]), ver(&v["reader"]));
+        if got != expected {
+            fails += 1;
+            eprintln!("FAIL [{}] is_readable_by expected {} got {}", id, expected, got);
+        }
+    }
     assert_eq!(fails, 0, "{} coordinate vector(s) failed", fails);
 }
 

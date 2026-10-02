@@ -52,6 +52,12 @@ public final class Conformance {
             passed += ec[0];
             failed += ec[1];
             System.out.println(enumsVectors + ": " + ec[0] + " passed, " + ec[1] + " failed");
+
+            String compatVectors = "../vectors/codec-vectors-compat.json";
+            int[] cc = runCompatFile(compatVectors);
+            passed += cc[0];
+            failed += cc[1];
+            System.out.println(compatVectors + ": " + cc[0] + " passed, " + cc[1] + " failed");
         }
 
         System.out.println("\n" + passed + " passed, " + failed + " failed");
@@ -246,7 +252,13 @@ public final class Conformance {
                     (String) p.get("datatype"),
                     (String) p.get("range")));
             }
-            classes.put(e.getKey(), new CodecClass((String) c.get("typeUri"), props));
+            List<String> ancestors = new ArrayList<>();
+            if (c.get("ancestors") != null) {
+                for (Object a : asList(c.get("ancestors"))) {
+                    ancestors.add((String) a);
+                }
+            }
+            classes.put(e.getKey(), new CodecClass((String) c.get("typeUri"), props, ancestors));
         }
         // Closed sets (0.5.0, runtime#21). NOTE: this mirrors
         // CodecSchema.fromJson by necessity - the harness already holds a
@@ -384,6 +396,165 @@ public final class Conformance {
         }
 
         return new int[] {passed, failed};
+    }
+
+    /**
+     * The 0.6.1 compatibility file (runtime#28): deserialize / typeMatches /
+     * enumMember / hashing over a node typed at an earlier compatible version
+     * of the schema's package. A rejection must END in the bracketed kind the
+     * vector names — the one part of an error message every port reproduces.
+     * The schemas go through the production {@link CodecSchema#fromJson} (the
+     * parser a generated SDK runs), so {@code ancestors} is read where
+     * consumers read it, and a schema without it must still parse.
+     */
+    static int[] runCompatFile(String vectors) throws Exception {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) Json.parse(
+            Files.readString(Paths.get(vectors), StandardCharsets.UTF_8));
+
+        Map<String, CodecSchema> schemas = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : asMap(data.get("schemas")).entrySet()) {
+            schemas.put(e.getKey(), CodecSchema.fromJson(toJson(e.getValue())));
+        }
+        PackageContext pkg = parsePkg(asMap(data.get("pkg")));
+
+        int passed = 0;
+        int failed = 0;
+
+        for (Object co : asList(data.get("deserializeCases"))) {
+            Map<String, Object> c = asMap(co);
+            String cid = (String) c.get("id");
+            CodecSchema schema = schemas.get((String) c.get("schema"));
+            Map<String, Object> input = asMap(c.get("input"));
+            boolean ok;
+            if (c.get("expectError") != null) {
+                ok = rejectsWithKind(() -> Codec.deserialize(input, schema), (String) c.get("expectError"), cid);
+            } else {
+                Map<String, Object> got = Codec.deserialize(input, schema);
+                ok = deepEquals(got, c.get("expected"));
+                if (!ok) {
+                    System.out.println("FAIL [" + cid + "] deserialize\n  got: " + got + "\n  exp: " + c.get("expected"));
+                }
+            }
+            if (ok) passed++; else failed++;
+        }
+
+        for (Object co : asList(data.get("typeMatchesCases"))) {
+            Map<String, Object> c = asMap(co);
+            String cid = (String) c.get("id");
+            boolean got = Codec.typeMatches(asMap(c.get("node")), (String) c.get("classUri"),
+                schemas.get((String) c.get("schema")));
+            if (Boolean.valueOf(got).equals(c.get("expected"))) {
+                passed++;
+            } else {
+                failed++;
+                System.out.println("FAIL [" + cid + "] typeMatches expected " + c.get("expected") + " got " + got);
+            }
+        }
+
+        for (Object co : asList(data.get("enumMemberCases"))) {
+            Map<String, Object> c = asMap(co);
+            String cid = (String) c.get("id");
+            Codec.EnumMemberMatch m = Codec.enumMember(schemas.get((String) c.get("schema")), (String) c.get("ref"));
+            Map<String, Object> got = null;
+            if (m != null) {
+                got = new LinkedHashMap<>();
+                got.put("enumType", m.enumType());
+                got.put("uri", m.uri());
+                got.put("label", m.member().label());
+            }
+            if (deepEquals(got, c.get("expected"))) {
+                passed++;
+            } else {
+                failed++;
+                System.out.println("FAIL [" + cid + "] enumMember\n  got: " + got + "\n  exp: " + c.get("expected"));
+            }
+        }
+
+        for (Object co : asList(data.get("hashCases"))) {
+            Map<String, Object> c = asMap(co);
+            String cid = (String) c.get("id");
+            CodecSchema schema = schemas.get((String) c.get("schema"));
+            List<Map<String, Object>> nodes = new ArrayList<>();
+            for (Object n : asList(c.get("nodes"))) {
+                nodes.add(asMap(n));
+            }
+            boolean ok;
+            if (c.get("expectError") != null) {
+                ok = rejectsWithKind(() -> Codec.contentHash(nodes, schema, pkg), (String) c.get("expectError"), cid);
+            } else {
+                String got = Codec.contentHash(nodes, schema, pkg);
+                ok = got.equals(c.get("expectedHash"));
+                if (!ok) {
+                    System.out.println("FAIL [" + cid + "] hash expected " + c.get("expectedHash") + " got " + got);
+                }
+            }
+            if (ok) passed++; else failed++;
+        }
+
+        return new int[] {passed, failed};
+    }
+
+    /** Whether {@code run} throws with a message ending in {@code [kind]}; reports otherwise. */
+    static boolean rejectsWithKind(Runnable run, String kind, String cid) {
+        try {
+            run.run();
+            System.out.println("FAIL [" + cid + "] expected a [" + kind + "] rejection, got a value");
+            return false;
+        } catch (RuntimeException err) {
+            String message = String.valueOf(err.getMessage());
+            boolean ok = message.endsWith("[" + kind + "]");
+            if (!ok) {
+                System.out.println("FAIL [" + cid + "] expected [" + kind + "], got: " + message);
+            }
+            return ok;
+        }
+    }
+
+    /**
+     * Re-emit a parsed JSON value as JSON text, so a schema the harness already
+     * holds as a map can go through the production {@link CodecSchema#fromJson}.
+     */
+    static String toJson(Object v) {
+        if (v == null) {
+            return "null";
+        }
+        if (v instanceof Map<?, ?> m) {
+            StringBuilder sb = new StringBuilder("{");
+            boolean first = true;
+            for (Map.Entry<?, ?> e : m.entrySet()) {
+                if (!first) sb.append(',');
+                first = false;
+                sb.append(toJson(String.valueOf(e.getKey()))).append(':').append(toJson(e.getValue()));
+            }
+            return sb.append('}').toString();
+        }
+        if (v instanceof List<?> l) {
+            StringBuilder sb = new StringBuilder("[");
+            for (int i = 0; i < l.size(); i++) {
+                if (i > 0) sb.append(',');
+                sb.append(toJson(l.get(i)));
+            }
+            return sb.append(']').toString();
+        }
+        if (v instanceof String s) {
+            StringBuilder sb = new StringBuilder("\"");
+            for (int i = 0; i < s.length(); i++) {
+                char ch = s.charAt(i);
+                if (ch == '"' || ch == '\\') {
+                    sb.append('\\').append(ch);
+                } else if (ch < 0x20) {
+                    sb.append(String.format("\\u%04x", (int) ch));
+                } else {
+                    sb.append(ch);
+                }
+            }
+            return sb.append('"').toString();
+        }
+        if (v instanceof JsonNumber n) {
+            return n.token();
+        }
+        return String.valueOf(v);
     }
 
     static PackageContext parsePkg(Map<String, Object> p) {

@@ -17,8 +17,9 @@
 //!   never to a guess and never to a crash.
 //!
 //! No ordering API on purpose: runtime consumers compare coordinates for
-//! equality only. Version ranges, compatibility, and resolution live in the
-//! SDK, not here. `#` is reserved for embedded resources and rejected by the
+//! equality, plus ONE version relation (runtime#28): `is_readable_by(written,
+//! reader)` — whether data written at one version can be read by a schema at
+//! another. Import ranges and resolution live in the SDK, not here. `#` is reserved for embedded resources and rejected by the
 //! strict parser.
 
 use crate::CanonError;
@@ -186,4 +187,20 @@ pub fn lenient_versionless_key(uri: &str) -> Option<String> {
         return None;
     }
     Some(format!("{}/{}/{}", publisher, pkg, name))
+}
+
+/// Whether data whose terms were written at version `written` can be read by a
+/// reader whose schema is at version `reader` (runtime#28), pinned by
+/// `readableVectors`: a different major is never readable; from 1.0.0 the
+/// reader needs a minor at least the writer's (a patch changes no term, so it
+/// is not compared); below 1.0.0 the minor is the incompatible line and the
+/// reader needs the same minor and a patch at least the writer's.
+pub fn is_readable_by(written: CoordinateVersion, reader: CoordinateVersion) -> bool {
+    if written.major != reader.major {
+        return false;
+    }
+    if written.major == 0 {
+        return reader.minor == written.minor && reader.patch >= written.patch;
+    }
+    reader.minor >= written.minor
 }

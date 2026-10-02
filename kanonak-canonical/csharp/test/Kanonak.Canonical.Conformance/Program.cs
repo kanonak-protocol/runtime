@@ -159,6 +159,17 @@ class Program
             if (got == expected) pass++;
             else { fail++; Console.WriteLine($"  FAIL [{id}] expected '{expected}', got '{got}'"); }
         }
+        foreach (var v in doc.RootElement.GetProperty("readableVectors").EnumerateArray())
+        {
+            total++;
+            string id = v.GetProperty("id").GetString();
+            bool expected = v.GetProperty("readable").GetBoolean();
+            CoordinateVersion Ver(System.Text.Json.JsonElement j) =>
+                new CoordinateVersion(j.GetProperty("major").GetInt32(), j.GetProperty("minor").GetInt32(), j.GetProperty("patch").GetInt32());
+            bool got = Coordinate.IsReadableBy(Ver(v.GetProperty("written")), Ver(v.GetProperty("reader")));
+            if (got == expected) pass++;
+            else { fail++; Console.WriteLine($"  FAIL [{id}] IsReadableBy expected {expected}, got {got}"); }
+        }
         Console.WriteLine($"coordinate-vectors: {pass}/{total} pass, {fail} fail");
         return fail;
     }

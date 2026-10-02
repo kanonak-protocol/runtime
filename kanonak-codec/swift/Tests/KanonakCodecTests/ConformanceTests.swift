@@ -176,6 +176,125 @@ final class CodecVectorTests: XCTestCase {
         }
     }
 
+    /// The 0.6.1 compatibility file (runtime#28): deserialize / typeMatches /
+    /// enumMember / hashing over a node typed at an earlier compatible version
+    /// of the schema's package. Mirrors the TypeScript reference runner
+    /// (`runCompatFile`). A rejection must END in the bracketed kind the vector
+    /// names — the one part of an error message every port reproduces.
+    func testCompatVectors() throws {
+        let data = try Data(contentsOf: vectorsURL("codec-vectors-compat.json"))
+        guard let doc = try parseJSON(data) as? [String: Any],
+              let schemaDicts = doc["schemas"] as? [String: Any],
+              let pkgDict = doc["pkg"] as? [String: Any],
+              let deserializeCases = doc["deserializeCases"] as? [[String: Any]],
+              let typeMatchesCases = doc["typeMatchesCases"] as? [[String: Any]],
+              let enumMemberCases = doc["enumMemberCases"] as? [[String: Any]],
+              let hashCases = doc["hashCases"] as? [[String: Any]] else {
+            throw CodecError("vectors codec-vectors-compat.json: unexpected shape")
+        }
+        var schemas: [String: CodecSchema] = [:]
+        for (name, schemaDict) in schemaDicts {
+            schemas[name] = try CodecSchema.fromJSON(try writeJSON(schemaDict))
+        }
+        let pkg = packageContext(pkgDict)
+        XCTAssertFalse(deserializeCases.isEmpty)
+        XCTAssertFalse(typeMatchesCases.isEmpty)
+        XCTAssertFalse(enumMemberCases.isEmpty)
+        XCTAssertFalse(hashCases.isEmpty)
+
+        // -- deserialize: the exact class, else the same class at a version that
+        //    can read the written one; the node keeps its WRITTEN $type --
+        for c in deserializeCases {
+            let cid = c["id"] as! String
+            let schema = try XCTUnwrap(schemas[c["schema"] as! String], "[\(cid)] schema")
+            let input = c["input"] as! [String: Any]
+            if let kind = c["expectError"] as? String {
+                assertRejects(kind, cid) { _ = try deserialize(input, schema: schema) }
+            } else {
+                let got = try deserialize(input, schema: schema)
+                XCTAssertTrue(jsonEqual(got, c["expected"] ?? NSNull()),
+                              "[\(cid)] deserialize\n  got: \(got)\n  exp: \(c["expected"] ?? "nil")")
+            }
+        }
+
+        // -- typeMatches: what a generated type guard asks, subclass-aware --
+        for c in typeMatchesCases {
+            let cid = c["id"] as! String
+            let schema = try XCTUnwrap(schemas[c["schema"] as! String], "[\(cid)] schema")
+            let node = c["node"] as! [String: Any]
+            let got = try typeMatches(node, classUri: c["classUri"] as! String, schema: schema)
+            XCTAssertEqual(got, c["expected"] as! Bool, "[\(cid)] typeMatches")
+            let typed = KanonakNode(type: node["$type"] as? String, types: node["$types"] as? [String])
+            let gotTyped = try typeMatches(typed, classUri: c["classUri"] as! String, schema: schema)
+            XCTAssertEqual(gotTyped, c["expected"] as! Bool, "[\(cid)] typeMatches (KanonakNode)")
+        }
+
+        // -- enumMember: exact key, else the same member at a readable version --
+        for c in enumMemberCases {
+            let cid = c["id"] as! String
+            let schema = try XCTUnwrap(schemas[c["schema"] as! String], "[\(cid)] schema")
+            var got: Any = NSNull()
+            if let m = enumMember(c["ref"] as! String, schema: schema) {
+                var label: Any = NSNull()
+                if let l = m.member.label { label = l }
+                got = ["enumType": m.enumType, "uri": m.uri, "label": label] as [String: Any]
+            }
+            XCTAssertTrue(jsonEqual(got, c["expected"] ?? NSNull()),
+                          "[\(cid)] enumMember\n  got: \(got)\n  exp: \(c["expected"] ?? "nil")")
+        }
+
+        // -- hashing: exact-version only --
+        for c in hashCases {
+            let cid = c["id"] as! String
+            let schema = try XCTUnwrap(schemas[c["schema"] as! String], "[\(cid)] schema")
+            let nodes = c["nodes"] as! [[String: Any]]
+            if let kind = c["expectError"] as? String {
+                assertRejects(kind, cid) { _ = try contentHash(nodes, schema: schema, pkg: pkg) }
+            } else {
+                XCTAssertEqual(try contentHash(nodes, schema: schema, pkg: pkg),
+                               c["expectedHash"] as! String, "[\(cid)] hash")
+            }
+        }
+    }
+
+    /// Asserts `body` throws an error whose message ENDS in `[kind]`.
+    private func assertRejects(_ kind: String, _ cid: String, _ body: () throws -> Void) {
+        do {
+            try body()
+            XCTFail("[\(cid)] expected a [\(kind)] rejection, got a value")
+        } catch {
+            let message = (error as? CodecError)?.message ?? String(describing: error)
+            XCTAssertTrue(message.hasSuffix("[\(kind)]"), "[\(cid)] expected [\(kind)], got: \(message)")
+        }
+    }
+
+    /// `ancestors` is optional and canonicalization-inert: a class without it
+    /// still decodes, and without it a type match is by the class itself only
+    /// (a subclass node does not match its superclass check).
+    func testAncestorsAbsentIsStricterNeverLooser() throws {
+        let app = "example.com/vocab@5.1.0/Application"
+        let terminal = "example.com/vocab@5.1.0/TerminalApplication"
+        let props = ["name": CodecProp(predicate: "example.com/vocab@5.1.0/name", kind: "datatype",
+                                       datatype: "kanonak.org/core-xsd/string")]
+        func schema(ancestors: [String]?) -> CodecSchema {
+            CodecSchema(typePredicate: "kanonak.org/core-rdf@1.1.0/type",
+                        labelPredicate: "kanonak.org/core-rdf@1.1.0/label",
+                        packageTypeUri: "kanonak.org/core-kanonak@2.2.0/Package",
+                        classes: [app: CodecClass(typeUri: app, props: props),
+                                  terminal: CodecClass(typeUri: terminal, props: props, ancestors: ancestors)])
+        }
+        let node: [String: Any] = ["$type": "example.com/vocab@5.0.0/TerminalApplication"]
+        XCTAssertTrue(try typeMatches(node, classUri: app, schema: schema(ancestors: [app])))
+        XCTAssertFalse(try typeMatches(node, classUri: app, schema: schema(ancestors: nil)))
+        XCTAssertTrue(try typeMatches(node, classUri: terminal, schema: schema(ancestors: nil)))
+        XCTAssertThrowsError(try typeMatches(node, classUri: "not a coordinate", schema: schema(ancestors: nil)))
+
+        let decoded = try CodecSchema.fromJSON(
+            "{\"typePredicate\":\"t\",\"labelPredicate\":\"l\",\"packageTypeUri\":\"p\","
+            + "\"classes\":{\"\(app)\":{\"typeUri\":\"\(app)\",\"props\":{}}}}")
+        XCTAssertNil(decoded.classes[app]?.ancestors)
+    }
+
     /// `publisher/package@version/name` - the durable versioned formation,
     /// checked structurally so the test needs no regex dependency.
     private func isVersionedDurableUri(_ uri: String) -> Bool {

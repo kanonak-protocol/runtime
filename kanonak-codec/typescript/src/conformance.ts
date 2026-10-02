@@ -8,6 +8,8 @@
 import { readFileSync } from 'node:fs';
 import {
   deserialize,
+  typeMatches,
+  enumMember,
   embed,
   packageCanonicalForm,
   packageContentHash,
@@ -212,6 +214,69 @@ runFile('codec-vectors.json');
 runFile('codec-vectors-embedded.json');
 runTypesFile('codec-vectors-types.json');
 runEnumsFile('codec-vectors-enums.json');
+runCompatFile('codec-vectors-compat.json');
+
+/**
+ * The compatibility file (0.6.1, runtime#28): deserialize / typeMatches /
+ * enumMember / hashing over a node typed at an earlier compatible version of
+ * the schema's package. A rejection must end in the bracketed kind the vector
+ * names — the one part of an error message every port reproduces.
+ */
+function runCompatFile(relative: string): void {
+  const vfile = new URL(`../../vectors/${relative}`, import.meta.url);
+  const d: any = JSON.parse(readFileSync(vfile, 'utf8'));
+  let pass = 0;
+  let total = 0;
+  const rejected = (fn: () => unknown, kind: string, id: string): boolean => {
+    try {
+      fn();
+      console.error(`${id}: expected a [${kind}] rejection, got a value`);
+      return false;
+    } catch (err) {
+      const ok = (err as Error).message.endsWith(`[${kind}]`);
+      if (!ok) console.error(`${id}: expected [${kind}], got: ${(err as Error).message}`);
+      return ok;
+    }
+  };
+  for (const c of d.deserializeCases) {
+    total++;
+    const schema = d.schemas[c.schema];
+    let ok: boolean;
+    if (c.expectError) ok = rejected(() => deserialize(c.input, schema), c.expectError, c.id);
+    else {
+      const got = deserialize(c.input, schema);
+      ok = JSON.stringify(got) === JSON.stringify(c.expected);
+      if (!ok) console.error(`${c.id}: expected ${JSON.stringify(c.expected)} got ${JSON.stringify(got)}`);
+    }
+    if (ok) pass++; else totalFails++;
+  }
+  for (const c of d.typeMatchesCases) {
+    total++;
+    const got = typeMatches(c.node, c.classUri, d.schemas[c.schema]);
+    if (got === c.expected) pass++;
+    else { totalFails++; console.error(`${c.id}: typeMatches expected ${c.expected} got ${got}`); }
+  }
+  for (const c of d.enumMemberCases) {
+    total++;
+    const m = enumMember(d.schemas[c.schema], c.ref);
+    const got = m ? { enumType: m.enumType, uri: m.uri, label: m.member.label ?? null } : null;
+    if (JSON.stringify(got) === JSON.stringify(c.expected)) pass++;
+    else { totalFails++; console.error(`${c.id}: enumMember expected ${JSON.stringify(c.expected)} got ${JSON.stringify(got)}`); }
+  }
+  for (const c of d.hashCases) {
+    total++;
+    const schema = d.schemas[c.schema];
+    let ok: boolean;
+    if (c.expectError) ok = rejected(() => packageContentHash(c.nodes, schema, d.pkg), c.expectError, c.id);
+    else {
+      const got = packageContentHash(c.nodes, schema, d.pkg);
+      ok = got === c.expectedHash;
+      if (!ok) console.error(`${c.id}: hash expected ${c.expectedHash} got ${got}`);
+    }
+    if (ok) pass++; else totalFails++;
+  }
+  console.log(`${relative}: ${pass}/${total} pass`);
+}
 
 // -- Typed-surface conformance: generated-style typed objects (KanonakNode +
 //    Ref<T> arm constructors) reproduce the SAME golden vectors. Also the

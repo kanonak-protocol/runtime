@@ -15,6 +15,7 @@ pub use coordinate::{
     display_name, lenient_versionless_key, local_name, parse_coordinate, versionless_key,
     Coordinate,
     CoordinateVersion,
+    is_readable_by
 };
 
 pub const CANONICAL_FORM_VERSION: &str = "1";

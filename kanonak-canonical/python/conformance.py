@@ -23,6 +23,7 @@ from kanonak_canonical import (
     canonical_scalar_lexical,
     carrier_of,
     display_name,
+    is_readable_by,
     lenient_versionless_key,
     local_name,
     parse_coordinate,
@@ -154,6 +155,15 @@ def run_coordinate(path):
         else:
             fail += 1
             print(f"  FAIL [{v['id']}] expected {v['expected']!r}, got {got!r}")
+    ver = lambda j: CoordinateVersion(major=j["major"], minor=j["minor"], patch=j["patch"])
+    for v in doc["readableVectors"]:
+        total += 1
+        got = is_readable_by(ver(v["written"]), ver(v["reader"]))
+        if got == v["readable"]:
+            pas += 1
+        else:
+            fail += 1
+            print(f"  FAIL [{v['id']}] is_readable_by expected {v['readable']!r}, got {got!r}")
     print(f"coordinate-vectors: {pas}/{total} pass, {fail} fail")
     return fail
 

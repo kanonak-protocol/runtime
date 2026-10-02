@@ -44,10 +44,18 @@ public struct CodecProp: Decodable {
 public struct CodecClass: Decodable {
     public let typeUri: String
     public let props: [String: CodecProp]
+    /// Every superclass of the class, transitively, by durable VERSIONED URI
+    /// (0.6.1, runtime#28) — what lets `typeMatches` accept a subclass node for
+    /// a superclass check (an `Application` check accepts a
+    /// `TerminalApplication`). Optional and additive: a schema without it
+    /// decodes to nil, and canonicalization never reads it. Absent, a type
+    /// match is by the class itself only — stricter, never looser.
+    public let ancestors: [String]?
 
-    public init(typeUri: String, props: [String: CodecProp]) {
+    public init(typeUri: String, props: [String: CodecProp], ancestors: [String]? = nil) {
         self.typeUri = typeUri
         self.props = props
+        self.ancestors = ancestors
     }
 }
 
@@ -163,6 +171,189 @@ public struct PackageContext {
         self.version = version
         self.label = label
     }
+}
+
+// ---------------------------------------------------------------------------
+// Class lookup across compatible versions (runtime#28)
+// ---------------------------------------------------------------------------
+
+/// A coordinate's versionless key and version, or nil when the string is not a
+/// STRICTLY well-formed coordinate or carries no version (never throws).
+private func versionedCoordinate(_ uri: String) -> (key: String, version: CoordinateVersion)? {
+    guard let c = try? parseCoordinate(uri), let version = c.version else { return nil }
+    return ("\(c.publisher)/\(c.package)/\(c.name)", version)
+}
+
+/// The versionless identity of a coordinate (versioned or not), or nil when
+/// the string is not one.
+private func identityOf(_ uri: String) -> String? {
+    try? versionlessKey(uri)
+}
+
+private func isNewer(_ a: CoordinateVersion, than b: CoordinateVersion) -> Bool {
+    (a.major, a.minor, a.patch) > (b.major, b.minor, b.patch)
+}
+
+private func formatVersion(_ v: CoordinateVersion) -> String {
+    "\(v.major).\(v.minor).\(v.patch)"
+}
+
+/// THE class lookup (runtime#28). A node is typed with the version of the
+/// class its producer's import resolved to; a codec generated from a later
+/// COMPATIBLE version of the same package must still read it. So: the exact
+/// versioned key first, then the class with the same publisher, package and
+/// name whose version can read the written one — `isReadableBy` from
+/// KanonakCanonical, the protocol's single compatibility rule, pinned in every
+/// port. When nothing matches, the error says why, ending in a bracketed kind
+/// the conformance vectors pin: `[unknown-type]`, `[newer-version]` (the data
+/// may use terms this schema lacks), `[other-major]`, or `[other-minor-line]`
+/// (below 1.0.0 the minor is the incompatible line).
+func classFor(_ schema: CodecSchema, _ typeUri: String) -> Result<CodecClass, CodecError> {
+    if let exact = schema.classes[typeUri] { return .success(exact) }
+    let unknown = CodecError("no schema for type \(typeUri) [unknown-type]")
+    guard let written = versionedCoordinate(typeUri) else { return .failure(unknown) }
+
+    var readable: (cls: CodecClass, version: CoordinateVersion)?
+    var nearest: CoordinateVersion?
+    for (uri, cls) in schema.classes {
+        guard let c = versionedCoordinate(uri), c.key == written.key else { continue }
+        if isReadableBy(written.version, c.version) {
+            if readable.map({ isNewer(c.version, than: $0.version) }) ?? true {
+                readable = (cls: cls, version: c.version)
+            }
+        } else if nearest.map({ isNewer(c.version, than: $0) }) ?? true {
+            nearest = c.version
+        }
+    }
+    if let found = readable { return .success(found.cls) }
+    guard let r = nearest else { return .failure(unknown) }
+    return .failure(CodecError(incompatibleVersion(typeUri, written.version, r)))
+}
+
+private func incompatibleVersion(_ typeUri: String, _ w: CoordinateVersion, _ r: CoordinateVersion) -> String {
+    let ws = formatVersion(w), rs = formatVersion(r)
+    if w.major != r.major {
+        return "\(typeUri) is written at \(ws), a different major version than this codec's schema (\(rs)) "
+            + "[other-major]"
+    }
+    if w.major == 0 && w.minor != r.minor {
+        return "\(typeUri) is written at \(ws); below 1.0.0 a different minor is a different version line "
+            + "than this codec's schema (\(rs)) [other-minor-line]"
+    }
+    return "\(typeUri) is written at \(ws), newer than this codec's schema (\(rs)); upgrade the codec to "
+        + "read it [newer-version]"
+}
+
+/// The class to HASH a node or embedded value with: the exact versioned class
+/// only. A content hash is computed over the producer's predicate and type
+/// URIs, versions included, so a node written at an earlier compatible version
+/// cannot be re-hashed with a later schema — its predicates would carry the
+/// later version and the hash would differ. When only a compatible class
+/// exists, say so (`[hash-needs-exact-version]`) rather than produce a
+/// different hash or the bare "no schema" error.
+private func hashClassFor(_ schema: CodecSchema, _ typeUri: String, _ what: String) throws -> CodecClass {
+    if let exact = schema.classes[typeUri] { return exact }
+    if case .success(let cls) = classFor(schema, typeUri) {
+        throw CodecError(
+            "codec: cannot hash \(what) \(typeUri): this codec's schema has it at \(cls.typeUri), and a content "
+            + "hash is computed with the producer's schema version — hashing needs the exact class "
+            + "[hash-needs-exact-version]")
+    }
+    throw CodecError("codec: no schema for \(what) \(typeUri) [unknown-type]")
+}
+
+/// Whether a node is an instance of the class `classUri` — what a generated
+/// type guard asks (runtime#28). Each of the node's types (`$types`, else its
+/// `$type`) is resolved through the same compatible lookup `deserialize` uses,
+/// so a node written at an earlier compatible version satisfies the later
+/// version's guard; it matches when that class IS `classUri` or has it among
+/// its `ancestors`. Classes compare by versionless identity. A type this
+/// schema cannot read (unknown, newer, another major) never matches. Throws
+/// when `classUri` is not a class coordinate.
+public func typeMatches(_ node: [String: Any], classUri: String, schema: CodecSchema) throws -> Bool {
+    var members: [String] = []
+    if let raw = node["$types"], !(raw is NSNull) {
+        guard let list = raw as? [Any] else {
+            throw CodecError("codec: typeMatches: $types must be a list of type URIs")
+        }
+        for item in list {
+            guard let member = item as? String else {
+                throw CodecError("codec: typeMatches: $types must be a list of type URIs")
+            }
+            members.append(member)
+        }
+    } else if let primary = node["$type"] as? String, !primary.isEmpty {
+        members = [primary]
+    }
+    return try typeMatches(members: members, classUri: classUri, schema: schema)
+}
+
+/// `typeMatches` for a typed instance: the same question over its envelope's
+/// `types`, else its `type` — what a generated type guard calls.
+public func typeMatches(_ node: KanonakNode, classUri: String, schema: CodecSchema) throws -> Bool {
+    var members: [String] = []
+    if let types = node.types {
+        members = types
+    } else if let primary = node.type, !primary.isEmpty {
+        members = [primary]
+    }
+    return try typeMatches(members: members, classUri: classUri, schema: schema)
+}
+
+/// The one type-match walk over a node's type members, shared by the
+/// dictionary and typed surfaces.
+private func typeMatches(members: [String], classUri: String, schema: CodecSchema) throws -> Bool {
+    guard let target = identityOf(classUri) else {
+        throw CodecError("codec: typeMatches: '\(classUri)' is not a class coordinate")
+    }
+    for member in members {
+        guard case .success(let cls) = classFor(schema, member) else { continue }
+        if identityOf(cls.typeUri) == target { return true }
+        if let ancestors = cls.ancestors, ancestors.contains(where: { identityOf($0) == target }) {
+            return true
+        }
+    }
+    return false
+}
+
+/// An enumeration member found by `enumMember`.
+public struct EnumMemberMatch {
+    /// The enumeration class's durable URI (its key in `schema.enums`).
+    public let enumType: String
+    /// The member's durable URI as this schema keys it.
+    public let uri: String
+    public let member: CodecEnumMember
+
+    public init(enumType: String, uri: String, member: CodecEnumMember) {
+        self.enumType = enumType
+        self.uri = uri
+        self.member = member
+    }
+}
+
+/// The enumeration member a `{"$ref": …}` names (runtime#28): the exact
+/// versioned key first, then the same member at a version that can read the
+/// written one — so a member referenced at an earlier compatible version of
+/// the package resolves against a later schema. nil when this schema has no
+/// such member, which, as for `enums` itself, means "not mine", never
+/// "invalid".
+public func enumMember(_ ref: String, schema: CodecSchema) -> EnumMemberMatch? {
+    let enums = schema.enums ?? [:]
+    for (enumType, e) in enums {
+        if let member = e.members[ref] { return EnumMemberMatch(enumType: enumType, uri: ref, member: member) }
+    }
+    guard let written = versionedCoordinate(ref) else { return nil }
+    var best: (match: EnumMemberMatch, version: CoordinateVersion)?
+    for (enumType, e) in enums {
+        for (uri, member) in e.members {
+            guard let c = versionedCoordinate(uri), c.key == written.key else { continue }
+            guard isReadableBy(written.version, c.version) else { continue }
+            if best.map({ isNewer(c.version, than: $0.version) }) ?? true {
+                best = (match: EnumMemberMatch(enumType: enumType, uri: uri, member: member), version: c.version)
+            }
+        }
+    }
+    return best?.match
 }
 
 // ---------------------------------------------------------------------------
@@ -304,9 +495,7 @@ private func embeddedValue(_ prop: CodecProp, _ m: [String: Any], _ schema: Code
             "codec: cannot map embedded value under \(prop.predicate): it carries no $type and the "
             + "property declares no range")
     }
-    guard let cls = schema.classes[clsUri] else {
-        throw CodecError("codec: no schema for embedded type \(clsUri)")
-    }
+    let cls = try hashClassFor(schema, clsUri, "embedded type")
 
     var stmts = try fieldStatements(m, cls, schema)
     if let types {
@@ -365,9 +554,7 @@ private func subjectStatements(_ node: [String: Any], _ schema: CodecSchema) thr
     guard let typeUri = node["$type"] as? String, !typeUri.isEmpty else {
         throw CodecError("codec: node is missing $type")
     }
-    guard let cls = schema.classes[typeUri] else {
-        throw CodecError("codec: no schema for type \(typeUri)")
-    }
+    let cls = try hashClassFor(schema, typeUri, "type")
 
     // The rdf:type triple(s) every subject carries: one per $types member for a
     // multi-typed node (in $types' UTF-8 sorted order), else the single $type.
@@ -440,7 +627,11 @@ public func serialize(_ node: [String: Any]) throws -> [String: Any] {
 
 /// Parse normalized JSON into a typed node. $-envelope keys and fields modeled
 /// on the node's $type stay top-level; every other key is collected into
-/// $extra so a strongly-typed consumer round-trips it losslessly.
+/// $extra so a strongly-typed consumer round-trips it losslessly. Requires
+/// $type (the one field that cannot be inferred) and a class in the schema
+/// that can read it: the exact class, or the same class at a compatible later
+/// version (runtime#28 — see `classFor`). The node keeps the $type it was
+/// WRITTEN with; the producer's bytes are the producer's.
 public func deserialize(_ jsonObj: [String: Any], schema: CodecSchema) throws -> [String: Any] {
     guard let typeUri = jsonObj["$type"] as? String else {
         throw CodecError("codec: cannot deserialize: missing string $type")
@@ -452,8 +643,10 @@ public func deserialize(_ jsonObj: [String: Any], schema: CodecSchema) throws ->
     var context = jsonObj["$id"] as? String ?? ""
     if context.isEmpty { context = typeUri }
     try assertTypesEnvelopes(jsonObj, where: "deserialize \(context)")
-    guard let cls = schema.classes[typeUri] else {
-        throw CodecError("codec: cannot deserialize: no schema for type \(typeUri)")
+    let cls: CodecClass
+    switch classFor(schema, typeUri) {
+    case .success(let found): cls = found
+    case .failure(let lookup): throw CodecError("codec: cannot deserialize: \(lookup.message)")
     }
 
     var node: [String: Any] = ["$type": typeUri]
