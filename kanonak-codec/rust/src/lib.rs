@@ -40,7 +40,12 @@ const ENVELOPE_KEYS: [&str; 7] = [
 pub type Node = Map<String, Json>;
 
 /// Errors raised by the codec runtime. Fails loudly — no fallbacks.
+///
+/// `#[non_exhaustive]`: a later 1.x release may add a variant, so a `match`
+/// outside this crate needs a wildcard arm. Branch on the message's bracketed
+/// kind (`[unknown-type]`, `[fragment-reference]`, ...) rather than the variant.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum CodecError {
     /// A node, schema, or package context was malformed.
     Malformed(String),
@@ -309,8 +314,10 @@ pub(crate) fn type_matches_members(
     Ok(false)
 }
 
-/// An enumeration member found by [`enum_member`].
+/// An enumeration member found by [`enum_member`]. `#[non_exhaustive]`: read
+/// its fields; a later 1.x release may add one.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct EnumMemberMatch {
     /// The enumeration class's durable URI (its key in the schema's `enums`).
     pub enum_type: String,

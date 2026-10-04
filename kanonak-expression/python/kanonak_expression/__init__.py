@@ -42,6 +42,27 @@ import math
 import re as _re
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
 
+# The public API — what a 1.x release keeps compatible (runtime#29). Everything
+# else here is an implementation detail and may change in any release.
+__all__ = [
+    "AlignedNode",
+    "ClosureTable",
+    "EXPRESSION_RUNTIME_VERSION",
+    "EvalOptions",
+    "ExprNode",
+    "ExpressionError",
+    "Frames",
+    "Ref",
+    "Resolve",
+    "ResolveRef",
+    "TraceNode",
+    "Value",
+    "align",
+    "evaluate",
+    "explain",
+    "validate_matches_pattern",
+]
+
 # The frozen expression-runtime version (determinism contract). Not hashed.
 EXPRESSION_RUNTIME_VERSION = "2"
 

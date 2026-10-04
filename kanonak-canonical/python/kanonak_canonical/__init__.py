@@ -19,6 +19,45 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import List, Optional
 
+# The public API — what a 1.x release keeps compatible (runtime#29). Everything
+# else here is an implementation detail and may change in any release.
+__all__ = [
+    "CANONICAL_FORM_VERSION",
+    "Carrier",
+    "Coordinate",
+    "CoordinateVersion",
+    "Embedded",
+    "KList",
+    "Package",
+    "RawScalar",
+    "Reference",
+    "Statement",
+    "Subject",
+    "TypedScalar",
+    "canonical_base64",
+    "canonical_boolean",
+    "canonical_date",
+    "canonical_date_time",
+    "canonical_decimal",
+    "canonical_double",
+    "canonical_float",
+    "canonical_form",
+    "canonical_hash",
+    "canonical_hex_binary",
+    "canonical_integer",
+    "canonical_language_tag",
+    "canonical_scalar_lexical",
+    "canonical_string",
+    "canonical_time",
+    "carrier_of",
+    "display_name",
+    "is_readable_by",
+    "lenient_versionless_key",
+    "local_name",
+    "parse_coordinate",
+    "versionless_key",
+]
+
 CANONICAL_FORM_VERSION = "1"
 
 # ===========================================================================

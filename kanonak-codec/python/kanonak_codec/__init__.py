@@ -55,6 +55,22 @@ from kanonak_canonical import (
     parse_coordinate,
 )
 
+# The public API — what a 1.x release keeps compatible (runtime#29). Everything
+# else here is an implementation detail and may change in any release.
+__all__ = [
+    "EnumMemberMatch",
+    "build_package",
+    "canonical_form",
+    "content_hash",
+    "deserialize",
+    "embed",
+    "enum_member",
+    "ref",
+    "serialize",
+    "to_node",
+    "type_matches",
+]
+
 # The reserved ``$``-envelope keys, which never become statements/predicates.
 # ``$name`` (0.2.0) carries an embedded value's authored dict-key — hash-relevant.
 # ``$types`` (0.4.0, runtime#10) carries a multi-typed node's FULL type set.
