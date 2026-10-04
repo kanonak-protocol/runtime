@@ -6,7 +6,7 @@
 
     <groupId>org.kanonak</groupId>
     <artifactId>kanonak-canonical</artifactId>
-    <version>0.2.2</version>
+    <version>1.0.0</version>
     <packaging>jar</packaging>
 
     <name>kanonak-canonical</name>

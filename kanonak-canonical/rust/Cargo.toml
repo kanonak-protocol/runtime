@@ -1,6 +1,6 @@
 [package]
 name = "kanonak-canonical"
-version = "0.2.2"
+version = "1.0.0"
 edition = "2021"
 authors = ["Kanonak Maintainers (https://github.com/kanonak-protocol/runtime)"]
 description = "Kanonak canonical form + content hash (canonicalFormVersion 1). Conformant port of kanonak.org/canonical-form, verified against the golden vectors."

@@ -30,7 +30,7 @@ pkg    := codec.PackageContext{Publisher: "...", PackageName: "...", Version: ".
 form, err := codec.CanonicalForm(nodes, schema, pkg) // {"subjects":[...]} JSON
 hash, err := codec.ContentHash(nodes, schema, pkg)   // "sha256:..."
 
-wire := codec.Serialize(node)                 // typed node -> normalized JSON
+wire, err := codec.Serialize(node)            // typed node -> normalized JSON
 node, err := codec.Deserialize(wire, schema)  // normalized JSON -> typed node
 
 ok, err := codec.TypeMatches(node, classURI, schema) // generated type guard
@@ -59,9 +59,9 @@ same way (`EnumMemberMatch{EnumType, URI, Member}`, or `found == false` for
 ends in a bracketed kind: `[unknown-type]`, `[newer-version]`, `[other-major]`,
 `[other-minor-line]`, `[hash-needs-exact-version]`.
 
-Embedded object values are not yet supported — pass a reference
-(`{"$ref": "..."}`) instead. Malformed input fails loudly; there are no silent
-fallbacks.
+An object property carries a reference (`{"$ref": "..."}`) or an embedded
+node, gated by `codec-vectors-embedded.json`. Malformed input fails loudly;
+there are no silent fallbacks.
 
 ## Dependency
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kanonak-wire"
-version = "0.1.0"
+version = "1.0.0"
 readme = "README.md"
 description = "Kanonak wire kernel (wireFormatVersion 1). Conformant Python port of the kanonak.org/wire-form reader/writer kernel — bounds-checked cursor reads/writes, big-endian integers, strict UTF-8, and a fail-loud error taxonomy — verified against the shared golden vectors. Standard-library only."
 requires-python = ">=3.8"

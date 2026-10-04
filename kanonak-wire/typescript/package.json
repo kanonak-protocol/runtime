@@ -1,6 +1,6 @@
 {
   "name": "@kanonak-protocol/wire",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "The Kanonak wire kernel (wireFormatVersion \"1\") — a minimal, allocation-conscious binary reader/writer for hot-path wire protocols, verified against the shared golden vectors. The kernel every generated protocol codec calls into.",
   "license": "Apache-2.0",
   "homepage": "https://kanonak.org",

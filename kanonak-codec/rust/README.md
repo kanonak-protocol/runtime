@@ -22,7 +22,7 @@ use kanonak_codec::{
 // nodes: &[Node], schema/pkg: &serde_json::Value
 let hash = content_hash(&nodes, &schema, &pkg)?;   // "sha256:..."
 let form = canonical_form(&nodes, &schema, &pkg)?; // {"subjects":[...]}
-let wire = serialize(&node);                        // normalized-JSON Node
+let wire = serialize(&node)?;                       // normalized-JSON Node
 let node = deserialize(&wire, &schema)?;            // typed Node (unmodeled -> $extra)
 let is_app = type_matches(&node, "example.com/vocab@5.1.0/Application", &schema)?; // bool
 let member = enum_member(&schema, "example.com/vocab@5.0.0/north");                // Option<EnumMemberMatch>
@@ -61,8 +61,9 @@ resource (`publisher/package[@version]/name`); a `$ref` containing a URI
 fragment (`#`) is rejected at any depth by canonicalization, `serialize` and
 `deserialize` alike, with an error ending in `[fragment-reference]`.
 
-Embedded object values are not yet supported — pass a reference (`{"$ref": ...}`).
-Malformed input fails loudly (`CodecError`); no fallbacks.
+An object property carries a reference (`{"$ref": ...}`) or an embedded node,
+gated by `codec-vectors-embedded.json`. Malformed input fails loudly
+(`CodecError`); no fallbacks.
 
 ## Test
 

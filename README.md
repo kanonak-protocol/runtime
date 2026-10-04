@@ -29,6 +29,28 @@ small, dependency-light, and fully determined by the public spec + the public
 conformance vectors in this repo. (The Kanonak **code generator** and platform
 are a separate, commercial concern and are not part of this repo.)
 
+## Compatibility
+
+Every member is on `1.x`, and the promise is: **within a major, a newer runtime
+works with code generated against an older one**, in every language, at the
+source and the binary level. So depend on a floor, not a pin. `^1.0.0` in npm
+and Cargo, `>=1.0.0,<2` in pip, `[1.0.0,2.0.0)` in NuGet and Maven, and
+`v1.0.0` in Go all resolve SDKs generated across many releases into one
+dependency graph.
+
+- A **minor** adds API or behaviour compatibly; a **patch** fixes without
+  adding. A breaking change is a new **major**. In Go that also means a
+  `/vN` module path, so breaking changes are rare and batched.
+- A published conformance vector case never changes within a major, so the
+  results every port produces are frozen with it.
+- The release pipeline checks all of this against the last published release,
+  in every language, before anything publishes. See
+  [`PUBLISHING.md`](./PUBLISHING.md#the-1x-compatibility-gate).
+
+The frozen format versions (`canonicalFormVersion`, `expressionRuntimeVersion`,
+`wireFormatVersion`) are separate and stricter: a content hash, an evaluation
+or a wire encoding never changes under a given format version.
+
 ## Layout
 
 ```
@@ -71,7 +93,7 @@ the ecosystem's registry mechanism, so a consumer depends on the repo URL and
 picks the product(s) they need:
 
 ```swift
-.package(url: "https://github.com/kanonak-protocol/runtime", from: "0.6.0"),
+.package(url: "https://github.com/kanonak-protocol/runtime", from: "1.0.0"),
 ```
 
 Tags `v0.2.0`–`v0.4.0` predate the root `Package.swift` and cannot resolve, so
@@ -83,7 +105,7 @@ The `kanonak-codec` Wasm component ships as a wkg-format OCI artifact, tagged
 with the codec version:
 
 ```sh
-wkg oci pull ghcr.io/kanonak-protocol/codec:0.4.0 -o codec.wasm
+wkg oci pull ghcr.io/kanonak-protocol/codec:1.0.0 -o codec.wasm
 ```
 
 ## Releasing

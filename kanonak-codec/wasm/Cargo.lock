@@ -130,7 +130,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "kanonak-canonical"
-version = "0.2.2"
+version = "1.0.0"
 dependencies = [
  "regex",
  "sha2",
@@ -140,7 +140,7 @@ dependencies = [
 
 [[package]]
 name = "kanonak-codec"
-version = "0.6.1"
+version = "1.0.0"
 dependencies = [
  "kanonak-canonical",
  "serde",
@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "kanonak-codec-wasm"
-version = "0.6.1"
+version = "1.0.0"
 dependencies = [
  "kanonak-codec",
  "serde_json",
