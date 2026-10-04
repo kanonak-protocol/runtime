@@ -255,6 +255,15 @@ jobs:
           if [ "$wasm_ver" != "$codec_ver" ]; then
             echo "::error::PREFLIGHT VERSION SKEW kanonak-codec wasm component — wasm crate $wasm_ver vs codec $codec_ver (issue #18); align kanonak-codec/wasm/Cargo.toml BEFORE publishing."; fail=1
           fi
+          # The WIT package version is the component's published ABI version,
+          # and it tracks the codec version exactly (#23): a member releases at
+          # ONE version everywhere. A component importing kanonak:codec@X.Y.Z is
+          # satisfied by any semver-compatible export, so a minor or patch is
+          # harmless, and a breaking interface change is a codec major.
+          wit_ver=$(sed -nE 's/^package kanonak:codec@([0-9]+\.[0-9]+\.[0-9]+);.*/\1/p' kanonak-codec/wasm/wit/codec.wit)
+          if [ "$wit_ver" != "$codec_ver" ]; then
+            echo "::error::PREFLIGHT VERSION SKEW kanonak-codec WIT — codec.wit declares package kanonak:codec@${wit_ver:-<unreadable>} vs codec $codec_ver (issue #23); align kanonak-codec/wasm/wit/codec.wit BEFORE publishing."; fail=1
+          fi
 
           # SWIFT TAG DRIFT (same rule as publish-swift's own guard).
           swift_ver=$(python3 -c "import yaml; print(yaml.safe_load(open('release-targets.yml'))['meta']['swift_package_version'])")
@@ -1076,6 +1085,10 @@ jobs:
           codec_ver=$(grep -m1 '^version' kanonak-codec/rust/Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
           if [ "$wasm_ver" != "$codec_ver" ]; then
             echo "::error::VERSION SKEW kanonak-codec wasm component — wasm crate $wasm_ver vs codec $codec_ver. The GHCR tag tracks the codec version (issue #18); align kanonak-codec/wasm/Cargo.toml and re-run."; fail=1
+          fi
+          wit_ver=$(sed -nE 's/^package kanonak:codec@([0-9]+\.[0-9]+\.[0-9]+);.*/\1/p' kanonak-codec/wasm/wit/codec.wit)
+          if [ "$wit_ver" != "$codec_ver" ]; then
+            echo "::error::VERSION SKEW kanonak-codec WIT — codec.wit declares package kanonak:codec@${wit_ver:-<unreadable>} vs codec $codec_ver (issue #23); align kanonak-codec/wasm/wit/codec.wit and re-run."; fail=1
           fi
           tok=$(curl -sf "https://ghcr.io/token?scope=repository:kanonak-protocol/codec:pull" | jq -r .token)
           if retry 3 15 curl -sf -o /dev/null -H "Authorization: Bearer $tok" -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json" "https://ghcr.io/v2/kanonak-protocol/codec/manifests/$wasm_ver"; then

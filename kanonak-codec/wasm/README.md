@@ -29,6 +29,13 @@ string — the component stays agnostic to how a caller obtained it. `serialize`
 is schema-free, mirroring the native ports. Errors are the codec's fail-loud
 messages; there are no fallbacks.
 
+The WIT package version is the component's ABI version, and it is the codec
+version: `package kanonak:codec@X.Y.Z` always equals the codec release it
+ships in, and the release workflow refuses to publish when they differ. A
+component importing `kanonak:codec/codec@X.Y.Z` is satisfied by any
+semver-compatible export, so a minor or patch release needs nothing from it;
+a breaking interface change is a codec major.
+
 ## Fetch
 
 Released components are published to GHCR as wkg-format Wasm OCI Artifacts,

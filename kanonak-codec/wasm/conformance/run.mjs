@@ -17,7 +17,11 @@ function readDoc(file) {
 }
 
 const mod = await import("./dist/kanonak_codec_wasm.js");
-const codec = mod.codec ?? mod["kanonak:codec/codec@0.4.0"];
+// jco names the export after the interface and its package version, which
+// tracks the codec version (#23), so match the interface, not one version.
+const codec =
+  mod.codec ??
+  Object.entries(mod).find(([name]) => name.startsWith("kanonak:codec/codec@"))?.[1];
 if (!codec) {
   throw new Error(
     "component export kanonak:codec/codec not found; module exports: " +
