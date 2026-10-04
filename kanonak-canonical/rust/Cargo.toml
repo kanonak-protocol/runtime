@@ -13,6 +13,12 @@ repository = "https://github.com/kanonak-protocol/runtime"
 regex = "1"
 unicode-normalization = "0.1"
 sha2 = "0.10"
+# Not used directly: a floor on unicode-normalization's dependency. tinyvec
+# 1.13.0 does not compile (`vec!` shadowed), and every generated SDK reaches it
+# through this crate, so no consumer may resolve it (runtime#24). 1.13.1 fixed
+# it; Cargo unifies this with unicode-normalization's own requirement, and
+# `default-features = false` adds no feature of ours.
+tinyvec = { version = "1.13.1", default-features = false }
 
 [dev-dependencies]
 serde_json = "1"

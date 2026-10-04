@@ -73,6 +73,17 @@ jobs:
           cargo test --manifest-path kanonak-codec/rust/Cargo.toml
           cargo test --manifest-path kanonak-expression/rust/Cargo.toml
           cargo test --manifest-path kanonak-wire/rust/Cargo.toml
+      # The committed lockfiles pin what WE build; a generated SDK's first
+      # `cargo build` resolves every transitive dependency fresh. Build that way
+      # too, so an upstream release that breaks consumers (tinyvec 1.13.0,
+      # runtime#24) fails here, including on the weekly schedule, instead of
+      # only in their builds.
+      - name: build as a consumer does (fresh dependency resolution)
+        run: |
+          for m in canonical codec expression wire; do
+            cargo update --manifest-path kanonak-$m/rust/Cargo.toml
+            cargo test --manifest-path kanonak-$m/rust/Cargo.toml
+          done
 
   test-go:
     runs-on: ubuntu-latest
