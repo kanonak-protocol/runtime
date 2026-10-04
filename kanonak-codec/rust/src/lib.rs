@@ -466,6 +466,47 @@ fn assert_types_envelopes_map(map: &Map<String, Json>, where_: &str) -> Result<(
     Ok(())
 }
 
+/// Every reference value (`{"$ref": uri}`) in a wire value, at any depth, must
+/// address a NAMED resource: `publisher/package[@version]/name`, no URI fragment
+/// (runtime#6). Fragments address embedded resources for navigation and
+/// deep-linking; they are not part of the reference graph, and accepting one
+/// here would establish that capability by accident. Shared by [`serialize`],
+/// [`deserialize`] and canonicalization, so all three reject the same input.
+fn assert_reference_values(value: &Json, where_: &str) -> Result<(), CodecError> {
+    match value {
+        Json::Array(items) => {
+            for (i, item) in items.iter().enumerate() {
+                assert_reference_values(item, &format!("{}[{}]", where_, i))?;
+            }
+            Ok(())
+        }
+        Json::Object(map) => assert_reference_values_map(map, where_),
+        _ => Ok(()),
+    }
+}
+
+fn assert_reference_values_map(map: &Map<String, Json>, where_: &str) -> Result<(), CodecError> {
+    if let Some(Json::String(uri)) = map.get("$ref") {
+        assert_named_reference(uri, where_)?;
+    }
+    for (key, value) in map.iter() {
+        assert_reference_values(value, &format!("{}.{}", where_, key))?;
+    }
+    Ok(())
+}
+
+fn assert_named_reference(uri: &str, where_: &str) -> Result<(), CodecError> {
+    if uri.contains('#') {
+        return err(format!(
+            "{}: reference value '{}' contains a URI fragment. A reference addresses a named \
+             resource (publisher/package[@version]/name); fragments are a navigation convention, \
+             not part of the reference graph [fragment-reference]",
+            where_, uri
+        ));
+    }
+    Ok(())
+}
+
 /// Build a single canonical `Value` for one (non-list) field datum, per its
 /// schema prop.
 fn build_value(prop: &Json, raw: &Json, schema: &Json) -> Result<Value, CodecError> {
@@ -639,7 +680,10 @@ fn statements(node: &Node, schema: &Json) -> Result<Vec<Statement>, CodecError> 
             .get("$id")
             .and_then(|i| i.as_str())
             .unwrap_or("(no $id)");
-        validated_types(node, &format!("Node {}", id))?
+        let where_ = format!("Node {}", id);
+        let types = validated_types(node, &where_)?;
+        assert_reference_values_map(node, &where_)?;
+        types
     };
     let type_uri = node
         .get("$type")
@@ -757,7 +801,7 @@ pub fn content_hash(nodes: &[Node], schema: &Json, pkg: &Json) -> Result<String,
 /// as sibling fields after the modeled ones; a modeled field wins a name
 /// collision (`[JsonExtensionData]` semantics). No `$extra` key on the wire.
 /// Fallible since 0.4.0: an invalid `$types` envelope (at any depth) is a
-/// producer bug and fails at emit time.
+/// producer bug and fails at emit time, as does a fragment reference (runtime#6).
 pub fn serialize(node: &Node) -> Result<Node, CodecError> {
     let where_ = node
         .get("$id")
@@ -765,6 +809,7 @@ pub fn serialize(node: &Node) -> Result<Node, CodecError> {
         .and_then(|v| v.as_str())
         .unwrap_or("(node)");
     assert_types_envelopes_map(node, &format!("serialize {}", where_))?;
+    assert_reference_values_map(node, &format!("serialize {}", where_))?;
     let mut out = Map::new();
     for (key, value) in node.iter() {
         if key == "$extra" || value.is_null() {
@@ -806,6 +851,7 @@ pub fn deserialize(json_obj: &Node, schema: &Json) -> Result<Node, CodecError> {
             .and_then(|i| i.as_str())
             .unwrap_or(type_uri);
         assert_types_envelopes_map(json_obj, &format!("deserialize {}", where_))?;
+        assert_reference_values_map(json_obj, &format!("deserialize {}", where_))?;
     }
 
     let (cls_uri, cls) = class_for(classes_of(schema)?, type_uri)

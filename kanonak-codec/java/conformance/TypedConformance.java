@@ -85,6 +85,19 @@ public final class TypedConformance {
         @WireName("size") Long size;
     }
 
+    // -- Generated-style model for the reference-values vectors (runtime#6) ---
+
+    static final class Doc extends KanonakNode {
+        @WireName("title") String title;
+        @WireName("cites") Ref<Doc> cites;
+        @WireName("sections") List<Ref<Section>> sections;
+    }
+
+    static final class Section extends KanonakNode {
+        @WireName("heading") String heading;
+        @WireName("cites") Ref<Doc> cites;
+    }
+
     static final class Account extends KanonakNode {
         @WireName("accountCode") String accountCode;
         @WireName("seats") Long seats;
@@ -197,6 +210,21 @@ public final class TypedConformance {
             check(types, "types-in-list-items", typesSchema, List.of(b));
         }
 
+        // The reference-values cases (runtime#6) through the typed path: a
+        // Ref.to(uri) carrying a URI fragment is rejected on the way to
+        // canonicalization, at the top level and inside an embedded value.
+        Map<String, Object> refs = load("../vectors/codec-vectors-references.json");
+        CodecSchema refsSchema = Conformance.parseSchema(Conformance.asMap(refs.get("schema")));
+
+        check(refs, "named-reference-versioned", refsSchema, List.of(
+            doc(Ref.to(DATA + "/d2"), null)));
+        check(refs, "named-reference-in-embedded", refsSchema, List.of(
+            doc(null, section(Ref.to(DATA + "/d2")))));
+        checkRejects("fragment-reference-rejected", refsSchema, "fragment-reference",
+            doc(Ref.to(DATA + "/d2#sections[0]"), null));
+        checkRejects("fragment-reference-in-embedded-rejected", refsSchema, "fragment-reference",
+            doc(null, section(Ref.to(DATA + "/d2#intro"))));
+
         System.out.println("\n" + passed + " passed, " + failed + " failed");
         System.exit(failed == 0 ? 0 : 1);
     }
@@ -230,6 +258,25 @@ public final class TypedConformance {
         }
         part.size = size;
         return part;
+    }
+
+    static Doc doc(Ref<Doc> cites, Section intro) {
+        Doc d = new Doc();
+        d.setId(DATA + "/d1");
+        d.setTypeUri(SCHEMA + "/Doc");
+        d.title = "One";
+        d.cites = cites;
+        if (intro != null) {
+            d.sections = List.of(Ref.embed(intro, "intro"));
+        }
+        return d;
+    }
+
+    static Section section(Ref<Doc> cites) {
+        Section s = new Section();
+        s.heading = "Intro";
+        s.cites = cites;
+        return s;
     }
 
     static Person alice() {
@@ -295,6 +342,21 @@ public final class TypedConformance {
             }
         } catch (Exception ex) {
             fail(label, ex.getClass().getSimpleName() + ": " + ex.getMessage());
+        }
+    }
+
+    /** The typed instance must be rejected on its way to the node contract, with a message ending in {@code [kind]}. */
+    static void checkRejects(String label, CodecSchema schema, String kind, KanonakNode typed) {
+        try {
+            TypedNodes.toNode(typed, schema);
+            fail(label, "expected a [" + kind + "] rejection, got a node");
+        } catch (IllegalArgumentException ex) {
+            if (String.valueOf(ex.getMessage()).endsWith("[" + kind + "]")) {
+                passed++;
+                System.out.println("PASS  " + label);
+            } else {
+                fail(label, "expected [" + kind + "], got: " + ex.getMessage());
+            }
         }
     }
 

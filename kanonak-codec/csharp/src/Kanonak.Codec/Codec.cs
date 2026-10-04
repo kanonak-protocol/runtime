@@ -114,6 +114,51 @@ namespace Kanonak.Codec
             }
         }
 
+        /// <summary>
+        /// Every reference value (<c>{"$ref": uri}</c>) in a wire value, at any
+        /// depth, must address a NAMED resource:
+        /// <c>publisher/package[@version]/name</c>, no URI fragment (runtime#6).
+        /// Fragments address embedded resources for navigation and deep-linking;
+        /// they are not part of the reference graph, and accepting one here would
+        /// establish that capability by accident. Shared by <see cref="Serialize"/>,
+        /// <see cref="Deserialize"/> and canonicalization, so all three reject the
+        /// same input.
+        /// </summary>
+        private static void AssertReferenceValues(object value, string where)
+        {
+            if (value is string) return;
+            if (value is IReadOnlyDictionary<string, object> map)
+            {
+                if (map.TryGetValue("$ref", out var refUri) && refUri is string uri)
+                    AssertNamedReference(uri, where);
+                foreach (var kv in map) AssertReferenceValues(kv.Value, where + "." + kv.Key);
+                return;
+            }
+            if (value is IDictionary dict)
+            {
+                // Any other map shape (e.g. Dictionary<string, string>) is still a
+                // wire map: a fragment reference must not slip through it.
+                if (dict.Contains("$ref") && dict["$ref"] is string uri)
+                    AssertNamedReference(uri, where);
+                foreach (DictionaryEntry kv in dict) AssertReferenceValues(kv.Value, where + "." + kv.Key);
+                return;
+            }
+            if (value is IEnumerable items)
+            {
+                int i = 0;
+                foreach (var item in items) AssertReferenceValues(item, where + "[" + i++ + "]");
+            }
+        }
+
+        private static void AssertNamedReference(string uri, string where)
+        {
+            if (uri.IndexOf('#') >= 0)
+                throw new ArgumentException(
+                    where + ": reference value '" + uri + "' contains a URI fragment. A reference addresses a named " +
+                    "resource (publisher/package[@version]/name); fragments are a navigation convention, not " +
+                    "part of the reference graph [fragment-reference]");
+        }
+
         // -- The compatible class lookup (runtime#28) ---------------------------
 
         /// <summary>
@@ -388,7 +433,9 @@ namespace Kanonak.Codec
         private static List<Statement> StatementsFor(IReadOnlyDictionary<string, object> node, CodecSchema schema)
         {
             string id = GetString(node, "$id");
-            var types = ValidatedTypes(node, "Node " + (string.IsNullOrEmpty(id) ? "(no $id)" : id));
+            string where = "Node " + (string.IsNullOrEmpty(id) ? "(no $id)" : id);
+            var types = ValidatedTypes(node, where);
+            AssertReferenceValues(node, where);
             string typeUri = GetString(node, "$type");
             if (string.IsNullOrEmpty(typeUri)) throw new ArgumentException("node is missing $type");
             CodecClass cls = HashClassFor(schema, typeUri, "type");
@@ -555,6 +602,7 @@ namespace Kanonak.Codec
             // Producer-side $types validation, at every depth — fail closest to the bug.
             string where = GetString(node, "$id") ?? GetString(node, "$type") ?? "(node)";
             AssertTypesEnvelopes(node, "serialize " + where);
+            AssertReferenceValues(node, "serialize " + where);
             var outMap = new Dictionary<string, object>();
             foreach (var kv in node)
             {
@@ -589,7 +637,9 @@ namespace Kanonak.Codec
             // duplicate / non-member set is REJECTED, never silently repaired —
             // determinism belongs to the producer, and a lenient reader would mask a
             // nondeterministic emitter.
-            AssertTypesEnvelopes(json, "deserialize " + (GetString(json, "$id") ?? typeUri));
+            string where = GetString(json, "$id") ?? typeUri;
+            AssertTypesEnvelopes(json, "deserialize " + where);
+            AssertReferenceValues(json, "deserialize " + where);
             CodecClass cls = ClassFor(schema, typeUri, out var error);
             if (cls == null) throw new ArgumentException("Cannot deserialize: " + error);
 

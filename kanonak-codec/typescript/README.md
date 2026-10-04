@@ -60,6 +60,13 @@ collections are ordered lists — list order is semantic and hashed. An empty
 list contributes no statement (absent and empty are identical at the canonical
 layer). Gated by `vectors/codec-vectors-embedded.json`.
 
+A reference value addresses a **named resource**: `publisher/package[@version]/name`.
+A `$ref` containing a URI fragment (`#…`) is rejected by canonicalization,
+`serialize` and `deserialize` alike, at any depth, with an error ending
+`[fragment-reference]`. Fragments address embedded resources for navigation;
+they are not part of the reference graph. Gated by
+`vectors/codec-vectors-references.json`.
+
 ## Reading earlier compatible versions (0.6.1)
 
 A node is typed with the version of the class its producer's import resolved

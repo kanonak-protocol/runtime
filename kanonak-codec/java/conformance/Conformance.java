@@ -26,6 +26,12 @@ public final class Conformance {
     static final java.util.regex.Pattern MEMBER_URI =
         java.util.regex.Pattern.compile("^[^/]+/[^/@]+@\\d+\\.\\d+\\.\\d+/[^/]+$");
 
+    /** The vector files in the codec-vectors-types.json format, run by {@link #runTypesFile}. */
+    static final String[] TYPES_FORMAT_FILES = {
+        "../vectors/codec-vectors-types.json",
+        "../vectors/codec-vectors-references.json",
+    };
+
     public static void main(String[] args) throws Exception {
         String[] vectorFiles = args.length > 0
             ? args
@@ -41,11 +47,14 @@ public final class Conformance {
         }
 
         if (args.length == 0) {
-            String typesVectors = "../vectors/codec-vectors-types.json";
-            int[] counts = runTypesFile(typesVectors);
-            passed += counts[0];
-            failed += counts[1];
-            System.out.println(typesVectors + ": " + counts[0] + " passed, " + counts[1] + " failed");
+            // Every file in the $types format: the 0.4.0 $types file and the
+            // reference-values file (runtime#6) share the runner.
+            for (String typesVectors : TYPES_FORMAT_FILES) {
+                int[] counts = runTypesFile(typesVectors);
+                passed += counts[0];
+                failed += counts[1];
+                System.out.println(typesVectors + ": " + counts[0] + " passed, " + counts[1] + " failed");
+            }
 
             String enumsVectors = "../vectors/codec-vectors-enums.json";
             int[] ec = runEnumsFile(enumsVectors);
@@ -71,7 +80,9 @@ public final class Conformance {
      * fails at emit time), deserialize (the reader rejects, never repairs), and
      * canonicalization — and positive cases must round-trip:
      * deserialize(serialize(x)) preserves $types exactly and re-canonicalizes
-     * to the same hash.
+     * to the same hash. The reference-values file (runtime#6) shares the
+     * format: a {@code $ref} carrying a URI fragment is rejected on the same
+     * three surfaces.
      */
     static int[] runTypesFile(String vectors) throws Exception {
         @SuppressWarnings("unchecked")

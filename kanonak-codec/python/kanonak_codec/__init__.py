@@ -120,6 +120,35 @@ def _assert_types_envelopes(value: Any, where: str) -> None:
                 _assert_types_envelopes(item, f"{where}.{key}")
 
 
+def _assert_reference_values(value: Any, where: str) -> None:
+    """Every reference value (``{"$ref": uri}``) in a wire value, at any depth,
+    must address a NAMED resource: ``publisher/package[@version]/name``, no URI
+    fragment (runtime#6). Fragments address embedded resources for navigation
+    and deep-linking; they are not part of the reference graph, and accepting
+    one here would establish that capability by accident. Shared by
+    ``serialize``, ``deserialize`` and canonicalization, so all three reject the
+    same input."""
+    if isinstance(value, list):
+        for i, item in enumerate(value):
+            _assert_reference_values(item, f"{where}[{i}]")
+        return
+    if isinstance(value, dict):
+        uri = value.get("$ref")
+        if isinstance(uri, str):
+            _assert_named_reference(uri, where)
+        for key, item in value.items():
+            _assert_reference_values(item, f"{where}.{key}")
+
+
+def _assert_named_reference(uri: str, where: str) -> None:
+    if "#" in uri:
+        raise ValueError(
+            f"{where}: reference value '{uri}' contains a URI fragment. A reference addresses a named "
+            "resource (publisher/package[@version]/name); fragments are a navigation convention, not "
+            "part of the reference graph [fragment-reference]"
+        )
+
+
 def _lexical(value: Any) -> str:
     """The raw lexical token of a scalar — the input the canonical form normalizes."""
     if isinstance(value, bool):
@@ -409,6 +438,7 @@ def _field_statements(source: Dict[str, Any], cls: Dict[str, Any], schema: Dict[
 
 def _statements(node: Dict[str, Any], schema: Dict[str, Any]) -> List[Statement]:
     types = _validated_types(node, f"Node {node.get('$id', '(no $id)')}")
+    _assert_reference_values(node, f"Node {node.get('$id', '(no $id)')}")
     type_uri = node.get("$type")
     if not type_uri:
         raise ValueError("node is missing $type")
@@ -459,6 +489,7 @@ def serialize(node: Dict[str, Any]) -> Dict[str, Any]:
     collision (``[JsonExtensionData]`` semantics)."""
     # Producer-side $types validation, at every depth — fail closest to the bug.
     _assert_types_envelopes(node, f"serialize {node.get('$id') or node.get('$type') or '(node)'}")
+    _assert_reference_values(node, f"serialize {node.get('$id') or node.get('$type') or '(node)'}")
     out: Dict[str, Any] = {}
     for key, value in node.items():
         if key == "$extra" or value is None:
@@ -489,6 +520,7 @@ def deserialize(json_obj: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, A
     # determinism belongs to the producer, and a lenient reader would mask a
     # nondeterministic emitter.
     _assert_types_envelopes(json_obj, f"deserialize {json_obj.get('$id') or type_uri}")
+    _assert_reference_values(json_obj, f"deserialize {json_obj.get('$id') or type_uri}")
     try:
         cls = _class_for(schema, type_uri)
     except _Unreadable as err:

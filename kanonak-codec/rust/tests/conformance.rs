@@ -41,7 +41,19 @@ fn codec_vectors_embedded() {
 /// the same hash.
 #[test]
 fn codec_vectors_types() {
-    let doc = read_doc("codec-vectors-types.json");
+    run_types_file("codec-vectors-types.json");
+}
+
+/// The reference-values file (runtime#6): a `{"$ref"}` must address a named
+/// resource; a URI fragment is rejected on all three surfaces, at any depth.
+/// Same format and contract as the $types file.
+#[test]
+fn codec_vectors_references() {
+    run_types_file("codec-vectors-references.json");
+}
+
+fn run_types_file(file: &str) {
+    let doc = read_doc(file);
     let schema = doc["schema"].clone();
     let mut fails = 0;
 
@@ -119,10 +131,11 @@ fn codec_vectors_types() {
         }
     }
 
-    assert_eq!(
-        fails, 0,
-        "codec-vectors-types.json: {} check(s) failed",
-        fails
+    assert_eq!(fails, 0, "{}: {} check(s) failed", file, fails);
+    println!(
+        "{}: {} case(s), all checks pass",
+        file,
+        doc["cases"].as_array().unwrap().len()
     );
 }
 

@@ -20,6 +20,9 @@ class Program
 
     static readonly string[] VectorFiles = { "codec-vectors.json", "codec-vectors-embedded.json" };
 
+    /// <summary>The vector files in the codec-vectors-types.json format, run by <see cref="RunTypesFile"/>.</summary>
+    static readonly string[] TypesFormatFiles = { "codec-vectors-types.json", "codec-vectors-references.json" };
+
     static int Main(string[] args)
     {
         var vectorsPaths = new List<string>();
@@ -58,17 +61,22 @@ class Program
 
         if (args.Length == 0)
         {
-            string typesPath = FindVectors("codec-vectors-types.json");
-            if (typesPath == null)
+            // Every file in the $types format: the 0.4.0 $types file and the
+            // reference-values file (runtime#6) share the runner.
+            foreach (var name in TypesFormatFiles)
             {
-                Console.Error.WriteLine("codec-vectors-types.json not found; pass the vector files as arguments");
-                return 2;
+                string typesPath = FindVectors(name);
+                if (typesPath == null)
+                {
+                    Console.Error.WriteLine(name + " not found; pass the vector files as arguments");
+                    return 2;
+                }
+                int filePassed, fileFailed;
+                RunTypesFile(typesPath, out filePassed, out fileFailed);
+                Console.WriteLine($"{Path.GetFileName(typesPath)}: {filePassed} passed, {fileFailed} failed");
+                passed += filePassed;
+                failed += fileFailed;
             }
-            int filePassed, fileFailed;
-            RunTypesFile(typesPath, out filePassed, out fileFailed);
-            Console.WriteLine($"{Path.GetFileName(typesPath)}: {filePassed} passed, {fileFailed} failed");
-            passed += filePassed;
-            failed += fileFailed;
 
             string enumsPath = FindVectors("codec-vectors-enums.json");
             if (enumsPath == null)
@@ -105,7 +113,9 @@ class Program
     // fails at emit time), Deserialize (the reader rejects, never repairs), and
     // canonicalization — and positive cases must round-trip:
     // Deserialize(Serialize(x)) preserves $types exactly and re-canonicalizes
-    // to the same hash.
+    // to the same hash. The reference-values file (runtime#6) shares the
+    // format: a $ref carrying a URI fragment is rejected on the same three
+    // surfaces.
     static void RunTypesFile(string vectorsPath, out int passed, out int failed)
     {
         using var doc = JsonDocument.Parse(File.ReadAllText(vectorsPath));

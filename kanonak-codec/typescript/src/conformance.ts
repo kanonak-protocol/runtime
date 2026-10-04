@@ -213,6 +213,7 @@ function runTypesFile(relative: string): void {
 runFile('codec-vectors.json');
 runFile('codec-vectors-embedded.json');
 runTypesFile('codec-vectors-types.json');
+runTypesFile('codec-vectors-references.json');
 runEnumsFile('codec-vectors-enums.json');
 runCompatFile('codec-vectors-compat.json');
 

@@ -88,6 +88,21 @@ sealed class PartDef : KanonakNode
     [JsonPropertyName("size")] public long? Size { get; set; }
 }
 
+// -- Generated-style model for the reference-values vectors (runtime#6) ------
+
+sealed class Doc : KanonakNode
+{
+    [JsonPropertyName("title")] public string Title { get; set; }
+    [JsonPropertyName("cites")] public Ref<Doc> Cites { get; set; }
+    [JsonPropertyName("sections")] public List<Ref<Section>> Sections { get; set; }
+}
+
+sealed class Section : KanonakNode
+{
+    [JsonPropertyName("heading")] public string Heading { get; set; }
+    [JsonPropertyName("cites")] public Ref<Doc> Cites { get; set; }
+}
+
 static class Program
 {
     const string SCHEMA = "probe.example.com/schema@1.0.0";
@@ -281,6 +296,34 @@ static class Program
             },
         });
 
+        // The reference-values cases (runtime#6) through the typed path: a
+        // Ref<T>.To(uri) carrying a URI fragment is rejected on the way to
+        // canonicalization, at the top level and inside an embedded value.
+        var refs = JsonDocument.Parse(File.ReadAllText(Path.Combine(vectorsDir, "codec-vectors-references.json")));
+        var refsSchema = CodecSchema.FromJson(refs.RootElement.GetProperty("schema").GetRawText());
+        var refsPkg = new PackageContext
+        {
+            Publisher = "probe.example.com", PackageName = "data", Version = "1.0.0",
+            Label = "References Probe Data",
+        };
+
+        Check(refs, "named-reference-versioned", refsSchema, refsPkg, new KanonakNode[]
+        {
+            NewDoc(Ref<Doc>.To(DATA + "/d2"), null),
+        });
+        Check(refs, "named-reference-in-embedded", refsSchema, refsPkg, new KanonakNode[]
+        {
+            NewDoc(null, new Section { Heading = "Intro", Cites = Ref<Doc>.To(DATA + "/d2") }),
+        });
+        CheckRejects("fragment-reference-rejected", refsSchema, refsPkg, "fragment-reference", new KanonakNode[]
+        {
+            NewDoc(Ref<Doc>.To(DATA + "/d2#sections[0]"), null),
+        });
+        CheckRejects("fragment-reference-in-embedded-rejected", refsSchema, refsPkg, "fragment-reference", new KanonakNode[]
+        {
+            NewDoc(null, new Section { Heading = "Intro", Cites = Ref<Doc>.To(DATA + "/d2#intro") }),
+        });
+
         Console.WriteLine();
         if (_fails > 0) { Console.Error.WriteLine(_fails + " TYPED CHECK(S) FAILED"); return 1; }
         Console.WriteLine("ALL TYPED CHECKS PASS");
@@ -313,6 +356,29 @@ static class Program
         catch (Exception ex)
         {
             Fail(caseId, ex.GetType().Name + ": " + ex.Message);
+        }
+    }
+
+    static Doc NewDoc(Ref<Doc> cites, Section intro) => new Doc
+    {
+        Id = DATA + "/d1", Type = SCHEMA + "/Doc", Title = "One", Cites = cites,
+        Sections = intro == null ? null : new List<Ref<Section>> { Ref<Section>.Embed(intro, "intro") },
+    };
+
+    // The typed instances must be rejected on their way to canonicalization,
+    // with a message ending in [kind].
+    static void CheckRejects(
+        string label, CodecSchema schema, PackageContext pkg, string kind, KanonakNode[] typed)
+    {
+        try
+        {
+            TypedNodes.ContentHash(typed, schema, pkg);
+            Fail(label, "expected a [" + kind + "] rejection, got a hash");
+        }
+        catch (ArgumentException ex)
+        {
+            if (ex.Message.EndsWith("[" + kind + "]", StringComparison.Ordinal)) Console.WriteLine("PASS  " + label);
+            else Fail(label, "expected [" + kind + "], got: " + ex.Message);
         }
     }
 

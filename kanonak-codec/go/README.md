@@ -38,6 +38,11 @@ ok, err = typed.KanonakNode.TypeMatches(classURI, schema) // same, on a typed in
 m, found := codec.LookupEnumMember(schema, ref)      // {"$ref": ...} -> enum member
 ```
 
+A reference value (`{"$ref": uri}`) must address a named resource
+(`publisher/package[@version]/name`): a `$ref` carrying a URI fragment (`#`), at
+any depth, is rejected by canonicalization, `Serialize` and `Deserialize` alike,
+with an error ending in `[fragment-reference]`.
+
 ### Compatible versions
 
 A node is typed with the class version its producer resolved; a codec generated

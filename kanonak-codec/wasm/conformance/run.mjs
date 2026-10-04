@@ -201,6 +201,7 @@ function runCompatFile(file) {
 runFile("codec-vectors.json");
 runFile("codec-vectors-embedded.json");
 runTypesFile("codec-vectors-types.json");
+runTypesFile("codec-vectors-references.json");
 runCompatFile("codec-vectors-compat.json");
 
 if (fails > 0) {

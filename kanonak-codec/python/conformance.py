@@ -30,6 +30,7 @@ VECTOR_FILES = [
 ]
 
 TYPES_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-types.json")
+REFERENCES_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-references.json")
 ENUMS_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-enums.json")
 COMPAT_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-compat.json")
 
@@ -466,6 +467,10 @@ def main() -> int:
         failed += f
 
     p, f = run_types_file(TYPES_VECTOR_FILE)
+    passed += p
+    failed += f
+
+    p, f = run_types_file(REFERENCES_VECTOR_FILE)
     passed += p
     failed += f
 

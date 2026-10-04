@@ -131,6 +131,44 @@ public final class Codec {
         }
     }
 
+    /**
+     * Every reference value ({@code {"$ref": uri}}) in a wire value, at any
+     * depth, must address a NAMED resource:
+     * {@code publisher/package[@version]/name}, no URI fragment (runtime#6).
+     * Fragments address embedded resources for navigation and deep-linking;
+     * they are not part of the reference graph, and accepting one here would
+     * establish that capability by accident. Shared by {@link #serialize},
+     * {@link #deserialize} and canonicalization, so all three reject the same
+     * input.
+     */
+    @SuppressWarnings("unchecked")
+    private static void assertReferenceValues(Object value, String where) {
+        if (value instanceof List<?> list) {
+            for (int i = 0; i < list.size(); i++) {
+                assertReferenceValues(list.get(i), where + "[" + i + "]");
+            }
+            return;
+        }
+        if (value instanceof Map<?, ?> m) {
+            Map<String, Object> map = (Map<String, Object>) m;
+            if (map.get("$ref") instanceof String uri) {
+                assertNamedReference(uri, where);
+            }
+            for (Map.Entry<String, Object> e : map.entrySet()) {
+                assertReferenceValues(e.getValue(), where + "." + e.getKey());
+            }
+        }
+    }
+
+    private static void assertNamedReference(String uri, String where) {
+        if (uri.contains("#")) {
+            throw new IllegalArgumentException(
+                where + ": reference value '" + uri + "' contains a URI fragment. A reference addresses a named "
+                    + "resource (publisher/package[@version]/name); fragments are a navigation convention, not "
+                    + "part of the reference graph [fragment-reference]");
+        }
+    }
+
     // -- The compatible class lookup (runtime#28) --------------------------------
 
     /** {@link #classFor}'s outcome: exactly one of {@code cls} (found) or {@code error} (why not). */
@@ -515,8 +553,9 @@ public final class Codec {
 
     private static List<Statement> statementsFor(Map<String, Object> node, CodecSchema schema) {
         Object id = node.get("$id");
-        List<String> types = validatedTypes(node,
-            "Node " + (id instanceof String s && !s.isEmpty() ? s : "(no $id)"));
+        String where = "Node " + (id instanceof String s && !s.isEmpty() ? s : "(no $id)");
+        List<String> types = validatedTypes(node, where);
+        assertReferenceValues(node, where);
         Object typeUri = node.get("$type");
         if (!(typeUri instanceof String) || ((String) typeUri).isEmpty()) {
             throw new IllegalArgumentException("node is missing $type");
@@ -582,6 +621,7 @@ public final class Codec {
         // Producer-side $types validation, at every depth — fail closest to the bug.
         Object where = node.get("$id") instanceof String s && !s.isEmpty() ? s : node.get("$type");
         assertTypesEnvelopes(node, "serialize " + (where != null ? where : "(node)"));
+        assertReferenceValues(node, "serialize " + (where != null ? where : "(node)"));
         Map<String, Object> out = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : node.entrySet()) {
             if ("$extra".equals(entry.getKey()) || entry.getValue() == null) {
@@ -621,6 +661,7 @@ public final class Codec {
         // nondeterministic emitter.
         Object where = json.get("$id") instanceof String s && !s.isEmpty() ? s : typeUri;
         assertTypesEnvelopes(json, "deserialize " + where);
+        assertReferenceValues(json, "deserialize " + where);
         ClassMatch match = classFor(schema, (String) typeUri);
         if (match.cls() == null) {
             throw new IllegalArgumentException("Cannot deserialize: " + match.error());

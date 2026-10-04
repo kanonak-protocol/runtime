@@ -431,6 +431,42 @@ func assertTypesEnvelopes(_ value: Any, where context: String) throws {
 }
 
 // ---------------------------------------------------------------------------
+// Reference-value validation
+// ---------------------------------------------------------------------------
+
+/// Every reference value ({"$ref": uri}) in a wire value, at any depth, must
+/// address a NAMED resource: publisher/package[@version]/name, no URI fragment
+/// (runtime#6). Fragments address embedded resources for navigation and
+/// deep-linking; they are not part of the reference graph, and accepting one
+/// here would establish that capability by accident. Shared by serialize,
+/// deserialize and canonicalization, so all three reject the same input.
+func assertReferenceValues(_ value: Any, where context: String) throws {
+    if let list = value as? [Any] {
+        for (i, item) in list.enumerated() {
+            try assertReferenceValues(item, where: "\(context)[\(i)]")
+        }
+        return
+    }
+    if let m = value as? [String: Any] {
+        if let uri = m["$ref"] as? String {
+            try assertNamedReference(uri, where: context)
+        }
+        for (key, item) in m {
+            try assertReferenceValues(item, where: "\(context).\(key)")
+        }
+    }
+}
+
+private func assertNamedReference(_ uri: String, where context: String) throws {
+    if uri.contains("#") {
+        throw CodecError(
+            "codec: \(context): reference value '\(uri)' contains a URI fragment. A reference addresses a named "
+            + "resource (publisher/package[@version]/name); fragments are a navigation convention, not "
+            + "part of the reference graph [fragment-reference]")
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Canonicalization
 // ---------------------------------------------------------------------------
 
@@ -551,6 +587,7 @@ private func subjectStatements(_ node: [String: Any], _ schema: CodecSchema) thr
     var id = node["$id"] as? String ?? ""
     if id.isEmpty { id = "(no $id)" }
     let types = try validatedTypes(node, where: "node \(id)")
+    try assertReferenceValues(node, where: "node \(id)")
     guard let typeUri = node["$type"] as? String, !typeUri.isEmpty else {
         throw CodecError("codec: node is missing $type")
     }
@@ -605,12 +642,14 @@ public func contentHash(_ nodes: [[String: Any]], schema: CodecSchema, pkg: Pack
 /// Render a typed node to its normalized-JSON wire form. $extra entries ride
 /// as sibling fields after the modeled ones; a modeled field wins a name
 /// collision. Null values are dropped. An invalid $types envelope (at any
-/// depth) is a producer bug and fails at emit time.
+/// depth) is a producer bug and fails at emit time, as does a fragment
+/// reference (runtime#6).
 public func serialize(_ node: [String: Any]) throws -> [String: Any] {
     var context = node["$id"] as? String ?? ""
     if context.isEmpty { context = node["$type"] as? String ?? "" }
     if context.isEmpty { context = "(node)" }
     try assertTypesEnvelopes(node, where: "serialize \(context)")
+    try assertReferenceValues(node, where: "serialize \(context)")
     var out: [String: Any] = [:]
     for (key, val) in node {
         if key == "$extra" || val is NSNull { continue }
@@ -643,6 +682,7 @@ public func deserialize(_ jsonObj: [String: Any], schema: CodecSchema) throws ->
     var context = jsonObj["$id"] as? String ?? ""
     if context.isEmpty { context = typeUri }
     try assertTypesEnvelopes(jsonObj, where: "deserialize \(context)")
+    try assertReferenceValues(jsonObj, where: "deserialize \(context)")
     let cls: CodecClass
     switch classFor(schema, typeUri) {
     case .success(let found): cls = found

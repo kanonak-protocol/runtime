@@ -131,7 +131,19 @@ type typesVectors struct {
 // Deserialize(Serialize(x)) preserves $types exactly and re-canonicalizes to
 // the same hash.
 func TestCodecVectorsTypes(t *testing.T) {
-	data, err := os.ReadFile("../vectors/codec-vectors-types.json")
+	runTypesVectorFile(t, "../vectors/codec-vectors-types.json")
+}
+
+// TestCodecVectorsReferences drives the reference-values file (runtime#6) through
+// the same runner: a {"$ref"} carrying a URI fragment is rejected on all three
+// surfaces, at any depth, and named references hash and round-trip.
+func TestCodecVectorsReferences(t *testing.T) {
+	runTypesVectorFile(t, "../vectors/codec-vectors-references.json")
+}
+
+// runTypesVectorFile runs a file in the codec-vectors-types.json format.
+func runTypesVectorFile(t *testing.T, path string) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read vectors: %v", err)
 	}

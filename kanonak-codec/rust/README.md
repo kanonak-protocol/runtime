@@ -56,6 +56,11 @@ computed over the producer's versioned URIs, so a node (or embedded value)
 whose class the schema has only at a compatible later version fails with
 `[hash-needs-exact-version]` rather than producing a different hash.
 
+**Reference values (runtime#6).** A `{"$ref": uri}` must address a named
+resource (`publisher/package[@version]/name`); a `$ref` containing a URI
+fragment (`#`) is rejected at any depth by canonicalization, `serialize` and
+`deserialize` alike, with an error ending in `[fragment-reference]`.
+
 Embedded object values are not yet supported — pass a reference (`{"$ref": ...}`).
 Malformed input fails loudly (`CodecError`); no fallbacks.
 

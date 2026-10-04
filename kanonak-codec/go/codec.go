@@ -13,6 +13,7 @@ package codec
 
 import (
 	"fmt"
+	"strings"
 
 	canonical "github.com/kanonak-protocol/runtime/kanonak-canonical/go"
 )
@@ -102,6 +103,47 @@ func assertTypesEnvelopes(value interface{}, where string) error {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+// assertReferenceValues checks that every reference value ({"$ref": uri}) in a
+// wire value, at any depth, addresses a NAMED resource:
+// publisher/package[@version]/name, no URI fragment (runtime#6). Fragments
+// address embedded resources for navigation and deep-linking; they are not
+// part of the reference graph, and accepting one here would establish that
+// capability by accident. Shared by Serialize, Deserialize and
+// canonicalization, so all three reject the same input.
+func assertReferenceValues(value interface{}, where string) error {
+	switch v := value.(type) {
+	case []interface{}:
+		for i, item := range v {
+			if err := assertReferenceValues(item, fmt.Sprintf("%s[%d]", where, i)); err != nil {
+				return err
+			}
+		}
+	case map[string]interface{}:
+		if uri, ok := v["$ref"].(string); ok {
+			if err := assertNamedReference(uri, where); err != nil {
+				return err
+			}
+		}
+		for key, item := range v {
+			if err := assertReferenceValues(item, where+"."+key); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func assertNamedReference(uri, where string) error {
+	if strings.Contains(uri, "#") {
+		return fmt.Errorf(
+			"codec: %s: reference value '%s' contains a URI fragment. A reference addresses a named "+
+				"resource (publisher/package[@version]/name); fragments are a navigation convention, not "+
+				"part of the reference graph [fragment-reference]",
+			where, uri)
 	}
 	return nil
 }
@@ -365,6 +407,9 @@ func statements(node map[string]interface{}, schema CodecSchema) ([]canonical.St
 	if err != nil {
 		return nil, err
 	}
+	if err := assertReferenceValues(node, fmt.Sprintf("node %s", id)); err != nil {
+		return nil, err
+	}
 	typeURI, _ := node["$type"].(string)
 	if typeURI == "" {
 		return nil, fmt.Errorf("codec: node is missing $type")
@@ -463,6 +508,9 @@ func Serialize(node map[string]interface{}) (map[string]interface{}, error) {
 	if err := assertTypesEnvelopes(node, "serialize "+where); err != nil {
 		return nil, err
 	}
+	if err := assertReferenceValues(node, "serialize "+where); err != nil {
+		return nil, err
+	}
 	out := make(map[string]interface{})
 	for key, val := range node {
 		if key == "$extra" || val == nil {
@@ -505,6 +553,9 @@ func Deserialize(jsonObj map[string]interface{}, schema CodecSchema) (map[string
 		where = typeURI
 	}
 	if err := assertTypesEnvelopes(jsonObj, "deserialize "+where); err != nil {
+		return nil, err
+	}
+	if err := assertReferenceValues(jsonObj, "deserialize "+where); err != nil {
 		return nil, err
 	}
 	cls, err := classFor(schema, typeURI)

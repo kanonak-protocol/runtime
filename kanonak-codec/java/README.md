@@ -45,6 +45,10 @@ embedded value (0.2.0): a map with no `$id`, an optional `$name` (the authored
 dict-key — hash-relevant), an optional `$type` (emits a type statement when
 present), and schema-mapped fields. Without `$type`, fields map via the
 containing property's `range` (inference only — no type statement is emitted).
+A reference must address a named resource (`publisher/package[@version]/name`):
+a `$ref` containing a URI fragment (`#`) is rejected, at any depth, by
+canonicalization, `serialize` and `deserialize`, with a message ending in
+`[fragment-reference]` (runtime#6).
 
 ### Reading an earlier compatible version (0.6.1)
 
@@ -98,7 +102,8 @@ javac -d out \
   src/main/java/org/kanonak/codec/*.java \
   conformance/Conformance.java conformance/TypedConformance.java
 java -cp out Conformance        # runs every ../vectors/codec-vectors*.json file
-                                # (base, embedded, types, enums, compat)
+                                # (base, embedded, types, references, enums,
+                                # compat)
 java -cp out TypedConformance   # the typed surface (KanonakNode / Ref /
                                 # TypedNodes) against the same vectors
 ```

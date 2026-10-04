@@ -88,7 +88,18 @@ final class CodecVectorTests: XCTestCase {
     /// (the reader rejects, never repairs), and canonicalization — and
     /// positive cases must round-trip to the same hash.
     func testTypesVectors() throws {
-        let file = try loadVectors("codec-vectors-types.json")
+        try runTypesFile("codec-vectors-types.json")
+    }
+
+    /// The reference-values file (runtime#6): a {"$ref"} must address a named
+    /// resource; a URI fragment is rejected on all three surfaces, at any
+    /// depth. Same format and contract as the $types file.
+    func testReferencesVectors() throws {
+        try runTypesFile("codec-vectors-references.json")
+    }
+
+    private func runTypesFile(_ name: String) throws {
+        let file = try loadVectors(name)
         XCTAssertFalse(file.cases.isEmpty)
         for c in file.cases {
             let cid = c["id"] as! String

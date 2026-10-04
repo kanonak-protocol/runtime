@@ -497,6 +497,37 @@ function assertTypesEnvelopes(value: unknown, where: string): void {
   }
 }
 
+/**
+ * Every reference value (`{"$ref": uri}`) in a wire value, at any depth, must
+ * address a NAMED resource: `publisher/package[@version]/name`, no URI fragment
+ * (runtime#6). Fragments address embedded resources for navigation and
+ * deep-linking; they are not part of the reference graph, and accepting one
+ * here would establish that capability by accident. Shared by
+ * {@link serialize}, {@link deserialize} and canonicalization, so all three
+ * reject the same input.
+ */
+function assertReferenceValues(value: unknown, where: string): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, i) => assertReferenceValues(item, `${where}[${i}]`));
+    return;
+  }
+  if (value && typeof value === 'object') {
+    const map = value as Record<string, unknown>;
+    if (typeof map.$ref === 'string') assertNamedReference(map.$ref, where);
+    for (const [k, v] of Object.entries(map)) assertReferenceValues(v, `${where}.${k}`);
+  }
+}
+
+function assertNamedReference(uri: string, where: string): void {
+  if (uri.includes('#')) {
+    throw new Error(
+      `${where}: reference value '${uri}' contains a URI fragment. A reference addresses a named ` +
+        `resource (publisher/package[@version]/name); fragments are a navigation convention, not ` +
+        `part of the reference graph [fragment-reference]`,
+    );
+  }
+}
+
 /** Build the `CanonicalInputValue` for one (already array-unwrapped) field value. */
 function valueOf(prop: CodecProp, raw: unknown, schema: CodecSchema): CanonicalInputValue {
   if (prop.kind === 'object') {
@@ -608,6 +639,7 @@ function fieldStatements(
 /** Build the statements for one subject node: its type triple(s) + its fields. */
 function statementsFor(node: CodecNode, schema: CodecSchema): CanonicalInputStatement[] {
   const types = validatedTypes(node, `Node ${node.$id ?? '(no $id)'}`);
+  assertReferenceValues(node, `Node ${node.$id ?? '(no $id)'}`);
   const typeUri = node.$type;
   if (!typeUri) throw new Error(`Node ${node.$id ?? '(no $id)'} is missing $type`);
   const cls = hashClassFor(schema, typeUri, 'type');
@@ -681,6 +713,7 @@ export function packageContentHash(
 export function serialize(node: CodecNode): Record<string, unknown> {
   // Producer-side $types validation, at every depth — fail closest to the bug.
   assertTypesEnvelopes(node, `serialize ${node.$id ?? node.$type ?? '(node)'}`);
+  assertReferenceValues(node, `serialize ${node.$id ?? node.$type ?? '(node)'}`);
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(node)) {
     if (k === '$extra') continue;
@@ -712,6 +745,7 @@ export function deserialize(json: Record<string, unknown>, schema: CodecSchema):
   // determinism belongs to the producer, and a lenient reader would mask a
   // nondeterministic emitter.
   assertTypesEnvelopes(json, `deserialize ${typeof json.$id === 'string' ? json.$id : typeUri}`);
+  assertReferenceValues(json, `deserialize ${typeof json.$id === 'string' ? json.$id : typeUri}`);
   const match = classFor(schema, typeUri);
   if (!('cls' in match)) throw new Error(`Cannot deserialize: ${match.error}`);
   const cls = match.cls;

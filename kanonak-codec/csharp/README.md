@@ -53,7 +53,10 @@ A node is a plain `IReadOnlyDictionary<string, object>`: the `$`-envelope
 (`$type`, `$id`, optional `$extra`) plus alias-collapsed local-name fields.
 Field values are CLR primitives (`string`, `bool`, numeric), an
 `IReadOnlyList` of those, or a reference map (`{ "$ref": uri }`). `$extra` is a
-map keyed by predicate URI.
+map keyed by predicate URI. A reference must address a named resource
+(`publisher/package[@version]/name`): a `$ref` containing a URI fragment (`#`)
+is rejected, at any depth, by canonicalization, `Serialize` and `Deserialize`,
+with a message ending in `[fragment-reference]` (runtime#6).
 
 ## Project layout
 
@@ -64,10 +67,10 @@ map keyed by predicate URI.
 ## Conformance
 
 The runner drives the shared codec vectors (every
-`kanonak-codec/vectors/codec-vectors*.json` file: base, embedded, types, enums,
-compat) and asserts the canonical form, content hash, (structurally compared)
-`Serialize`/`Deserialize` output, and the compatibility contract all match the
-authoritative expected values.
+`kanonak-codec/vectors/codec-vectors*.json` file: base, embedded, types,
+references, enums, compat) and asserts the canonical form, content hash,
+(structurally compared) `Serialize`/`Deserialize` output, and the compatibility
+contract all match the authoritative expected values.
 
 ```bash
 cd test/Kanonak.Codec.Conformance
