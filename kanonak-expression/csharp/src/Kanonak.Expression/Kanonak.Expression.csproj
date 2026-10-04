@@ -15,6 +15,15 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
+  <!-- The 1.x compatibility gate (runtime#29): the release workflow passes
+       -p:KanonakExpressionBaseline=<last release> and pack fails on any breaking change
+       against that published package. A member-specific property, because a
+       global PackageValidationBaselineVersion would reach referenced projects too. -->
+  <PropertyGroup Condition="'$(KanonakExpressionBaseline)' != ''">
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <PackageValidationBaselineVersion>$(KanonakExpressionBaseline)</PackageValidationBaselineVersion>
+  </PropertyGroup>
+
   <ItemGroup>
     <None Include="../../README.md" Pack="true" PackagePath="/" />
   </ItemGroup>

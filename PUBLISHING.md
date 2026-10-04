@@ -138,6 +138,55 @@ https://github.com/kanonak-protocol/runtime/settings/variables/actions.
   `publish-wasm` takes `packages: write` to push the GHCR artifact).
 - **Versions are immutable;** bump the manifests before a real release.
 
+## The 1.x compatibility gate
+
+From 1.0.0 every member makes one promise: **within a major, a newer runtime
+works with code generated against an older one.** A generated SDK declares a
+floor (`^1.0.0`), never a pin, and SDKs generated across many releases share
+one dependency graph. NuGet and Maven load a single runtime version for a whole
+application, so the promise is binary as well as source compatibility.
+
+The pipeline checks the promise; nobody has to remember it.
+[`.github/scripts/release_plan.py`](./.github/scripts/release_plan.py) compares
+each member's declared version with its **last release** (the highest
+`kanonak-<member>/go/v*` tag) and says what the release may carry:
+
+| Declared vs last release | Allowed | Below 1.0.0 |
+|---|---|---|
+| same version | nothing (nothing releases) | same |
+| patch | fixes: no API addition, no break | additions, no break |
+| minor | additions, no break | anything (the minor is the incompatible line) |
+| major | anything | — |
+
+Every test job then checks its language against the published baseline. A
+change beyond what the version allows fails the job, and publishing never
+starts:
+
+| Language | Check |
+|---|---|
+| Rust | `cargo semver-checks` against crates.io, at the allowed release type |
+| Go | `apidiff` between the module at its release tag and now; an addition needs a minor |
+| Python | `griffe check` against the release tag; the API is each package's `__all__` |
+| TypeScript | `.github/scripts/ts_api_compat.mjs`: the compiler checks every published export against the built candidate |
+| C# | .NET package validation (ApiCompat) against NuGet, source and binary |
+| Java | `japicmp` against Maven Central, source and binary |
+| Swift | `swift package diagnose-api-breaking-changes` against the last root tag (the `compat-swift` job, on macOS) |
+
+Preflight adds the two rules no toolchain is needed for:
+
+- **Frozen vectors.** A vector case published in a release never changes
+  within a major. Cases may be added (and renamed with identical content),
+  never edited or removed. New expectations go in new cases. Since every port
+  runs the same vectors, this freezes behaviour in all of them at once.
+- **The Swift release train.** The root `v*` tag covers all four products, so
+  its version is derived: a major if any member released a major, a minor if
+  any added, else a patch. `swift_package_version` must equal the derived
+  value.
+
+A breaking change is still possible: release a new major. In Go that also
+means a `/vN` module path, which changes every generated import, so batch
+breaking changes.
+
 ## The cold-start contract (WE WILL FORGET — the machinery remembers)
 
 The workflow is the ONLY release path. There are **no manual steps**, no

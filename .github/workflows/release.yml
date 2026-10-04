@@ -55,6 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }   # the release plan reads the last release tag
       - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - run: |
@@ -62,11 +63,30 @@ jobs:
           python kanonak-codec/python/conformance.py
           python kanonak-expression/python/conformance.py kanonak-expression/vectors
           python kanonak-wire/python/conformance.py kanonak-wire/vectors
+      # THE 1.x COMPATIBILITY GATE (runtime#29), Python half: within a major,
+      # the public API (each package's __all__) may not break against the last
+      # release. release_plan.py says what the declared version allows.
+      - name: API compatibility against the last release (griffe)
+        run: |
+          python -m pip install --quiet griffe==2.3.0
+          fail=0
+          for m in canonical codec expression wire; do
+            allowed=$(python3 .github/scripts/release_plan.py allowed "$m")
+            base=$(python3 .github/scripts/release_plan.py baseline "$m")
+            if [ "$allowed" = breaking ]; then echo "SKIP      python        kanonak-$m: a new major line"; continue; fi
+            if python -m griffe check "kanonak_$m" -s "kanonak-$m/python" -a "kanonak-$m/go/v$base" -f github; then
+              echo "OK        python        kanonak-$m: no API break against $base"
+            else
+              echo "::error::API BREAK kanonak-$m (Python) against $base, but the declared version allows only '$allowed' (runtime#29). Restore compatibility, or release a new major."; fail=1
+            fi
+          done
+          exit $fail
 
   test-rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }   # the release plan reads the last release tag
       - uses: dtolnay/rust-toolchain@stable
       - run: |
           cargo test --manifest-path kanonak-canonical/rust/Cargo.toml
@@ -84,11 +104,35 @@ jobs:
             cargo update --manifest-path kanonak-$m/rust/Cargo.toml
             cargo test --manifest-path kanonak-$m/rust/Cargo.toml
           done
+      # THE 1.x COMPATIBILITY GATE (runtime#29), Rust half: cargo-semver-checks
+      # against the crate as published on crates.io, at the release type the
+      # declared version allows.
+      - uses: taiki-e/install-action@v2
+        with: { tool: cargo-semver-checks }
+      - name: API compatibility against the last release (cargo-semver-checks)
+        run: |
+          fail=0
+          for m in canonical codec expression wire; do
+            allowed=$(python3 .github/scripts/release_plan.py allowed "$m")
+            base=$(python3 .github/scripts/release_plan.py baseline "$m")
+            case "$allowed" in
+              breaking) echo "SKIP      rust          kanonak-$m: a new major line"; continue ;;
+              addition) type=minor ;;
+              *) type=patch ;;
+            esac
+            if cargo semver-checks --manifest-path "kanonak-$m/rust/Cargo.toml" --baseline-version "$base" --release-type "$type"; then
+              echo "OK        rust          kanonak-$m: no change beyond a $type against $base"
+            else
+              echo "::error::API BREAK kanonak-$m (Rust) against $base, but the declared version allows only '$allowed' (runtime#29). Restore compatibility, or release a new major."; fail=1
+            fi
+          done
+          exit $fail
 
   test-go:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }   # the release plan reads the last release tag
       - uses: actions/setup-go@v6
         with:
           go-version: "stable"
@@ -101,11 +145,41 @@ jobs:
       # Go has no registry/account: "publish" = push subdir tags
       # kanonak-canonical/go/vX.Y.Z, kanonak-codec/go/vX.Y.Z, kanonak-expression/go/vX.Y.Z,
       # kanonak-wire/go/vX.Y.Z; the proxy fetches.
+      # THE 1.x COMPATIBILITY GATE (runtime#29), Go half: apidiff between the
+      # module at its last release tag and now. apidiff reads both source trees,
+      # so the monorepo replace directive resolves on each side.
+      - name: API compatibility against the last release (apidiff)
+        run: |
+          go install golang.org/x/exp/cmd/apidiff@v0.0.0-20260908205506-85c1c2202aba
+          apidiff="$(go env GOPATH)/bin/apidiff"
+          fail=0
+          for m in canonical codec expression wire; do
+            allowed=$(python3 .github/scripts/release_plan.py allowed "$m")
+            base=$(python3 .github/scripts/release_plan.py baseline "$m")
+            if [ "$allowed" = breaking ]; then echo "SKIP      go            kanonak-$m: a new major line"; continue; fi
+            mod="github.com/kanonak-protocol/runtime/kanonak-$m/go"
+            git worktree add --quiet --detach "$RUNNER_TEMP/base-$m" "kanonak-$m/go/v$base"
+            (cd "$RUNNER_TEMP/base-$m/kanonak-$m/go" && "$apidiff" -m -w "$RUNNER_TEMP/$m-old.api" "$mod")
+            (cd "kanonak-$m/go" && "$apidiff" -m -w "$RUNNER_TEMP/$m-new.api" "$mod")
+            broken=$("$apidiff" -m -incompatible "$RUNNER_TEMP/$m-old.api" "$RUNNER_TEMP/$m-new.api")
+            changed=$("$apidiff" -m "$RUNNER_TEMP/$m-old.api" "$RUNNER_TEMP/$m-new.api")
+            if [ -n "$broken" ]; then
+              echo "$broken"
+              echo "::error::API BREAK kanonak-$m (Go) against $base, but the declared version allows only '$allowed' (runtime#29). Restore compatibility, or release a new major."; fail=1
+            elif [ -n "$changed" ] && [ "$allowed" != addition ]; then
+              echo "$changed"
+              echo "::error::API ADDITION kanonak-$m (Go) against $base, but the declared version allows only '$allowed': an addition needs a minor (runtime#29)."; fail=1
+            else
+              echo "OK        go            kanonak-$m: no API change beyond '$allowed' against $base"
+            fi
+          done
+          exit $fail
 
   test-typescript:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }   # the release plan reads the last release tag
       - uses: actions/setup-node@v6
         with: { node-version: "22" }
       - run: npm install --no-audit --no-fund
@@ -122,11 +196,27 @@ jobs:
           npm run build      -w @kanonak-protocol/wire
           npm run typecheck  -w @kanonak-protocol/wire
           npm run conformance -w @kanonak-protocol/wire
+      # THE 1.x COMPATIBILITY GATE (runtime#29), TypeScript half: the compiler
+      # checks every export of the published declarations against the built
+      # candidate (.github/scripts/ts_api_compat.mjs).
+      - name: API compatibility against the last release (TypeScript compiler)
+        run: |
+          fail=0
+          for m in canonical codec expression wire; do
+            allowed=$(python3 .github/scripts/release_plan.py allowed "$m")
+            base=$(python3 .github/scripts/release_plan.py baseline "$m")
+            if [ "$allowed" = breaking ]; then echo "SKIP      typescript    kanonak-$m: a new major line"; continue; fi
+            if ! node .github/scripts/ts_api_compat.mjs "$m" "$base"; then
+              echo "::error::API BREAK @kanonak-protocol/$m against $base, but the declared version allows only '$allowed' (runtime#29). Restore compatibility, or release a new major."; fail=1
+            fi
+          done
+          exit $fail
 
   test-csharp:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }   # the release plan reads the last release tag
       - uses: actions/setup-dotnet@v5
         with: { dotnet-version: "8.0.x" }
       - run: |
@@ -137,11 +227,31 @@ jobs:
           dotnet run -c Release --project kanonak-codec/csharp/test/Kanonak.Codec.Typed.Conformance
           dotnet run -c Release --project kanonak-expression/csharp/test/Kanonak.Expression.Conformance -- "$PWD/kanonak-expression/vectors"
           dotnet run -c Release --project kanonak-wire/csharp/test/Kanonak.Wire.Conformance -- "$PWD/kanonak-wire/vectors"
+      # THE 1.x COMPATIBILITY GATE (runtime#29), .NET half: package validation
+      # (ApiCompat) against the package as published on NuGet, source AND binary
+      # compatibility. NuGet loads ONE runtime version for a whole app, so SDKs
+      # generated against older releases run against this one.
+      - name: API compatibility against the last release (.NET package validation)
+        run: |
+          fail=0
+          for m in canonical codec expression wire; do
+            allowed=$(python3 .github/scripts/release_plan.py allowed "$m")
+            base=$(python3 .github/scripts/release_plan.py baseline "$m")
+            if [ "$allowed" = breaking ]; then echo "SKIP      csharp        kanonak-$m: a new major line"; continue; fi
+            name="$(echo "${m:0:1}" | tr a-z A-Z)${m:1}"
+            if dotnet pack "kanonak-$m/csharp/src/Kanonak.$name" -c Release -o "$RUNNER_TEMP/pack" "-p:Kanonak${name}Baseline=$base"; then
+              echo "OK        csharp        Kanonak.$name: no API break against $base"
+            else
+              echo "::error::API BREAK Kanonak.$name against $base, but the declared version allows only '$allowed' (runtime#29). Restore compatibility, or release a new major."; fail=1
+            fi
+          done
+          exit $fail
 
   test-java:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }   # the release plan reads the last release tag
       - uses: actions/setup-java@v5
         with: { distribution: temurin, java-version: "17" }
       - run: |
@@ -160,6 +270,47 @@ jobs:
           cd ../../kanonak-wire/java
           javac -d out src/main/java/org/kanonak/wire/*.java conformance/Conformance.java
           java -cp out Conformance ../vectors
+      # THE 1.x COMPATIBILITY GATE (runtime#29), Java half: japicmp, binary AND
+      # source compatibility against the jar as published on Maven Central.
+      # Maven loads ONE runtime version for a whole app, so SDKs generated
+      # against older releases run against this one.
+      - name: API compatibility against the last release (japicmp)
+        run: |
+          v=0.26.3
+          tools="$RUNNER_TEMP/japicmp"; mkdir -p "$tools"
+          curl -sfL -o "$tools/japicmp.jar" "https://repo1.maven.org/maven2/com/github/siom79/japicmp/japicmp/$v/japicmp-$v-jar-with-dependencies.jar"
+          echo "2452e6844f44657acd680656f78641205001bca0  $tools/japicmp.jar" | sha1sum -c --quiet -
+          central="https://repo1.maven.org/maven2/org/kanonak"
+          build() {  # build <member> <classpath>: the candidate's jar from source
+            rm -rf "$tools/classes-$1"
+            javac --release 17 ${2:+-cp "$2"} -d "$tools/classes-$1" kanonak-$1/java/src/main/java/org/kanonak/$1/*.java
+            jar cf "$tools/new-$1.jar" -C "$tools/classes-$1" .
+          }
+          build canonical ""
+          fail=0
+          for m in canonical codec expression wire; do
+            allowed=$(python3 .github/scripts/release_plan.py allowed "$m")
+            base=$(python3 .github/scripts/release_plan.py baseline "$m")
+            if [ "$allowed" = breaking ]; then echo "SKIP      java          kanonak-$m: a new major line"; continue; fi
+            curl -sfL -o "$tools/old-$m.jar" "$central/kanonak-$m/$base/kanonak-$m-$base.jar"
+            cp=()
+            if [ "$m" = codec ]; then
+              # The old jar against the canonical it was released with; the new against the candidate.
+              canon=$(curl -sfL "$central/kanonak-codec/$base/kanonak-codec-$base.pom" | tr -d '\n ' | sed -E 's/.*<artifactId>kanonak-canonical<\/artifactId><version>([^<]+)<.*/\1/')
+              curl -sfL -o "$tools/old-canonical-for-codec.jar" "$central/kanonak-canonical/$canon/kanonak-canonical-$canon.jar"
+              build codec "$tools/new-canonical.jar"
+              cp=(--old-classpath "$tools/old-canonical-for-codec.jar" --new-classpath "$tools/new-canonical.jar")
+            elif [ "$m" != canonical ]; then
+              build "$m" ""
+            fi
+            if java -jar "$tools/japicmp.jar" --old "$tools/old-$m.jar" --new "$tools/new-$m.jar" "${cp[@]}" \
+                 --only-incompatible --error-on-binary-incompatibility --error-on-source-incompatibility; then
+              echo "OK        java          kanonak-$m: no API break against $base"
+            else
+              echo "::error::API BREAK kanonak-$m (Java) against $base, but the declared version allows only '$allowed' (runtime#29). Restore compatibility, or release a new major."; fail=1
+            fi
+          done
+          exit $fail
 
   # The Swift ports (KanonakCanonical + KanonakCodec, behind the root
   # Package.swift). Swift has NO registry: SwiftPM resolves a public git URL
@@ -171,6 +322,26 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - run: swift test
+
+  # THE 1.x COMPATIBILITY GATE (runtime#29), Swift half: SwiftPM's API
+  # digester compares every library product against the last root tag. The
+  # root tag is one release train over all four products, so its declared
+  # version decides what may change. Xcode ships the digester, hence macOS.
+  compat-swift:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }   # the baseline is the last root v* tag
+      - name: API compatibility against the last release (swift-api-digester)
+        run: |
+          allowed=$(python3 .github/scripts/release_plan.py swift-allowed)
+          base=$(python3 .github/scripts/release_plan.py swift-baseline)
+          if [ "$allowed" = breaking ] || [ -z "$base" ]; then echo "SKIP      swift         a new major line"; exit 0; fi
+          if swift package diagnose-api-breaking-changes "$base"; then
+            echo "OK        swift         no API break in any product against $base"
+          else
+            echo "::error::API BREAK in the Swift package against $base, but the declared version allows only '$allowed' (runtime#29). Restore compatibility, or release a new major."; exit 1
+          fi
 
   # The 7th codec port: the Rust reference compiled to a wasm32-wasip2 component
   # behind the kanonak:codec WIT interface, driven through the SAME golden
@@ -206,6 +377,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }   # the release plan reads the last release tag
       - name: desired-state consistency (manifest parity + tag drift) before any publish
         run: |
           python3 -m pip install --quiet pyyaml
@@ -278,6 +450,16 @@ jobs:
             fi
           fi
           exit $fail
+      # THE 1.x COMPATIBILITY GATE (runtime#29), toolchain-free half: the
+      # release plan, then (a) a vector case published in a release never
+      # changes within a major — it may only be added to — so every port's
+      # behaviour is frozen with it; (b) the Swift root tag, one release train
+      # over all four members, derives its version from theirs.
+      - name: the release plan, frozen vectors and the Swift release train
+        run: |
+          python3 .github/scripts/release_plan.py plan
+          python3 .github/scripts/release_plan.py vectors
+          python3 .github/scripts/release_plan.py swift
 
   # ============ PREFLIGHT: CREDENTIALS (before ANYTHING publishes) ============
   # Registry credentials expire — npm granular tokens, crates.io tokens, the
@@ -846,7 +1028,7 @@ jobs:
   # Idempotent: an existing tag is NEVER touched or moved; to release a new
   # Swift version, bump swift_package_version and re-run.
   publish-swift:
-    needs: [test-swift, preflight, preflight-credentials]
+    needs: [test-swift, compat-swift, preflight, preflight-credentials]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
     permissions:

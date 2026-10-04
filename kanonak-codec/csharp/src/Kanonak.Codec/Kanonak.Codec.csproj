@@ -15,6 +15,15 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
+  <!-- The 1.x compatibility gate (runtime#29): the release workflow passes
+       -p:KanonakCodecBaseline=<last release> and pack fails on any breaking change
+       against that published package. A member-specific property, because a
+       global PackageValidationBaselineVersion would reach referenced projects too. -->
+  <PropertyGroup Condition="'$(KanonakCodecBaseline)' != ''">
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <PackageValidationBaselineVersion>$(KanonakCodecBaseline)</PackageValidationBaselineVersion>
+  </PropertyGroup>
+
   <ItemGroup>
     <!-- CodecSchema.FromJson parses the embedded schema JSON; System.Text.Json is
          not in the netstandard2.0 BCL, so reference it explicitly. -->
