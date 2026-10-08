@@ -149,7 +149,9 @@ application, so the promise is binary as well as source compatibility.
 The pipeline checks the promise; nobody has to remember it.
 [`.github/scripts/release_plan.py`](./.github/scripts/release_plan.py) compares
 each member's declared version with its **last release** (the highest
-`kanonak-<member>/go/v*` tag) and says what the release may carry:
+`kanonak-<member>/go/v*` tag) and says what the release may carry. That tag
+is the release record, so `publish-go` pushes it only after every registry's
+publish job succeeded; if one fails, Go waits for the re-run.
 
 | Declared vs last release | Allowed | Below 1.0.0 |
 |---|---|---|
@@ -169,7 +171,7 @@ starts:
 | Python | `griffe check` against the release tag; the API is each package's `__all__` |
 | TypeScript | `.github/scripts/ts_api_compat.mjs`: the compiler checks every published export against the built candidate |
 | C# | .NET package validation (ApiCompat) against NuGet, source and binary |
-| Java | `japicmp` against Maven Central, source and binary |
+| Java | `japicmp` against Maven Central, source and binary. A run completing a release Maven Central never received is gated against the version it serves (with a warning) |
 | Swift | `swift package diagnose-api-breaking-changes` against the last root tag (the `compat-swift` job, on macOS) |
 
 Preflight adds the two rules no toolchain is needed for:

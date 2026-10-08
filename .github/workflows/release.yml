@@ -292,6 +292,28 @@ jobs:
             allowed=$(python3 .github/scripts/release_plan.py allowed "$m")
             base=$(python3 .github/scripts/release_plan.py baseline "$m")
             if [ "$allowed" = breaking ]; then echo "SKIP      java          kanonak-$m: a new major line"; continue; fi
+            # The gate compares against the jar Maven consumers have. That is
+            # the baseline, unless the release record is ahead of Maven Central:
+            # expression 1.1.0's first run pushed its Go tag while the Portal
+            # rejected the Java bundle (publish-go now waits for every registry).
+            # A run completing that release (declared == baseline) is gated
+            # against the version Maven Central serves. Anything else fails.
+            code=$(curl -s -o /dev/null -w '%{http_code}' -L -I "$central/kanonak-$m/$base/kanonak-$m-$base.jar" || true)
+            if [ "$code" = 404 ]; then
+              if [ "$allowed" != none ]; then
+                echo "::error::Maven Central does not serve kanonak-$m $base, the last release (tag kanonak-$m/go/v$base). If that release published to Maven within the last few hours, this is repo1 mirror lag: re-run later. Otherwise the release record is ahead of Maven Central: complete $base there before releasing past it."; fail=1; continue
+              fi
+              served=$(curl -sfL "$central/kanonak-$m/maven-metadata.xml" | sed -nE 's:.*<release>([^<]+)</release>.*:\1:p' || true)
+              if [ -z "$served" ]; then
+                echo "::error::kanonak-$m $base is not on Maven Central, and its maven-metadata.xml gave no release to gate against; refusing to assume one."; fail=1; continue
+              fi
+              allowed=$(python3 .github/scripts/release_plan.py allowed-since "$m" "$served")
+              echo "::warning::kanonak-$m $base is released (tag kanonak-$m/go/v$base) but Maven Central serves only $served. This run completes $base there, so the candidate is gated against $served, which allows '$allowed'."
+              base=$served
+              if [ "$allowed" = breaking ]; then echo "SKIP      java          kanonak-$m: a new major line since $served"; continue; fi
+            elif [ "$code" != 200 ]; then
+              echo "::error::could not ask Maven Central for kanonak-$m $base (HTTP ${code:-none}); refusing to assume. Re-run when it is reachable."; fail=1; continue
+            fi
             curl -sfL -o "$tools/old-$m.jar" "$central/kanonak-$m/$base/kanonak-$m-$base.jar"
             cp=()
             if [ "$m" = codec ]; then
@@ -988,8 +1010,14 @@ jobs:
   # Versions come from meta.go_module_versions in release-targets.yml.
   # Idempotent: an existing tag is NEVER touched or moved (immutability rule);
   # to release a new Go version, bump go_module_versions and re-run.
+  # The tag is also THE RELEASE RECORD: release_plan.py reads the highest one as
+  # every language's last release, and the API gates compare against that
+  # version on each registry. So it is pushed only after every registry
+  # published. Expression 1.1.0's first run tagged Go while the Portal rejected
+  # the Java bundle, and the next run's japicmp gate asked Maven Central for a
+  # 1.1.0 jar that never existed. When a registry fails, Go waits for the re-run.
   publish-go:
-    needs: [test-go, preflight, preflight-credentials]
+    needs: [test-go, preflight, preflight-credentials, publish-python, publish-rust, publish-typescript, publish-csharp, publish-java, publish-wasm]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
     permissions:
@@ -1264,7 +1292,7 @@ jobs:
             if git ls-remote --tags origin "refs/tags/kanonak-$m/go/v$go_ver" | grep -q .; then
               echo "OK       Go            kanonak-$m/go v$go_ver (tag present)"
             else
-              echo "::error::MISSING Go tag kanonak-$m/go/v$go_ver — publish-go should have pushed it; check that job's log"; fail=1
+              echo "::error::MISSING Go tag kanonak-$m/go/v$go_ver — publish-go pushes it only after every registry's publish job succeeded. If one failed, publish-go was skipped: fix that job and re-run with publish=true. Otherwise check publish-go's log"; fail=1
             fi
 
             # PUBLIC LATEST vs DECLARED (issue #18 hardening). Existence says

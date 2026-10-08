@@ -3,8 +3,8 @@
 toolchain (runtime#29).
 
 A member's BASELINE is its last release: the highest `kanonak-<member>/go/v*`
-tag. Every release run pushes that tag after the registries publish, so it
-marks the source each registry shipped. The DECLARED version is in the
+tag. publish-go pushes that tag only after every registry's publish job
+succeeded, so it marks the source each registry shipped. The DECLARED version is in the
 committed manifests, which preflight already holds to parity, so this reads
 the Rust manifest. Comparing the two gives the change a release may carry:
 
@@ -21,6 +21,9 @@ Subcommands:
   plan                 print every member's baseline, declared version, allowed change
   allowed MEMBER       print the allowed change for one member
   baseline MEMBER      print the baseline version (empty when none)
+  allowed-since MEMBER VERSION
+                       print the allowed change from VERSION instead of the baseline,
+                       for a registry that never received the baseline
   vectors              a vector case published in a release never changes within
                        a major (it may only be added to); exit 1 on a violation
   swift                the Swift root tag is a release train over all four members:
@@ -271,6 +274,9 @@ def main(argv: list) -> int:
         return 0
     if cmd == "allowed" and len(argv) == 2:
         print(allowed(argv[1]))
+        return 0
+    if cmd == "allowed-since" and len(argv) == 3:
+        print(change_kind(parse(argv[2]), declared(argv[1]), f"kanonak-{argv[1]}"))
         return 0
     if cmd == "baseline" and len(argv) == 2:
         base = baseline(argv[1])
