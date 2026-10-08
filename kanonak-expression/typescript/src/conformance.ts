@@ -22,7 +22,9 @@ import { readFileSync } from 'node:fs';
 import {
   align,
   evaluate,
+  evaluates,
   explain,
+  matches,
   type AlignedNode,
   ExpressionError,
   type ClosureTable,
@@ -204,11 +206,66 @@ function runAlignFile(relPath: string, label: string): { pass: number; fail: num
   return { pass, fail, total: data.vectors.length };
 }
 
+interface SurfaceVectors {
+  evaluates: { id: string; type: string; expected: boolean }[];
+  matches: { id: string; input: string; pattern: string; expected?: boolean; expectError?: boolean }[];
+}
+
+/**
+ * The public surface beside `evaluate`: `evaluates(typeUri)` and
+ * `matches(input, pattern)`. Then a cross-check of `evaluates` against the
+ * evaluate vectors themselves: every node class they exercise is either one
+ * the kernel folds, or a leaf this harness's `resolve` answers — so a class
+ * the fold handles cannot be missing from `evaluates`.
+ */
+function runSurfaceFile(relPath: string, label: string, exercised: string[]): { pass: number; fail: number; total: number } {
+  const data = JSON.parse(readFileSync(new URL(relPath, import.meta.url), 'utf8')) as SurfaceVectors;
+  let pass = 0, fail = 0;
+  for (const v of data.evaluates) {
+    if (evaluates(v.type) === v.expected) pass++;
+    else { fail++; console.error(`${label}/${v.id}: evaluates(${v.type}) should be ${v.expected}`); }
+  }
+  for (const v of data.matches) {
+    let got: boolean | undefined;
+    let threw = false;
+    try { got = matches(v.input, v.pattern); } catch { threw = true; }
+    if (v.expectError ? threw : !threw && got === v.expected) pass++;
+    else { fail++; console.error(`${label}/${v.id}: matches gave ${threw ? 'an error' : got}`); }
+  }
+  for (const type of new Set(exercised)) {
+    if (type === VARREF || type === PROPERTY_READ || evaluates(type)) pass++;
+    else { fail++; console.error(`${label}/exercised: the vectors fold ${type}, but evaluates() says the kernel does not`); }
+  }
+  const total = pass + fail;
+  console.log(`${label}: ${pass}/${total} pass`);
+  return { pass, fail, total };
+}
+
+/** Every node `type` in a vector file's expression trees. */
+function nodeTypes(relPath: string): string[] {
+  const data = JSON.parse(readFileSync(new URL(relPath, import.meta.url), 'utf8')) as { vectors: Vector[] };
+  const out: string[] = [];
+  const walk = (x: unknown): void => {
+    if (Array.isArray(x)) { x.forEach(walk); return; }
+    if (x && typeof x === 'object') {
+      const t = (x as { type?: unknown }).type;
+      if (typeof t === 'string') out.push(t);
+      Object.values(x).forEach(walk);
+    }
+  };
+  for (const v of data.vectors) walk(v.expr);
+  return out;
+}
+
 // v1 vectors are the regression gate: every one passes unchanged under v2.
 const v1 = runFile('../../vectors/expression-vectors.json', 'expression-vectors(v1)');
 const v2 = runFile('../../vectors/expression-vectors-2.json', 'expression-vectors-2');
 const va = runAlignFile('../../vectors/expression-alignment-vectors.json', 'expression-alignment-vectors');
+const vs = runSurfaceFile('../../vectors/expression-surface-vectors.json', 'expression-surface-vectors', [
+  ...nodeTypes('../../vectors/expression-vectors.json'),
+  ...nodeTypes('../../vectors/expression-vectors-2.json'),
+]);
 
-const fail = v1.fail + v2.fail + va.fail;
+const fail = v1.fail + v2.fail + va.fail + vs.fail;
 if (fail > 0) { console.error(`\n${fail} FAILURES`); process.exit(1); }
 console.log('ALL VECTORS PASS');

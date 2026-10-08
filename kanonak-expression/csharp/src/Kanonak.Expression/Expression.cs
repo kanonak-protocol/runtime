@@ -199,19 +199,19 @@ namespace Kanonak.Expression
         {
             switch (node.Type)
             {
-                case TX + "/IntegerLiteral": return ToNumber(node.Get("integerLiteral"));
-                case TX + "/DecimalLiteral": return ToNumber(node.Get("decimalLiteral"));
-                case TX + "/BooleanLiteral":
+                case INTEGER_LITERAL: return ToNumber(node.Get("integerLiteral"));
+                case DECIMAL_LITERAL: return ToNumber(node.Get("decimalLiteral"));
+                case BOOLEAN_LITERAL:
                 {
                     var b = node.Get("booleanLiteral");
                     return Bool(true.Equals(b) || "true".Equals(b));
                 }
-                case TX + "/StringLiteral":
+                case STRING_LITERAL:
                 {
                     if (node.Get("stringLiteral") is string s) return s;
                     throw Err("StringLiteral is missing stringLiteral");
                 }
-                case TX + "/UriLiteral":
+                case URI_LITERAL:
                 {
                     if (node.Get("refTo") is string r && r.Length > 0) return new Ref(r);
                     throw Err("UriLiteral is missing refTo");
@@ -261,28 +261,61 @@ namespace Kanonak.Expression
         static readonly Arity Compare = new Arity("binary", "compareLeft", "compareRight");
         static readonly Arity ValueA = new Arity("unary", "value");
 
-        static Arity? OperatorArity(string typ)
+        /// <summary>Operand shape per operator, derived from the <c>tx</c> superclass hierarchy.
+        /// <c>Not</c> is a direct Expression subclass with boolean (not numeric-unary) semantics —
+        /// dispatched by name in the fold, not via this table.</summary>
+        static readonly Dictionary<string, Arity> OperatorArities = new Dictionary<string, Arity>
         {
-            switch (typ)
-            {
-                case TX + "/Add": case TX + "/Subtract": case TX + "/Multiply": case TX + "/Divide":
-                case MATH + "/Power": case MATH + "/Modulo": case MATH + "/Minimum": case MATH + "/Maximum":
-                    return Arith;
-                case TX + "/Abs": case TX + "/Negate": case MATH + "/Exp": case MATH + "/Ln":
-                case MATH + "/Log10": case MATH + "/Sqrt": case MATH + "/Floor": case MATH + "/Ceil":
-                case MATH + "/Round": case MATH + "/Sign":
-                    return ValueA;
-                case TX + "/Equals": case TX + "/GreaterThan": case TX + "/LessThan":
-                case TX + "/GreaterThanOrEqual": case TX + "/LessThanOrEqual":
-                    return Compare;
-                case TX + "/And": case TX + "/Or":
-                    return new Arity("nary", "operands");
-                case MATH + "/Clip":
-                    return new Arity("ternary", "clipValue", "clipLower", "clipUpper");
-                default:
-                    return null;
-            }
-        }
+            [TX + "/Add"] = Arith,
+            [TX + "/Subtract"] = Arith,
+            [TX + "/Multiply"] = Arith,
+            [TX + "/Divide"] = Arith,
+            [MATH + "/Power"] = Arith,
+            [MATH + "/Modulo"] = Arith,
+            [MATH + "/Minimum"] = Arith,
+            [MATH + "/Maximum"] = Arith,
+
+            [TX + "/Abs"] = ValueA,
+            [TX + "/Negate"] = ValueA,
+            [MATH + "/Exp"] = ValueA,
+            [MATH + "/Ln"] = ValueA,
+            [MATH + "/Log10"] = ValueA,
+            [MATH + "/Sqrt"] = ValueA,
+            [MATH + "/Floor"] = ValueA,
+            [MATH + "/Ceil"] = ValueA,
+            [MATH + "/Round"] = ValueA,
+            [MATH + "/Sign"] = ValueA,
+
+            [TX + "/Equals"] = Compare,
+            [TX + "/GreaterThan"] = Compare,
+            [TX + "/LessThan"] = Compare,
+            [TX + "/GreaterThanOrEqual"] = Compare,
+            [TX + "/LessThanOrEqual"] = Compare,
+
+            [TX + "/And"] = new Arity("nary", "operands"),
+            [TX + "/Or"] = new Arity("nary", "operands"),
+
+            [MATH + "/Clip"] = new Arity("ternary", "clipValue", "clipLower", "clipUpper"),
+        };
+
+        static Arity? OperatorArity(string typ)
+            => typ != null && OperatorArities.TryGetValue(typ, out var a) ? a : (Arity?)null;
+
+        // The operators the fold dispatches by name, beside its tables.
+        const string NOT = TX + "/Not";
+        const string IS_AT_LEAST = TX + "/IsAtLeast";
+        const string DOMINATES = TX + "/Dominates";
+        const string CONTAINS = TX + "/Contains";
+        const string IS_SET = TX + "/IsSet";
+        const string LIST_ITEM_AT = TX + "/ListItemAt";
+        const string MATCHES = TX + "/Matches";
+
+        // The literal classes the kernel answers itself (see LiteralValue).
+        const string INTEGER_LITERAL = TX + "/IntegerLiteral";
+        const string DECIMAL_LITERAL = TX + "/DecimalLiteral";
+        const string BOOLEAN_LITERAL = TX + "/BooleanLiteral";
+        const string STRING_LITERAL = TX + "/StringLiteral";
+        const string URI_LITERAL = TX + "/UriLiteral";
 
         static double Unary(string typ, double x)
         {
@@ -334,27 +367,26 @@ namespace Kanonak.Expression
             }
         }
 
-        static string IteratorBody(string typ)
+        /// <summary>IteratingExpression operators: <c>source</c> + <c>loopVar</c> + the body operand.</summary>
+        static readonly Dictionary<string, string> IteratorBodies = new Dictionary<string, string>
         {
-            switch (typ)
-            {
-                case TX + "/ForEach": return "emit";
-                case TX + "/ListMap": return "mapBody";
-                case TX + "/Filter": return "predicate";
-                default: return null;
-            }
-        }
+            [TX + "/ForEach"] = "emit",
+            [TX + "/ListMap"] = "mapBody",
+            [TX + "/Filter"] = "predicate",
+        };
 
-        static bool IsListFold(string typ)
+        static string IteratorBody(string typ)
+            => typ != null && IteratorBodies.TryGetValue(typ, out var k) ? k : null;
+
+        /// <summary>ListSourcedExpression / ListAggregate operators: one <c>source</c> operand,
+        /// evaluated as a list (see <see cref="ListFold"/>).</summary>
+        static readonly HashSet<string> ListFolds = new HashSet<string>
         {
-            switch (typ)
-            {
-                case TX + "/Count": case TX + "/Sum": case TX + "/Min": case TX + "/Max":
-                case TX + "/Average": case TX + "/Join": case TX + "/Reverse":
-                    return true;
-                default: return false;
-            }
-        }
+            TX + "/Count", TX + "/Sum", TX + "/Min", TX + "/Max",
+            TX + "/Average", TX + "/Join", TX + "/Reverse",
+        };
+
+        static bool IsListFold(string typ) => typ != null && ListFolds.Contains(typ);
 
         static object ListFold(string typ, List<object> items, ExprNode node)
         {
@@ -407,9 +439,17 @@ namespace Kanonak.Expression
             }
         }
 
-        static bool IsKindPredicate(string typ)
-            => typ == TX + "/IsString" || typ == TX + "/IsNumber"
-            || typ == TX + "/IsReference" || typ == TX + "/IsList";
+        /// <summary>KindPredicate operators the kernel can answer over ITS value domain.
+        /// <c>IsBoolean</c> and <c>IsEmbedded</c> name kinds that exist only in a host object
+        /// model (booleans are 1/0 numbers here; embedded nodes never enter the kernel), so they
+        /// are NOT dispatch entries — they fall through to the caller's resolve, where the host
+        /// answers with full fidelity.</summary>
+        static readonly HashSet<string> KindPredicates = new HashSet<string>
+        {
+            TX + "/IsString", TX + "/IsNumber", TX + "/IsReference", TX + "/IsList",
+        };
+
+        static bool IsKindPredicate(string typ) => typ != null && KindPredicates.Contains(typ);
 
         static double KindPredicate(string typ, object v)
         {
@@ -440,11 +480,45 @@ namespace Kanonak.Expression
         const string DotNoNewline = "(?:[\uD800-\uDBFF][\uDC00-\uDFFF]|[^\n\uD800-\uDFFF])";
         const string DotAllPoints = "(?:[\uD800-\uDBFF][\uDC00-\uDFFF]|[^\uD800-\uDFFF])";
 
-        /// <summary>Check a WHOLE pattern against the pinned subset, flag prefix
-        /// included. Thin wrapper over <see cref="ParseMatchesPattern"/> so this
-        /// checker and the evaluator can never disagree about what is valid.</summary>
-        internal static void ValidateMatchesPattern(string pattern)
-            => ParseMatchesPattern(pattern);
+        /// <summary>
+        /// Validate a <c>Matches</c> pattern against the pinned subset — the intersection of RE2
+        /// and the host regex engines, chosen so every port compiles the same pattern to the same
+        /// language. RE2 is both the restrictive common denominator and ReDoS-safe (no
+        /// catastrophic backtracking), which is a REQUIREMENT for a predicate that may gate on
+        /// adversarial input. Out-of-subset constructs are a LOUD <see cref="ExpressionError"/>,
+        /// the same discipline as Round/Modulo; WIDENING the subset later (an error becoming a
+        /// defined result) is additive within v2.
+        /// </summary>
+        /// <remarks>
+        /// <para>COUNTING UNIT — pinned: <c>.</c> and quantifiers count Unicode CODE POINTS, in
+        /// every port. An astral-plane character (a surrogate pair in UTF-16 hosts) is ONE
+        /// <c>.</c>, and <c>.{3}</c> matches exactly three code points.</para>
+        /// <para>Allowed: literals; <c>.</c>; anchors <c>^</c> <c>$</c>; alternation <c>|</c>;
+        /// groups <c>(...)</c>, <c>(?:...)</c>; a WHOLE-PATTERN flag prefix over <c>i</c>/<c>m</c>/<c>s</c>
+        /// (<c>(?i)</c> at position 0 only, each flag at most once); quantifiers <c>*</c> <c>+</c>
+        /// <c>?</c> <c>{m}</c> <c>{m,}</c> <c>{m,n}</c>; character classes with ranges and negation;
+        /// escapes <c>\d \D \w \W \s \S \b \B \n \r \t \f \v \xHH</c>, escaped syntax punctuation
+        /// (<c>\. \* \+ \? \( \) \[ \] \{ \} \| \^ \$ \\ \/</c>), and <c>\-</c> inside character
+        /// classes.</para>
+        /// <para>Rejected (divergent or unsafe across engines): lookahead/lookbehind, named groups,
+        /// backreferences (<c>\1</c>…, <c>\k</c>), MID-pattern flag groups (<c>(?i:…)</c>), a
+        /// REPEATED flag in the prefix (<c>(?ii)</c>), <c>\p{…}</c>/<c>\P{…}</c> unicode property
+        /// classes, POSIX classes (<c>[[:alpha:]]</c>), class intersection (<c>&amp;&amp;</c>),
+        /// atomic groups, conditionals, comments, octal/<c>\u</c>/<c>\x{…}</c> escapes, escaped
+        /// space, <c>\-</c> outside a class, and a bare unescaped <c>{</c> that is not a
+        /// quantifier (literal braces must be escaped).</para>
+        /// <para>A thin wrapper over the same parse the evaluator runs, so a pattern
+        /// <see cref="Matches"/> (and <c>tx.Matches</c>) evaluates is exactly a pattern this
+        /// checker accepts — the two cannot drift apart.</para>
+        /// </remarks>
+        /// <param name="pattern">The whole authored pattern, flag prefix included.</param>
+        /// <exception cref="ExpressionError">The pattern is outside the pinned subset.</exception>
+        /// <exception cref="ArgumentNullException"><paramref name="pattern"/> is null.</exception>
+        public static void ValidateMatchesPattern(string pattern)
+        {
+            if (pattern == null) throw new ArgumentNullException(nameof(pattern));
+            ParseMatchesPattern(pattern);
+        }
 
         /// <summary>THE definition of a valid <c>Matches</c> pattern: the single
         /// place that decides what the pinned subset accepts AND how a whole
@@ -606,11 +680,31 @@ namespace Kanonak.Expression
             return compiled.IsMatch(input);
         }
 
+        /// <summary>
+        /// Test <paramref name="input"/> against <paramref name="pattern"/> exactly as
+        /// <c>tx.Matches</c> evaluates it: the pinned RE2-compatible XSD-regex subset under
+        /// fn:matches semantics — UNANCHORED, counting code points, with a whole-pattern flag
+        /// prefix. A pattern outside the subset is an <see cref="ExpressionError"/>, never a
+        /// silent false.
+        /// </summary>
+        /// <remarks>For a host engine that evaluates <c>Matches</c> over its own value domain: it
+        /// calls this rather than re-implement the dialect, and pre-flights an authored pattern
+        /// with <see cref="ValidateMatchesPattern"/>, which applies the same rules.</remarks>
+        /// <exception cref="ExpressionError">The pattern is outside the pinned subset.</exception>
+        /// <exception cref="ArgumentNullException"><paramref name="input"/> or
+        /// <paramref name="pattern"/> is null.</exception>
+        public static bool Matches(string input, string pattern)
+        {
+            if (input == null) throw new ArgumentNullException(nameof(input));
+            if (pattern == null) throw new ArgumentNullException(nameof(pattern));
+            return MatchesPattern(input, pattern);
+        }
+
         // -- ordered comparisons (unchanged from v1) ---------------------------
 
         static string IdentityOf(ExprNode node, object ctx, EvalOptions opts)
         {
-            if (node.Type == TX + "/UriLiteral")
+            if (node.Type == URI_LITERAL)
             {
                 if (node.Get("refTo") is string s && s.Length > 0) return s;
                 throw Err("UriLiteral is missing refTo");
@@ -633,7 +727,7 @@ namespace Kanonak.Expression
             double value;
             if (left == right)
             {
-                value = Bool(typ == TX + "/IsAtLeast");
+                value = Bool(typ == IS_AT_LEAST);
             }
             else
             {
@@ -641,6 +735,41 @@ namespace Kanonak.Expression
             }
             return (value, left, right);
         }
+
+        // -- the kernel's node classes -----------------------------------------
+
+        /// <summary>Every node class the fold answers itself: its tables, the operators it
+        /// dispatches by name, and its literals.</summary>
+        static readonly HashSet<string> KernelNodeClasses = BuildKernelNodeClasses();
+
+        static HashSet<string> BuildKernelNodeClasses()
+        {
+            var set = new HashSet<string>(OperatorArities.Keys);
+            set.UnionWith(ListFolds);
+            set.UnionWith(IteratorBodies.Keys);
+            set.UnionWith(KindPredicates);
+            set.UnionWith(new[]
+            {
+                NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES,
+                INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL,
+            });
+            return set;
+        }
+
+        /// <summary>
+        /// True when the kernel folds a node of class <paramref name="typeUri"/> (a canonical
+        /// versionless URI) itself — an operator or a literal. False for everything
+        /// <see cref="Evaluate"/> hands to the caller's <see cref="Resolve"/>: a binding
+        /// (<c>tx.VarRef</c>; the kernel binds only its own iterators' loop variables), a graph
+        /// read (<c>tx.PropertyRead</c>), a domain leaf, and any expression class only a host
+        /// engine implements.
+        /// </summary>
+        /// <remarks>A host that compiles authored expressions checks a tree against this — every
+        /// node either <c>Evaluates</c>, or is a leaf the host resolves — instead of probing
+        /// <see cref="Evaluate"/> class by class. Pinned across ports by
+        /// <c>expression-surface-vectors.json</c>.</remarks>
+        public static bool Evaluates(string typeUri)
+            => typeUri != null && KernelNodeClasses.Contains(typeUri);
 
         // -- the fold ----------------------------------------------------------
 
@@ -723,13 +852,13 @@ namespace Kanonak.Expression
                 }
             }
 
-            if (typ == TX + "/Not")
+            if (typ == NOT)
             {
                 var x = Go(Operand(node, "operand"), ctx, resolve, options, frames);
                 return Bool(!Truthy(RequireNum(x, typ)));
             }
 
-            if (typ == TX + "/IsAtLeast" || typ == TX + "/Dominates")
+            if (typ == IS_AT_LEAST || typ == DOMINATES)
             {
                 return FoldOrdered(node, ctx, options).value;
             }
@@ -777,7 +906,7 @@ namespace Kanonak.Expression
                 return outList;
             }
 
-            if (typ == TX + "/Contains")
+            if (typ == CONTAINS)
             {
                 var hay = Go(Operand(node, "haystack"), ctx, resolve, options, frames);
                 var needle = Go(Operand(node, "needle"), ctx, resolve, options, frames);
@@ -789,12 +918,12 @@ namespace Kanonak.Expression
                 return 0.0;
             }
 
-            if (typ == TX + "/IsSet")
+            if (typ == IS_SET)
             {
                 return Bool(IsSetValue(Go(Operand(node, "checkExpr"), ctx, resolve, options, frames)));
             }
 
-            if (typ == TX + "/ListItemAt")
+            if (typ == LIST_ITEM_AT)
             {
                 var items = SourceList(node, ctx, resolve, options, frames);
                 var idx = Go(Operand(node, "itemIndex"), ctx, resolve, options, frames);
@@ -805,7 +934,7 @@ namespace Kanonak.Expression
                 return i < items.Count ? items[i] : new List<object>();
             }
 
-            if (typ == TX + "/Matches")
+            if (typ == MATCHES)
             {
                 var src = Go(Operand(node, "matchSource"), ctx, resolve, options, frames);
                 if (!(src is string s))
@@ -854,18 +983,18 @@ namespace Kanonak.Expression
         // node.
         // -------------------------------------------------------------------
 
-        static bool IsOrderedComparison(string typ) => typ == TX + "/IsAtLeast" || typ == TX + "/Dominates";
+        static bool IsOrderedComparison(string typ) => typ == IS_AT_LEAST || typ == DOMINATES;
 
         /// <summary>Trace-child order for the direct and list operators — the order Explain visits them.</summary>
         static string[] DirectChildren(string typ)
         {
             switch (typ)
             {
-                case TX + "/Not": return new[] { "operand" };
-                case TX + "/ListItemAt": return new[] { "source", "itemIndex" };
-                case TX + "/Contains": return new[] { "haystack", "needle" };
-                case TX + "/IsSet": return new[] { "checkExpr" };
-                case TX + "/Matches": return new[] { "matchSource" };
+                case NOT: return new[] { "operand" };
+                case LIST_ITEM_AT: return new[] { "source", "itemIndex" };
+                case CONTAINS: return new[] { "haystack", "needle" };
+                case IS_SET: return new[] { "checkExpr" };
+                case MATCHES: return new[] { "matchSource" };
                 case TX + "/Count": case TX + "/Sum": case TX + "/Min": case TX + "/Max": case TX + "/Average":
                 case TX + "/Join": case TX + "/Reverse":
                     return new[] { "source" };
@@ -1012,13 +1141,13 @@ namespace Kanonak.Expression
                 }
             }
 
-            if (typ == TX + "/Not")
+            if (typ == NOT)
             {
                 var x = Trace(Operand(node, "operand"), ctx, resolve, options, frames);
                 return Parent(typ, Bool(!Truthy(RequireNum(x.Value, typ))), x);
             }
 
-            if (typ == TX + "/IsAtLeast" || typ == TX + "/Dominates")
+            if (typ == IS_AT_LEAST || typ == DOMINATES)
             {
                 var r = FoldOrdered(node, ctx, options);
                 return new TraceNode { Type = typ, Value = r.value, LeftRef = r.left, RightRef = r.right };
@@ -1074,7 +1203,7 @@ namespace Kanonak.Expression
                 return t;
             }
 
-            if (typ == TX + "/Contains")
+            if (typ == CONTAINS)
             {
                 var hay = Trace(Operand(node, "haystack"), ctx, resolve, options, frames);
                 var needle = Trace(Operand(node, "needle"), ctx, resolve, options, frames);
@@ -1087,13 +1216,13 @@ namespace Kanonak.Expression
                 return Parent(typ, v, hay, needle);
             }
 
-            if (typ == TX + "/IsSet")
+            if (typ == IS_SET)
             {
                 var x = Trace(Operand(node, "checkExpr"), ctx, resolve, options, frames);
                 return Parent(typ, Bool(IsSetValue(x.Value)), x);
             }
 
-            if (typ == TX + "/ListItemAt")
+            if (typ == LIST_ITEM_AT)
             {
                 var src = Trace(Operand(node, "source"), ctx, resolve, options, frames);
                 var idx = Trace(Operand(node, "itemIndex"), ctx, resolve, options, frames);
@@ -1105,7 +1234,7 @@ namespace Kanonak.Expression
                 return Parent(typ, value, src, idx);
             }
 
-            if (typ == TX + "/Matches")
+            if (typ == MATCHES)
             {
                 var src = Trace(Operand(node, "matchSource"), ctx, resolve, options, frames);
                 if (!(src.Value is string s))

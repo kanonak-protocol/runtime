@@ -31,10 +31,14 @@
 //! classes are ASCII by textual expansion; `\b`/`\B` compile as `(?-u:\b)` —
 //! the ASCII word boundary. Out-of-subset constructs are loud errors.
 //!
-//! Operator/literal type tags are matched against `&'static str` literals (the
-//! frozen canonical URIs) — no allocation in the evaluation hot path.
+//! Operator/literal type tags are matched against `&'static str` URIs (the
+//! frozen canonical URIs, in static dispatch tables and named constants) — no
+//! allocation in the evaluation hot path. [`evaluates`] answers from those same
+//! tables, so it cannot drift from what the fold dispatches.
 
 use serde_json::Value as Json;
+use std::collections::HashSet;
+use std::sync::OnceLock;
 
 /// The frozen expression-runtime version (determinism contract). Not hashed.
 pub const EXPRESSION_RUNTIME_VERSION: &str = "2";
@@ -125,6 +129,7 @@ pub struct TraceNode {
 }
 
 /// Operand shape per operator, derived from the `tx` superclass hierarchy.
+#[derive(Clone, Copy)]
 enum Arity {
     Unary { operand: &'static str },
     Binary { left: &'static str, right: &'static str },
@@ -136,58 +141,71 @@ const ARITH: Arity = Arity::Binary { left: "arithLeft", right: "arithRight" };
 const COMPARE: Arity = Arity::Binary { left: "compareLeft", right: "compareRight" };
 const VALUE: Arity = Arity::Unary { operand: "value" };
 
-/// The frozen dispatch table for the numeric/boolean core. `Not` is handled
-/// explicitly (boolean, not numeric-unary semantics).
+/// The frozen dispatch table for the numeric/boolean core, keyed by type URI.
+/// `Not` is handled explicitly (boolean, not numeric-unary semantics).
+const OPERATOR_ARITY: &[(&str, Arity)] = &[
+    ("kanonak.org/transformations/Add", ARITH),
+    ("kanonak.org/transformations/Subtract", ARITH),
+    ("kanonak.org/transformations/Multiply", ARITH),
+    ("kanonak.org/transformations/Divide", ARITH),
+    ("kanonak.org/math/Power", ARITH),
+    ("kanonak.org/math/Modulo", ARITH),
+    ("kanonak.org/math/Minimum", ARITH),
+    ("kanonak.org/math/Maximum", ARITH),
+    ("kanonak.org/transformations/Abs", VALUE),
+    ("kanonak.org/transformations/Negate", VALUE),
+    ("kanonak.org/math/Exp", VALUE),
+    ("kanonak.org/math/Ln", VALUE),
+    ("kanonak.org/math/Log10", VALUE),
+    ("kanonak.org/math/Sqrt", VALUE),
+    ("kanonak.org/math/Floor", VALUE),
+    ("kanonak.org/math/Ceil", VALUE),
+    ("kanonak.org/math/Round", VALUE),
+    ("kanonak.org/math/Sign", VALUE),
+    ("kanonak.org/transformations/Equals", COMPARE),
+    ("kanonak.org/transformations/GreaterThan", COMPARE),
+    ("kanonak.org/transformations/LessThan", COMPARE),
+    ("kanonak.org/transformations/GreaterThanOrEqual", COMPARE),
+    ("kanonak.org/transformations/LessThanOrEqual", COMPARE),
+    ("kanonak.org/transformations/And", Arity::Nary { operands: "operands" }),
+    ("kanonak.org/transformations/Or", Arity::Nary { operands: "operands" }),
+    (
+        "kanonak.org/math/Clip",
+        Arity::Ternary { a: "clipValue", b: "clipLower", c: "clipUpper" },
+    ),
+];
+
 fn operator_arity(typ: &str) -> Option<Arity> {
-    match typ {
-        "kanonak.org/transformations/Add"
-        | "kanonak.org/transformations/Subtract"
-        | "kanonak.org/transformations/Multiply"
-        | "kanonak.org/transformations/Divide"
-        | "kanonak.org/math/Power"
-        | "kanonak.org/math/Modulo"
-        | "kanonak.org/math/Minimum"
-        | "kanonak.org/math/Maximum" => Some(ARITH),
-
-        "kanonak.org/transformations/Abs"
-        | "kanonak.org/transformations/Negate"
-        | "kanonak.org/math/Exp"
-        | "kanonak.org/math/Ln"
-        | "kanonak.org/math/Log10"
-        | "kanonak.org/math/Sqrt"
-        | "kanonak.org/math/Floor"
-        | "kanonak.org/math/Ceil"
-        | "kanonak.org/math/Round"
-        | "kanonak.org/math/Sign" => Some(VALUE),
-
-        "kanonak.org/transformations/Equals"
-        | "kanonak.org/transformations/GreaterThan"
-        | "kanonak.org/transformations/LessThan"
-        | "kanonak.org/transformations/GreaterThanOrEqual"
-        | "kanonak.org/transformations/LessThanOrEqual" => Some(COMPARE),
-
-        "kanonak.org/transformations/And" | "kanonak.org/transformations/Or" => {
-            Some(Arity::Nary { operands: "operands" })
-        }
-
-        "kanonak.org/math/Clip" => Some(Arity::Ternary {
-            a: "clipValue",
-            b: "clipLower",
-            c: "clipUpper",
-        }),
-
-        _ => None,
-    }
+    OPERATOR_ARITY.iter().find(|(t, _)| *t == typ).map(|&(_, arity)| arity)
 }
+
+/// The operators the fold dispatches by name, beside its tables.
+const NOT: &str = "kanonak.org/transformations/Not";
+const IS_AT_LEAST: &str = "kanonak.org/transformations/IsAtLeast";
+const DOMINATES: &str = "kanonak.org/transformations/Dominates";
+const CONTAINS: &str = "kanonak.org/transformations/Contains";
+const IS_SET: &str = "kanonak.org/transformations/IsSet";
+const LIST_ITEM_AT: &str = "kanonak.org/transformations/ListItemAt";
+const MATCHES: &str = "kanonak.org/transformations/Matches";
+
+/// The literal classes the kernel answers itself (see `literal_value`).
+const INTEGER_LITERAL: &str = "kanonak.org/transformations/IntegerLiteral";
+const DECIMAL_LITERAL: &str = "kanonak.org/transformations/DecimalLiteral";
+const BOOLEAN_LITERAL: &str = "kanonak.org/transformations/BooleanLiteral";
+const STRING_LITERAL: &str = "kanonak.org/transformations/StringLiteral";
+const URI_LITERAL: &str = "kanonak.org/transformations/UriLiteral";
+
+/// IteratingExpression operators: `source` + `loopVar` + the body operand,
+/// keyed by type URI.
+const ITERATOR_BODY: &[(&str, &str)] = &[
+    ("kanonak.org/transformations/ForEach", "emit"),
+    ("kanonak.org/transformations/ListMap", "mapBody"),
+    ("kanonak.org/transformations/Filter", "predicate"),
+];
 
 /// The iterating operators' body operand, keyed by type URI.
 fn iterator_body(typ: &str) -> Option<&'static str> {
-    match typ {
-        "kanonak.org/transformations/ForEach" => Some("emit"),
-        "kanonak.org/transformations/ListMap" => Some("mapBody"),
-        "kanonak.org/transformations/Filter" => Some("predicate"),
-        _ => None,
-    }
+    ITERATOR_BODY.iter().find(|(t, _)| *t == typ).map(|&(_, body)| body)
 }
 
 /// Floored modulo (the host `%` truncates toward zero): Modulo(-7,3) = 2.
@@ -347,13 +365,9 @@ fn operand<'a>(node: &'a Json, typ: &str, key: &str) -> Result<&'a Json, Express
 /// identity, the way a literal's number is its value).
 fn literal_value(node: &Json, typ: &str) -> Result<Option<EvalValue>, ExpressionError> {
     match typ {
-        "kanonak.org/transformations/IntegerLiteral" => {
-            Ok(as_number(node.get("integerLiteral")).map(EvalValue::Num))
-        }
-        "kanonak.org/transformations/DecimalLiteral" => {
-            Ok(as_number(node.get("decimalLiteral")).map(EvalValue::Num))
-        }
-        "kanonak.org/transformations/BooleanLiteral" => {
+        INTEGER_LITERAL => Ok(as_number(node.get("integerLiteral")).map(EvalValue::Num)),
+        DECIMAL_LITERAL => Ok(as_number(node.get("decimalLiteral")).map(EvalValue::Num)),
+        BOOLEAN_LITERAL => {
             let b = match node.get("booleanLiteral") {
                 Some(Json::Bool(b)) => *b,
                 Some(Json::String(s)) => s == "true",
@@ -361,11 +375,11 @@ fn literal_value(node: &Json, typ: &str) -> Result<Option<EvalValue>, Expression
             };
             Ok(Some(EvalValue::Num(boolnum(b))))
         }
-        "kanonak.org/transformations/StringLiteral" => match node.get("stringLiteral") {
+        STRING_LITERAL => match node.get("stringLiteral") {
             Some(Json::String(s)) => Ok(Some(EvalValue::Str(s.clone()))),
             _ => err("StringLiteral is missing stringLiteral"),
         },
-        "kanonak.org/transformations/UriLiteral" => match node.get("refTo") {
+        URI_LITERAL => match node.get("refTo") {
             Some(Json::String(s)) if !s.is_empty() => Ok(Some(EvalValue::Ref(s.clone()))),
             _ => err("UriLiteral is missing refTo"),
         },
@@ -415,17 +429,20 @@ fn is_set(v: &EvalValue) -> bool {
     }
 }
 
+/// The non-iterating list family: the operators folded over their `source`
+/// operand by [`list_fold`], keyed by type URI.
+const LIST_FOLDS: &[&str] = &[
+    "kanonak.org/transformations/Count",
+    "kanonak.org/transformations/Sum",
+    "kanonak.org/transformations/Min",
+    "kanonak.org/transformations/Max",
+    "kanonak.org/transformations/Average",
+    "kanonak.org/transformations/Join",
+    "kanonak.org/transformations/Reverse",
+];
+
 fn is_list_fold(typ: &str) -> bool {
-    matches!(
-        typ,
-        "kanonak.org/transformations/Count"
-            | "kanonak.org/transformations/Sum"
-            | "kanonak.org/transformations/Min"
-            | "kanonak.org/transformations/Max"
-            | "kanonak.org/transformations/Average"
-            | "kanonak.org/transformations/Join"
-            | "kanonak.org/transformations/Reverse"
-    )
+    LIST_FOLDS.contains(&typ)
 }
 
 /// The `source`-operand folds for the non-iterating list family. Normative
@@ -494,24 +511,58 @@ fn kind_predicate(typ: &str, v: &EvalValue) -> Option<f64> {
     }
 }
 
+/// The KindPredicates [`kind_predicate`] answers, keyed by type URI.
+const KIND_PREDICATES: &[&str] = &[
+    "kanonak.org/transformations/IsString",
+    "kanonak.org/transformations/IsNumber",
+    "kanonak.org/transformations/IsReference",
+    "kanonak.org/transformations/IsList",
+];
+
 fn is_kind_predicate(typ: &str) -> bool {
-    matches!(
-        typ,
-        "kanonak.org/transformations/IsString"
-            | "kanonak.org/transformations/IsNumber"
-            | "kanonak.org/transformations/IsReference"
-            | "kanonak.org/transformations/IsList"
-    )
+    KIND_PREDICATES.contains(&typ)
 }
 
 // ---------------------------------------------------------------------------
 // Matches — the pinned RE2-compatible XSD-regex subset.
 // ---------------------------------------------------------------------------
 
-/// Check a WHOLE pattern against the pinned subset, flag prefix included.
-/// Thin wrapper over [`parse_matches_pattern`] so this checker and the
+/// Validate a `Matches` pattern against the pinned subset — the intersection of
+/// RE2 and the host regex engines, chosen so every port compiles the same
+/// pattern to the same language. RE2 is both the restrictive common denominator
+/// and ReDoS-safe (no catastrophic backtracking), which is a REQUIREMENT for a
+/// predicate that may gate on adversarial input. Out-of-subset constructs are a
+/// LOUD error, the same discipline as Round/Modulo; WIDENING the subset later
+/// (an error becoming a defined result) is additive within v2.
+///
+/// Checks the WHOLE pattern, flag prefix included, through the same parser
+/// [`matches()`] and the `tx.Matches` fold use — so this pre-flight and the
 /// evaluator can never disagree about what is a valid pattern.
-fn validate_matches_pattern(pattern: &str) -> Result<(), ExpressionError> {
+///
+/// COUNTING UNIT — pinned: `.` and quantifiers count Unicode CODE POINTS, in
+/// every port (this engine's native rune model). An astral-plane character is
+/// ONE `.`, and `.{3}` matches exactly three code points — matching RE2's rune
+/// model and Python's, and what SHACL/SPARQL string length means.
+///
+/// Allowed: literals; `.`; anchors `^` `$`; alternation `|`; groups `(...)`,
+/// `(?:...)`; a WHOLE-PATTERN flag prefix over `i`/`m`/`s` (`(?i)` at position
+/// 0 only, each flag at most once — each port translates it to its host flag
+/// mechanism); quantifiers `*` `+` `?` `{m}` `{m,}` `{m,n}`; character classes
+/// with ranges and negation; escapes `\d \D \w \W \s \S \b \B \n \r \t \f \v
+/// \xHH`, escaped syntax punctuation (`\.` `\*` `\+` `\?` `\(` `\)` `\[` `\]`
+/// `\{` `\}` `\|` `\^` `\$` `\\` `\/`), and `\-` inside character classes.
+///
+/// Rejected (divergent or unsafe across engines): lookahead/lookbehind, named
+/// groups, backreferences (`\1`…, `\k`), MID-pattern flag groups (`(?i:…)` —
+/// not portable to the JS and Python engines), a REPEATED flag in the prefix
+/// (`(?ii)` — the JS engine rejects it while the Go, Python and Rust engines
+/// accept it), `\p{…}`/`\P{…}` unicode property classes, POSIX classes
+/// (`[[:alpha:]]`), class intersection (`&&`), atomic groups, conditionals,
+/// comments, octal/`\u`/`\x{…}` escapes, escaped space (`\ `), `\-` outside a
+/// class, and a bare unescaped `{` that is not a quantifier (literal braces
+/// must be escaped — engines disagree on the lenient reading, so the subset
+/// requires the explicit form).
+pub fn validate_matches_pattern(pattern: &str) -> Result<(), ExpressionError> {
     parse_matches_pattern(pattern).map(|_| ())
 }
 
@@ -730,6 +781,18 @@ fn matches_pattern(input: &str, pattern: &str) -> Result<bool, ExpressionError> 
     Ok(re.is_match(input))
 }
 
+/// Test `input` against `pattern` exactly as `tx.Matches` evaluates it: the
+/// pinned RE2-compatible XSD-regex subset under fn:matches semantics —
+/// UNANCHORED, counting code points, with a whole-pattern flag prefix. A
+/// pattern outside the subset is an [`ExpressionError`], never a silent false.
+///
+/// For a host engine that evaluates `Matches` over its own value domain: it
+/// calls this rather than re-implement the dialect, and pre-flights an authored
+/// pattern with [`validate_matches_pattern`], which applies the same rules.
+pub fn matches(input: &str, pattern: &str) -> Result<bool, ExpressionError> {
+    matches_pattern(input, pattern)
+}
+
 // ---------------------------------------------------------------------------
 // Ordered comparisons (unchanged from v1).
 // ---------------------------------------------------------------------------
@@ -740,7 +803,7 @@ fn identity_of<C>(
     options: Option<&EvalOptions<'_, C>>,
 ) -> Result<String, ExpressionError> {
     let typ = node_type(node)?;
-    if typ == "kanonak.org/transformations/UriLiteral" {
+    if typ == URI_LITERAL {
         return match node.get("refTo") {
             Some(Json::String(s)) if !s.is_empty() => Ok(s.clone()),
             _ => err("UriLiteral is missing refTo"),
@@ -769,7 +832,7 @@ fn fold_ordered<C>(
         None => return err(format!("No closure supplied for ordering property '{via}'")),
     };
     let value = if left == right {
-        boolnum(typ == "kanonak.org/transformations/IsAtLeast")
+        boolnum(typ == IS_AT_LEAST)
     } else {
         boolnum(
             closure
@@ -779,6 +842,44 @@ fn fold_ordered<C>(
         )
     };
     Ok((value, left, right))
+}
+
+// ---------------------------------------------------------------------------
+// The kernel's node classes.
+// ---------------------------------------------------------------------------
+
+/// Every node class the fold answers itself: its tables, the operators it
+/// dispatches by name, and its literals. Built once, on first use.
+fn kernel_node_classes() -> &'static HashSet<&'static str> {
+    static KERNEL_NODE_CLASSES: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    KERNEL_NODE_CLASSES.get_or_init(|| {
+        OPERATOR_ARITY
+            .iter()
+            .map(|&(t, _)| t)
+            .chain(LIST_FOLDS.iter().copied())
+            .chain(ITERATOR_BODY.iter().map(|&(t, _)| t))
+            .chain(KIND_PREDICATES.iter().copied())
+            .chain([
+                NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES,
+                INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL,
+            ])
+            .collect()
+    })
+}
+
+/// True when the kernel folds a node of class `type_uri` (a canonical
+/// versionless URI) itself — an operator or a literal. False for everything
+/// [`evaluate`] hands to the caller's `resolve`: a binding (`tx.VarRef`; the
+/// kernel binds only its own iterators' loop variables), a graph read
+/// (`tx.PropertyRead`), a domain leaf, and any expression class only a host
+/// engine implements.
+///
+/// A host that compiles authored expressions checks a tree against this —
+/// every node either `evaluates`, or is a leaf the host resolves — instead of
+/// probing [`evaluate`] class by class. Pinned across ports by
+/// `expression-surface-vectors.json`.
+pub fn evaluates(type_uri: &str) -> bool {
+    kernel_node_classes().contains(type_uri)
 }
 
 // ---------------------------------------------------------------------------
@@ -895,14 +996,12 @@ fn go<C>(
         }
     }
 
-    if typ == "kanonak.org/transformations/Not" {
+    if typ == NOT {
         let x = go(operand(node, typ, "operand")?, ctx, resolve, options, frames)?;
         return Ok(EvalValue::Num(boolnum(!truthy(require_num(&x, typ)?))));
     }
 
-    if typ == "kanonak.org/transformations/IsAtLeast"
-        || typ == "kanonak.org/transformations/Dominates"
-    {
+    if typ == IS_AT_LEAST || typ == DOMINATES {
         let (value, _, _) = fold_ordered(node, typ, ctx, options)?;
         return Ok(EvalValue::Num(value));
     }
@@ -943,7 +1042,7 @@ fn go<C>(
         return Ok(EvalValue::List(out));
     }
 
-    if typ == "kanonak.org/transformations/Contains" {
+    if typ == CONTAINS {
         let hay = go(operand(node, typ, "haystack")?, ctx, resolve, options, frames)?;
         let needle = go(operand(node, typ, "needle")?, ctx, resolve, options, frames)?;
         let list = match hay {
@@ -955,12 +1054,12 @@ fn go<C>(
         )));
     }
 
-    if typ == "kanonak.org/transformations/IsSet" {
+    if typ == IS_SET {
         let v = go(operand(node, typ, "checkExpr")?, ctx, resolve, options, frames)?;
         return Ok(EvalValue::Num(boolnum(is_set(&v))));
     }
 
-    if typ == "kanonak.org/transformations/ListItemAt" {
+    if typ == LIST_ITEM_AT {
         let list = source_list(node, typ, ctx, resolve, options, frames)?;
         let idx = go(operand(node, typ, "itemIndex")?, ctx, resolve, options, frames)?;
         let n = match idx {
@@ -971,7 +1070,7 @@ fn go<C>(
         return Ok(list.into_iter().nth(n).unwrap_or(EvalValue::List(Vec::new())));
     }
 
-    if typ == "kanonak.org/transformations/Matches" {
+    if typ == MATCHES {
         let src = go(operand(node, typ, "matchSource")?, ctx, resolve, options, frames)?;
         let s = match &src {
             EvalValue::Str(s) => s,
@@ -1120,15 +1219,13 @@ fn trace<C>(
         }
     }
 
-    if typ == "kanonak.org/transformations/Not" {
+    if typ == NOT {
         let x = trace(operand(node, typ, "operand")?, ctx, resolve, options, frames)?;
         let v = boolnum(!truthy(require_num(&x.value, typ)?));
         return Ok(parent(typ, EvalValue::Num(v), vec![x]));
     }
 
-    if typ == "kanonak.org/transformations/IsAtLeast"
-        || typ == "kanonak.org/transformations/Dominates"
-    {
+    if typ == IS_AT_LEAST || typ == DOMINATES {
         let (value, l, r) = fold_ordered(node, typ, ctx, options)?;
         return Ok(TraceNode {
             typ: typ.to_string(),
@@ -1185,7 +1282,7 @@ fn trace<C>(
         return Ok(parent(typ, EvalValue::List(out), children));
     }
 
-    if typ == "kanonak.org/transformations/Contains" {
+    if typ == CONTAINS {
         let hay = trace(operand(node, typ, "haystack")?, ctx, resolve, options, frames)?;
         let needle = trace(operand(node, typ, "needle")?, ctx, resolve, options, frames)?;
         let list = match &hay.value {
@@ -1196,13 +1293,13 @@ fn trace<C>(
         return Ok(parent(typ, EvalValue::Num(v), vec![hay, needle]));
     }
 
-    if typ == "kanonak.org/transformations/IsSet" {
+    if typ == IS_SET {
         let x = trace(operand(node, typ, "checkExpr")?, ctx, resolve, options, frames)?;
         let v = boolnum(is_set(&x.value));
         return Ok(parent(typ, EvalValue::Num(v), vec![x]));
     }
 
-    if typ == "kanonak.org/transformations/ListItemAt" {
+    if typ == LIST_ITEM_AT {
         let src = trace(operand(node, typ, "source")?, ctx, resolve, options, frames)?;
         let idx = trace(operand(node, typ, "itemIndex")?, ctx, resolve, options, frames)?;
         let list = match &src.value {
@@ -1217,7 +1314,7 @@ fn trace<C>(
         return Ok(parent(typ, value, vec![src, idx]));
     }
 
-    if typ == "kanonak.org/transformations/Matches" {
+    if typ == MATCHES {
         let src = trace(operand(node, typ, "matchSource")?, ctx, resolve, options, frames)?;
         let s = match &src.value {
             EvalValue::Str(s) => s.clone(),
@@ -1297,11 +1394,11 @@ pub struct AlignedNode<'a> {
 /// visits them. Data operands (Join's separator, Matches' pattern) are not children.
 fn direct_children(typ: &str) -> Option<&'static [&'static str]> {
     match typ {
-        "kanonak.org/transformations/Not" => Some(&["operand"]),
-        "kanonak.org/transformations/ListItemAt" => Some(&["source", "itemIndex"]),
-        "kanonak.org/transformations/Contains" => Some(&["haystack", "needle"]),
-        "kanonak.org/transformations/IsSet" => Some(&["checkExpr"]),
-        "kanonak.org/transformations/Matches" => Some(&["matchSource"]),
+        NOT => Some(&["operand"]),
+        LIST_ITEM_AT => Some(&["source", "itemIndex"]),
+        CONTAINS => Some(&["haystack", "needle"]),
+        IS_SET => Some(&["checkExpr"]),
+        MATCHES => Some(&["matchSource"]),
         "kanonak.org/transformations/Count"
         | "kanonak.org/transformations/Sum"
         | "kanonak.org/transformations/Min"
@@ -1318,7 +1415,7 @@ fn direct_children(typ: &str) -> Option<&'static [&'static str]> {
 }
 
 fn is_ordered_comparison(typ: &str) -> bool {
-    matches!(typ, "kanonak.org/transformations/IsAtLeast" | "kanonak.org/transformations/Dominates")
+    matches!(typ, IS_AT_LEAST | DOMINATES)
 }
 
 /// Pair an expression with the trace [`explain`] produced for it.

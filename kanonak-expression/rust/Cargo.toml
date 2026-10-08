@@ -1,6 +1,6 @@
 [package]
 name = "kanonak-expression"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 authors = ["Kanonak Maintainers (https://github.com/kanonak-protocol/runtime)"]
 description = "Kanonak expression runtime (expressionRuntimeVersion 2). Deterministic tree-walker for kanonak.org/transformations + kanonak.org/math expressions, verified against the shared parity vectors."

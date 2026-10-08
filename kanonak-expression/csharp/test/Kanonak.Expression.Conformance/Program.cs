@@ -10,8 +10,10 @@ using Kanonak.Expression;
 // expression-vectors-2.json (the value-domain extension). env bindings and
 // expected are Values (numbers, strings, arrays, {"ref": …} objects). Every
 // vector runs through Evaluate AND Explain and their values must agree; vectors
-// with a `trace` assert the verdict tree structurally. Exits non-zero on any
-// failure.
+// with a `trace` assert the verdict tree structurally. expression-surface-vectors.json
+// pins the public surface beside Evaluate (Expr.Evaluates, Expr.Matches) and
+// cross-checks Evaluates against every node class the evaluate vectors exercise.
+// Exits non-zero on any failure.
 //   dotnet run -- <vectors-dir>
 
 class Program
@@ -31,6 +33,9 @@ class Program
         int fail = RunFile(Path.Combine(vectorsDir, "expression-vectors.json"));
         fail += RunFile(Path.Combine(vectorsDir, "expression-vectors-2.json"));
         fail += RunAlignFile(Path.Combine(vectorsDir, "expression-alignment-vectors.json"));
+        var exercised = NodeTypes(Path.Combine(vectorsDir, "expression-vectors.json"));
+        exercised.AddRange(NodeTypes(Path.Combine(vectorsDir, "expression-vectors-2.json")));
+        fail += RunSurfaceFile(Path.Combine(vectorsDir, "expression-surface-vectors.json"), exercised);
         if (fail == 0) Console.WriteLine("ALL VECTORS PASS");
         return fail == 0 ? 0 : 1;
     }
@@ -387,5 +392,81 @@ class Program
         }
         Console.WriteLine($"{name}: {pass}/{total} pass");
         return fail;
+    }
+
+    /// <summary>The public surface beside Evaluate: Expr.Evaluates(typeUri) and Expr.Matches(input, pattern).
+    /// Then a cross-check of Evaluates against the evaluate vectors themselves: every node class they exercise
+    /// is either one the kernel folds, or a leaf this harness's resolve answers — so a class the fold handles
+    /// cannot be missing from Evaluates. Returns the failure count.</summary>
+    static int RunSurfaceFile(string path, List<string> exercised)
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllText(path));
+        var evaluates = doc.RootElement.GetProperty("evaluates");
+        var matches = doc.RootElement.GetProperty("matches");
+        var types = new HashSet<string>(exercised);
+        string name = Path.GetFileName(path);
+        int total = 0, pass = 0, fail = 0;
+
+        // A gate that checks nothing — no cases, or a walk that found no node types — must never report green.
+        if (evaluates.GetArrayLength() == 0 || matches.GetArrayLength() == 0 || types.Count == 0)
+        {
+            Console.Error.WriteLine($"FATAL: {path} has an empty section, or the evaluate vectors yielded no node types — refusing to report a passing gate");
+            return 1;
+        }
+
+        foreach (var v in evaluates.EnumerateArray())
+        {
+            total++;
+            string id = v.GetProperty("id").GetString();
+            string type = v.GetProperty("type").GetString();
+            bool expected = v.GetProperty("expected").GetBoolean();
+            if (Expr.Evaluates(type) == expected) pass++;
+            else { fail++; Console.WriteLine($"  FAIL [{name}/{id}] Evaluates({type}) should be {expected}"); }
+        }
+
+        foreach (var v in matches.EnumerateArray())
+        {
+            total++;
+            string id = v.GetProperty("id").GetString();
+            string input = v.GetProperty("input").GetString();
+            string pattern = v.GetProperty("pattern").GetString();
+            bool expectError = v.TryGetProperty("expectError", out var ee) && ee.GetBoolean();
+            bool got = false, threw = false;
+            try { got = Expr.Matches(input, pattern); } catch (ExpressionError) { threw = true; }
+            bool ok = expectError ? threw : !threw && got == v.GetProperty("expected").GetBoolean();
+            if (ok) pass++;
+            else { fail++; Console.WriteLine($"  FAIL [{name}/{id}] Matches gave {(threw ? "an error" : got.ToString())}"); }
+        }
+
+        foreach (var type in types)
+        {
+            total++;
+            if (type == VARREF || type == PROPERTY_READ || Expr.Evaluates(type)) pass++;
+            else { fail++; Console.WriteLine($"  FAIL [{name}/exercised] the vectors fold {type}, but Evaluates() says the kernel does not"); }
+        }
+
+        Console.WriteLine($"{name}: {pass}/{total} pass" + (fail == 0 ? "" : $", {fail} fail"));
+        return fail;
+    }
+
+    /// <summary>Every node <c>type</c> in a vector file's expression trees.</summary>
+    static List<string> NodeTypes(string path)
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllText(path));
+        var types = new List<string>();
+        foreach (var v in doc.RootElement.GetProperty("vectors").EnumerateArray()) CollectTypes(v.GetProperty("expr"), types);
+        return types;
+    }
+
+    static void CollectTypes(JsonElement e, List<string> types)
+    {
+        if (e.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in e.EnumerateArray()) CollectTypes(item, types);
+            return;
+        }
+        if (e.ValueKind != JsonValueKind.Object) return;
+        if (e.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String) types.Add(t.GetString());
+        foreach (var p in e.EnumerateObject()) CollectTypes(p.Value, types);
     }
 }

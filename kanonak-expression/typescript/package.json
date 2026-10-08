@@ -1,6 +1,6 @@
 {
   "name": "@kanonak-protocol/expression",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "The Kanonak expression runtime (expressionRuntimeVersion \"2\") — a deterministic tree-walker that folds a kanonak.org/transformations + kanonak.org/math expression to a value (number | string | ref | list), verified against the shared parity vectors. The behavior every generated SDK evaluates through.",
   "license": "Apache-2.0",
   "homepage": "https://kanonak.org",
@@ -12,13 +12,15 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "vectors"
   ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    }
+    },
+    "./vectors/*": "./vectors/*"
   },
   "publishConfig": {
     "access": "public"
@@ -38,7 +40,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "conformance": "tsx src/conformance.ts"
+    "conformance": "tsx src/conformance.ts",
+    "prepack": "node scripts/copy-vectors.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -4,13 +4,19 @@
 //! (the value-domain extension). Every vector runs through `evaluate` AND
 //! `explain` and their values must agree; `env` bindings and `expected` are
 //! Values (numbers, strings, arrays, `{"ref": …}` objects); vectors with a
-//! `trace` assert the verdict tree structurally.
+//! `trace` assert the verdict tree structurally. Then the alignment vectors,
+//! and the public surface beside `evaluate` (`expression-surface-vectors.json`:
+//! `evaluates` and `matches`).
 
 use kanonak_expression::*;
 use serde_json::Value as J;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::PathBuf;
+
+/// The harness's own leaves: the classes `resolve_vector` answers.
+const VARREF: &str = "kanonak.org/transformations/VarRef";
+const PROPERTY_READ: &str = "kanonak.org/transformations/PropertyRead";
 
 fn vectors_dir() -> PathBuf {
     // tests run from the crate root (rust/); vectors are at ../vectors.
@@ -62,7 +68,7 @@ fn resolve_vector(
     recurse: &mut dyn FnMut(&J, &mut Ctx) -> Result<EvalValue, ExpressionError>,
 ) -> Result<EvalValue, ExpressionError> {
     let typ = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
-    if typ == "kanonak.org/transformations/VarRef" {
+    if typ == VARREF {
         let name = node
             .get("varName")
             .and_then(|n| n.as_str())
@@ -71,7 +77,7 @@ fn resolve_vector(
             Some(v) => Ok(v.clone()),
             None => Err(ExpressionError(format!("unbound variable '{name}'"))),
         }
-    } else if typ == "kanonak.org/transformations/PropertyRead" {
+    } else if typ == PROPERTY_READ {
         let source_node = node
             .get("readSource")
             .ok_or_else(|| ExpressionError("PropertyRead missing readSource".into()))?;
@@ -99,7 +105,7 @@ fn resolve_vector(
 /// the caller owns bindings.
 fn resolve_ref_vector(node: &J, ctx: &mut Ctx) -> Result<String, ExpressionError> {
     let typ = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
-    if typ == "kanonak.org/transformations/VarRef" {
+    if typ == VARREF {
         let name = node
             .get("varName")
             .and_then(|n| n.as_str())
@@ -295,9 +301,91 @@ fn expression_vectors() {
     let (p1, t1) = run_file("expression-vectors.json");
     let (p2, t2) = run_file("expression-vectors-2.json");
     let (p3, t3) = run_align_file("expression-alignment-vectors.json");
+    let mut exercised = node_types("expression-vectors.json");
+    exercised.extend(node_types("expression-vectors-2.json"));
+    let (p4, t4) = run_surface_file("expression-surface-vectors.json", &exercised);
     assert_eq!(p1, t1, "{} v1 vector(s) failed", t1 - p1);
     assert_eq!(p2, t2, "{} v2 vector(s) failed", t2 - p2);
     assert_eq!(p3, t3, "{} alignment vector(s) failed", t3 - p3);
+    assert_eq!(p4, t4, "{} surface check(s) failed", t4 - p4);
+}
+
+/// The public surface beside `evaluate`: `evaluates(type_uri)` and
+/// `matches(input, pattern)`. Then a cross-check of `evaluates` against the
+/// evaluate vectors themselves: every node class they exercise is either one
+/// the kernel folds, or a leaf this harness's `resolve` answers — so a class
+/// the fold handles cannot be missing from `evaluates`.
+fn run_surface_file(name: &str, exercised: &BTreeSet<String>) -> (usize, usize) {
+    let doc = read(name);
+    let mut pass = 0;
+    let mut fail = 0;
+    for v in doc["evaluates"].as_array().unwrap() {
+        let id = v["id"].as_str().unwrap();
+        let typ = v["type"].as_str().unwrap();
+        let expected = v["expected"].as_bool().unwrap();
+        if evaluates(typ) == expected {
+            pass += 1;
+        } else {
+            fail += 1;
+            eprintln!("FAIL [{name}/{id}] evaluates({typ}) should be {expected}");
+        }
+    }
+    for v in doc["matches"].as_array().unwrap() {
+        let id = v["id"].as_str().unwrap();
+        let input = v["input"].as_str().unwrap();
+        let pattern = v["pattern"].as_str().unwrap();
+        let expect_error = v.get("expectError").and_then(|x| x.as_bool()).unwrap_or(false);
+        let got = matches(input, pattern);
+        let ok = if expect_error {
+            got.is_err()
+        } else {
+            matches!(&got, Ok(b) if Some(*b) == v["expected"].as_bool())
+        };
+        if ok {
+            pass += 1;
+        } else {
+            fail += 1;
+            match got {
+                Ok(b) => eprintln!("FAIL [{name}/{id}] matches gave {b}"),
+                Err(e) => eprintln!("FAIL [{name}/{id}] matches gave an error: {}", e.0),
+            }
+        }
+    }
+    for typ in exercised {
+        if typ == VARREF || typ == PROPERTY_READ || evaluates(typ) {
+            pass += 1;
+        } else {
+            fail += 1;
+            eprintln!(
+                "FAIL [{name}/exercised] the vectors fold {typ}, but evaluates() says the kernel does not"
+            );
+        }
+    }
+    let total = pass + fail;
+    println!("{name}: {pass}/{total} pass");
+    (pass, total)
+}
+
+/// Every node `type` in a vector file's expression trees.
+fn node_types(name: &str) -> BTreeSet<String> {
+    fn walk(x: &J, out: &mut BTreeSet<String>) {
+        match x {
+            J::Array(items) => items.iter().for_each(|i| walk(i, out)),
+            J::Object(o) => {
+                if let Some(t) = o.get("type").and_then(J::as_str) {
+                    out.insert(t.to_string());
+                }
+                o.values().for_each(|v| walk(v, out));
+            }
+            _ => {}
+        }
+    }
+    let doc = read(name);
+    let mut out = BTreeSet::new();
+    for v in doc["vectors"].as_array().unwrap() {
+        walk(&v["expr"], &mut out);
+    }
+    out
 }
 
 /// Structural equality of an aligned tree against the vector's expected tree.

@@ -24,3 +24,6 @@
 
 # npm lockfile (not committed for these libs)
 package-lock.json
+
+# Packed copy of the shared vectors (kanonak-expression/typescript/scripts/copy-vectors.mjs)
+kanonak-expression/typescript/vectors/

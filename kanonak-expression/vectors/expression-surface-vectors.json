@@ -1,0 +1,514 @@
+{
+  "expressionRuntimeVersion": "2",
+  "description": "The public surface every port exposes beside evaluate (runtime 1.1.0). `evaluates` pins evaluates(typeUri): true exactly for the node classes the kernel folds itself (operators and literals); false for a binding (VarRef), a graph read (PropertyRead), a domain leaf, and an expression class only a host engine implements - a host checks an authored tree against it instead of probing evaluate. `matches` pins matches(input, pattern): the pinned RE2-compatible XSD-regex subset under fn:matches semantics, exactly as tx.Matches evaluates it (the cases are the v2 Matches vectors with a literal source); expectError marks a pattern outside the subset, which is a loud error.",
+  "evaluates": [
+    {
+      "id": "evaluates-tx-IntegerLiteral",
+      "type": "kanonak.org/transformations/IntegerLiteral",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-DecimalLiteral",
+      "type": "kanonak.org/transformations/DecimalLiteral",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-BooleanLiteral",
+      "type": "kanonak.org/transformations/BooleanLiteral",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-StringLiteral",
+      "type": "kanonak.org/transformations/StringLiteral",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-UriLiteral",
+      "type": "kanonak.org/transformations/UriLiteral",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Add",
+      "type": "kanonak.org/transformations/Add",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Subtract",
+      "type": "kanonak.org/transformations/Subtract",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Multiply",
+      "type": "kanonak.org/transformations/Multiply",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Divide",
+      "type": "kanonak.org/transformations/Divide",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Abs",
+      "type": "kanonak.org/transformations/Abs",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Negate",
+      "type": "kanonak.org/transformations/Negate",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Equals",
+      "type": "kanonak.org/transformations/Equals",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-GreaterThan",
+      "type": "kanonak.org/transformations/GreaterThan",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-LessThan",
+      "type": "kanonak.org/transformations/LessThan",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-GreaterThanOrEqual",
+      "type": "kanonak.org/transformations/GreaterThanOrEqual",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-LessThanOrEqual",
+      "type": "kanonak.org/transformations/LessThanOrEqual",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-IsAtLeast",
+      "type": "kanonak.org/transformations/IsAtLeast",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Dominates",
+      "type": "kanonak.org/transformations/Dominates",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-And",
+      "type": "kanonak.org/transformations/And",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Or",
+      "type": "kanonak.org/transformations/Or",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Not",
+      "type": "kanonak.org/transformations/Not",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Count",
+      "type": "kanonak.org/transformations/Count",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Sum",
+      "type": "kanonak.org/transformations/Sum",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Min",
+      "type": "kanonak.org/transformations/Min",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Max",
+      "type": "kanonak.org/transformations/Max",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Average",
+      "type": "kanonak.org/transformations/Average",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Join",
+      "type": "kanonak.org/transformations/Join",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Reverse",
+      "type": "kanonak.org/transformations/Reverse",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-ListItemAt",
+      "type": "kanonak.org/transformations/ListItemAt",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-ForEach",
+      "type": "kanonak.org/transformations/ForEach",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-ListMap",
+      "type": "kanonak.org/transformations/ListMap",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Filter",
+      "type": "kanonak.org/transformations/Filter",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Contains",
+      "type": "kanonak.org/transformations/Contains",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-IsSet",
+      "type": "kanonak.org/transformations/IsSet",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-IsString",
+      "type": "kanonak.org/transformations/IsString",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-IsNumber",
+      "type": "kanonak.org/transformations/IsNumber",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-IsReference",
+      "type": "kanonak.org/transformations/IsReference",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-IsList",
+      "type": "kanonak.org/transformations/IsList",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-Matches",
+      "type": "kanonak.org/transformations/Matches",
+      "expected": true
+    },
+    {
+      "id": "evaluates-math-Power",
+      "type": "kanonak.org/math/Power",
+      "expected": true
+    },
+    {
+      "id": "evaluates-math-Modulo",
+      "type": "kanonak.org/math/Modulo",
+      "expected": true
+    },
+    {
+      "id": "evaluates-math-Minimum",
+      "type": "kanonak.org/math/Minimum",
+      "expected": true
+    },
+    {
+      "id": "evaluates-math-Maximum",
+      "type": "kanonak.org/math/Maximum",
+      "expected": true
+    },
+    {
+      "id": "evaluates-math-Exp",
+      "type": "kanonak.org/math/Exp",
+      "expected": true
+    },
+    {
+      "id": "evaluates-math-Ln",
+      "type": "kanonak.org/math/Ln",
+      "expected": true
+    },
+    {
+      "id": "evaluates-math-Log10",
+      "type": "kanonak.org/math/Log10",
+      "expected": true
+    },
+    {
+      "id": "evaluates-math-Sqrt",
+      "type": "kanonak.org/math/Sqrt",
+      "expected": true
+    },
+    {
+      "id": "evaluates-math-Floor",
+      "type": "kanonak.org/math/Floor",
+      "expected": true
+    },
+    {
+      "id": "evaluates-math-Ceil",
+      "type": "kanonak.org/math/Ceil",
+      "expected": true
+    },
+    {
+      "id": "evaluates-math-Round",
+      "type": "kanonak.org/math/Round",
+      "expected": true
+    },
+    {
+      "id": "evaluates-math-Sign",
+      "type": "kanonak.org/math/Sign",
+      "expected": true
+    },
+    {
+      "id": "evaluates-math-Clip",
+      "type": "kanonak.org/math/Clip",
+      "expected": true
+    },
+    {
+      "id": "evaluates-not-VarRef",
+      "type": "kanonak.org/transformations/VarRef",
+      "expected": false,
+      "description": "a binding: the kernel binds only its own iterators' loop variables; any other VarRef is the caller's"
+    },
+    {
+      "id": "evaluates-not-PropertyRead",
+      "type": "kanonak.org/transformations/PropertyRead",
+      "expected": false,
+      "description": "a graph read: the caller's leaf"
+    },
+    {
+      "id": "evaluates-not-IsBoolean",
+      "type": "kanonak.org/transformations/IsBoolean",
+      "expected": false,
+      "description": "a host kind: booleans are 1/0 numbers in the kernel"
+    },
+    {
+      "id": "evaluates-not-IsEmbedded",
+      "type": "kanonak.org/transformations/IsEmbedded",
+      "expected": false,
+      "description": "a host kind: embedded nodes never enter the kernel"
+    },
+    {
+      "id": "evaluates-not-Let",
+      "type": "kanonak.org/transformations/Let",
+      "expected": false,
+      "description": "not a kernel operator"
+    },
+    {
+      "id": "evaluates-not-When",
+      "type": "kanonak.org/transformations/When",
+      "expected": false,
+      "description": "not a kernel operator"
+    },
+    {
+      "id": "evaluates-not-Concat",
+      "type": "kanonak.org/transformations/Concat",
+      "expected": false,
+      "description": "not a kernel operator"
+    },
+    {
+      "id": "evaluates-not-Fallback",
+      "type": "kanonak.org/transformations/Fallback",
+      "expected": false,
+      "description": "not a kernel operator"
+    },
+    {
+      "id": "evaluates-not-Traverse",
+      "type": "kanonak.org/transformations/Traverse",
+      "expected": false,
+      "description": "not a kernel operator"
+    },
+    {
+      "id": "evaluates-not-DistinctBy",
+      "type": "kanonak.org/transformations/DistinctBy",
+      "expected": false,
+      "description": "not a kernel operator"
+    },
+    {
+      "id": "evaluates-not-PartitionBy",
+      "type": "kanonak.org/transformations/PartitionBy",
+      "expected": false,
+      "description": "not a kernel operator"
+    },
+    {
+      "id": "evaluates-not-Expression",
+      "type": "kanonak.org/transformations/Expression",
+      "expected": false,
+      "description": "abstract"
+    },
+    {
+      "id": "evaluates-not-BinaryArithmetic",
+      "type": "kanonak.org/transformations/BinaryArithmetic",
+      "expected": false,
+      "description": "abstract"
+    },
+    {
+      "id": "evaluates-not-Step",
+      "type": "example.org/sim/Step",
+      "expected": false,
+      "description": "a domain leaf: the caller's"
+    }
+  ],
+  "matches": [
+    {
+      "id": "matches-matches-anchored-hit",
+      "input": "E-1002",
+      "pattern": "^E-\\d+$",
+      "expected": true
+    },
+    {
+      "id": "matches-matches-unanchored-substring",
+      "input": "abc123def",
+      "pattern": "\\d+",
+      "expected": true
+    },
+    {
+      "id": "matches-matches-miss",
+      "input": "hello",
+      "pattern": "^\\d+$",
+      "expected": false
+    },
+    {
+      "id": "matches-matches-prefix-case-fold",
+      "input": "ABC",
+      "pattern": "(?i)abc",
+      "expected": true
+    },
+    {
+      "id": "matches-matches-prefix-multiple-distinct-flags",
+      "input": "ABC",
+      "pattern": "(?ims)^abc$",
+      "expected": true
+    },
+    {
+      "id": "matches-matches-repeated-flag-in-prefix-outside-subset",
+      "input": "abc",
+      "pattern": "(?ii)abc",
+      "expectError": true
+    },
+    {
+      "id": "matches-matches-second-flag-prefix-outside-subset",
+      "input": "abc",
+      "pattern": "(?i)(?s)abc",
+      "expectError": true
+    },
+    {
+      "id": "matches-matches-mid-pattern-flag-group-outside-subset",
+      "input": "ABC",
+      "pattern": "x(?i:abc)",
+      "expectError": true
+    },
+    {
+      "id": "matches-matches-class-range-and-quantifier",
+      "input": "kanonak-2",
+      "pattern": "^[a-z][a-z0-9-]{2,15}$",
+      "expected": true
+    },
+    {
+      "id": "matches-matches-lookahead-outside-subset",
+      "input": "abc",
+      "pattern": "a(?=b)",
+      "expectError": true
+    },
+    {
+      "id": "matches-matches-backreference-outside-subset",
+      "input": "abab",
+      "pattern": "(ab)\\1",
+      "expectError": true
+    },
+    {
+      "id": "matches-matches-unicode-property-outside-subset",
+      "input": "a",
+      "pattern": "\\p{L}",
+      "expectError": true
+    },
+    {
+      "id": "matches-matches-posix-class-outside-subset",
+      "input": "a",
+      "pattern": "[[:alpha:]]",
+      "expectError": true
+    },
+    {
+      "id": "matches-matches-lookbehind-outside-subset",
+      "input": "ab",
+      "pattern": "(?<=a)b",
+      "expectError": true
+    },
+    {
+      "id": "matches-matches-astral-length-counts-code-points",
+      "input": "a🧬b",
+      "pattern": "(?s)^.{3}$",
+      "expected": true
+    },
+    {
+      "id": "matches-matches-astral-single-dot",
+      "input": "🧬",
+      "pattern": "^.$",
+      "expected": true
+    },
+    {
+      "id": "matches-matches-astral-min-length-lowering",
+      "input": "a🧬b",
+      "pattern": "(?s)^.{4,}$",
+      "expected": false
+    },
+    {
+      "id": "matches-matches-bare-literal-brace-outside-subset",
+      "input": "a{b",
+      "pattern": "a{b",
+      "expectError": true
+    },
+    {
+      "id": "matches-matches-digit-shorthand-is-ascii",
+      "input": "١٢٣",
+      "pattern": "^\\d+$",
+      "expected": false
+    },
+    {
+      "id": "matches-matches-space-shorthand-is-ascii",
+      "input": " ",
+      "pattern": "^\\s$",
+      "expected": false
+    },
+    {
+      "id": "matches-matches-word-boundary-is-ascii",
+      "input": "a é b",
+      "pattern": "\\bé",
+      "expected": false
+    },
+    {
+      "id": "matches-matches-shorthand-in-class-expands",
+      "input": "12-34",
+      "pattern": "^[\\d-]+$",
+      "expected": true
+    },
+    {
+      "id": "matches-matches-negated-shorthand-in-class-outside-subset",
+      "input": "a",
+      "pattern": "[\\D]",
+      "expectError": true
+    },
+    {
+      "id": "matches-matches-class-b-escape-outside-subset",
+      "input": "a",
+      "pattern": "[\\b]",
+      "expectError": true
+    },
+    {
+      "id": "matches-matches-dot-matches-carriage-return",
+      "input": "\r",
+      "pattern": "^.$",
+      "expected": true
+    },
+    {
+      "id": "matches-matches-vertical-tab-escape",
+      "input": "\u000b",
+      "pattern": "^\\v$",
+      "expected": true
+    },
+    {
+      "id": "matches-matches-case-fold-is-unicode",
+      "input": "É",
+      "pattern": "(?i)é",
+      "expected": true
+    }
+  ]
+}

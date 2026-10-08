@@ -16,14 +16,23 @@ import org.kanonak.expression.Expression.Ref;
  * gate) and expression-vectors-2.json (the value-domain extension). Every vector runs through
  * evaluate AND explain and their values must agree; env bindings and expected are Values
  * (numbers, strings, arrays, {"ref": ...} objects); vectors with a trace assert the verdict
- * tree structurally.
+ * tree structurally. Then the alignment vectors, and the public surface beside evaluate
+ * (expression-surface-vectors.json: evaluates + matches, cross-checked against the node classes
+ * the evaluate vectors exercise).
  */
 public final class Conformance {
+    /** The harness's own leaves: the node classes {@link #resolve} answers. */
+    static final String VARREF = "kanonak.org/transformations/VarRef";
+    static final String PROPERTY_READ = "kanonak.org/transformations/PropertyRead";
+
     public static void main(String[] args) throws Exception {
         String vdir = args.length > 0 ? args[0] : "../vectors";
         int fails = run(Paths.get(vdir, "expression-vectors.json"));
         fails += run(Paths.get(vdir, "expression-vectors-2.json"));
         fails += runAlign(Paths.get(vdir, "expression-alignment-vectors.json"));
+        List<String> exercised = new ArrayList<>(nodeTypes(Paths.get(vdir, "expression-vectors.json")));
+        exercised.addAll(nodeTypes(Paths.get(vdir, "expression-vectors-2.json")));
+        fails += runSurface(Paths.get(vdir, "expression-surface-vectors.json"), exercised);
         if (fails == 0) System.out.println("ALL VECTORS PASS");
         System.exit(fails == 0 ? 0 : 1);
     }
@@ -78,14 +87,14 @@ public final class Conformance {
      *  list, several values -> a list, one value -> itself. */
     @SuppressWarnings("unchecked")
     static Object resolve(Map<String, Object> node, Ctx ctx, Expression.Recurse<Ctx> evaluate) {
-        if ("kanonak.org/transformations/VarRef".equals(node.get("type"))) {
+        if (VARREF.equals(node.get("type"))) {
             String name = (String) node.get("varName");
             if (ctx.env == null || !ctx.env.containsKey(name)) {
                 throw new ExpressionError("unbound variable: " + name);
             }
             return valueOf(ctx.env.get(name));
         }
-        if ("kanonak.org/transformations/PropertyRead".equals(node.get("type"))) {
+        if (PROPERTY_READ.equals(node.get("type"))) {
             Object source = evaluate.apply((Map<String, Object>) node.get("readSource"), ctx);
             if (!(source instanceof Ref ref)) {
                 throw new ExpressionError("PropertyRead over a non-ref: " + source);
@@ -99,7 +108,7 @@ public final class Conformance {
 
     /** The identity-domain mirror: tx.VarRef -> refEnv[varName] member URI. */
     static String resolveRef(Map<String, Object> node, Ctx ctx) {
-        if ("kanonak.org/transformations/VarRef".equals(node.get("type"))) {
+        if (VARREF.equals(node.get("type"))) {
             String name = (String) node.get("varName");
             if (ctx.refEnv == null || !ctx.refEnv.containsKey(name)) {
                 throw new ExpressionError("unbound reference: " + name);
@@ -363,6 +372,60 @@ public final class Conformance {
             pass++;
         }
         System.out.println(name + ": " + pass + "/" + vectors.size() + " pass");
+        return fail;
+    }
+
+    /** Every node {@code type} in a vector file's expression trees. */
+    @SuppressWarnings("unchecked")
+    static List<String> nodeTypes(Path path) throws Exception {
+        Map<String, Object> doc = (Map<String, Object>) Json.parse(Files.readString(path, StandardCharsets.UTF_8));
+        List<String> out = new ArrayList<>();
+        for (Object o : (List<Object>) doc.get("vectors")) collectTypes(((Map<String, Object>) o).get("expr"), out);
+        return out;
+    }
+
+    static void collectTypes(Object x, List<String> out) {
+        if (x instanceof List<?> l) { for (Object e : l) collectTypes(e, out); return; }
+        if (x instanceof Map<?, ?> m) {
+            if (m.get("type") instanceof String t) out.add(t);
+            for (Object e : m.values()) collectTypes(e, out);
+        }
+    }
+
+    /** The public surface beside evaluate: {@code evaluates(typeUri)} and {@code matches(input, pattern)}.
+     *  Then a cross-check of evaluates against the evaluate vectors themselves: every node class they
+     *  exercise is either one the kernel folds, or a leaf this harness's resolve answers — so a class
+     *  the fold handles cannot be missing from evaluates. Returns the failure count. */
+    @SuppressWarnings("unchecked")
+    static int runSurface(Path path, List<String> exercised) throws Exception {
+        Map<String, Object> doc = (Map<String, Object>) Json.parse(Files.readString(path, StandardCharsets.UTF_8));
+        String name = path.getFileName().toString();
+        int pass = 0, fail = 0;
+        for (Object o : (List<Object>) doc.get("evaluates")) {
+            Map<String, Object> v = (Map<String, Object>) o;
+            String type = (String) v.get("type");
+            boolean expected = Boolean.TRUE.equals(v.get("expected"));
+            if (Expression.evaluates(type) == expected) pass++;
+            else { fail++; System.out.println("  FAIL [" + name + "/" + v.get("id") + "] evaluates(" + type + ") should be " + expected); }
+        }
+        for (Object o : (List<Object>) doc.get("matches")) {
+            Map<String, Object> v = (Map<String, Object>) o;
+            Boolean got = null;
+            String error = null;
+            try { got = Expression.matches((String) v.get("input"), (String) v.get("pattern")); }
+            catch (ExpressionError e) { error = "ExpressionError"; }
+            catch (RuntimeException e) { error = e.getClass().getSimpleName() + ": " + e.getMessage(); }
+            boolean ok = Boolean.TRUE.equals(v.get("expectError"))
+                ? "ExpressionError".equals(error)
+                : error == null && v.get("expected") instanceof Boolean want && got.booleanValue() == want;
+            if (ok) pass++;
+            else { fail++; System.out.println("  FAIL [" + name + "/" + v.get("id") + "] matches gave " + (error != null ? error : got)); }
+        }
+        for (String type : new java.util.LinkedHashSet<>(exercised)) {
+            if (VARREF.equals(type) || PROPERTY_READ.equals(type) || Expression.evaluates(type)) pass++;
+            else { fail++; System.out.println("  FAIL [" + name + "/exercised] the vectors fold " + type + ", but evaluates() says the kernel does not"); }
+        }
+        System.out.println(name + ": " + pass + "/" + (pass + fail) + " pass" + (fail == 0 ? "" : ", " + fail + " fail"));
         return fail;
     }
 }

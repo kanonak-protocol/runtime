@@ -4,7 +4,9 @@ numeric-regression gate) and ``expression-vectors-2.json`` (the value-domain
 extension). Every vector runs through ``evaluate`` AND ``explain`` and their
 values must agree; ``env`` bindings and ``expected`` are Values (numbers,
 strings, arrays, ``{"ref": …}`` objects); vectors with a ``trace`` assert the
-verdict tree structurally.
+verdict tree structurally. ``expression-surface-vectors.json`` pins the public
+surface beside ``evaluate`` (``evaluates`` and ``matches``) and cross-checks
+``evaluates`` against every node class the evaluate vectors exercise.
 
 Run:  python conformance.py ../vectors
 """
@@ -24,7 +26,9 @@ from kanonak_expression import (
     TraceNode,
     align,
     evaluate,
+    evaluates,
     explain,
+    matches,
 )
 
 VARREF = "kanonak.org/transformations/VarRef"
@@ -232,13 +236,76 @@ def run_align_file(vectors_dir: Path, name: str) -> tuple[int, int]:
     return passed, len(vectors)
 
 
+def run_surface_file(vectors_dir: Path, name: str, exercised: list) -> tuple[int, int]:
+    """The public surface beside ``evaluate``: ``evaluates(type_uri)`` and
+    ``matches(input, pattern)``. Then a cross-check of ``evaluates`` against the
+    evaluate vectors themselves: every node class they exercise is either one
+    the kernel folds, or a leaf this harness's ``resolve`` answers — so a class
+    the fold handles cannot be missing from ``evaluates``."""
+    data = json.loads((vectors_dir / name).read_text(encoding="utf-8"))
+    passed = 0
+    failed = 0
+    for v in data["evaluates"]:
+        if evaluates(v["type"]) == v["expected"]:
+            passed += 1
+        else:
+            failed += 1
+            print(f"{name}/{v['id']}: evaluates({v['type']}) should be {v['expected']}")
+    for v in data["matches"]:
+        threw = False
+        got = None
+        try:
+            got = matches(v["input"], v["pattern"])
+        except ExpressionError:
+            threw = True
+        if (threw if v.get("expectError") else not threw and got == v.get("expected")):
+            passed += 1
+        else:
+            failed += 1
+            print(f"{name}/{v['id']}: matches gave {'an error' if threw else got!r}")
+    for typ in dict.fromkeys(exercised):
+        if typ in (VARREF, PROPERTY_READ) or evaluates(typ):
+            passed += 1
+        else:
+            failed += 1
+            print(f"{name}/exercised: the vectors fold {typ}, but evaluates() says the kernel does not")
+    total = passed + failed
+    print(f"{name}: {passed}/{total} pass")
+    return passed, total
+
+
+def node_types(vectors_dir: Path, name: str) -> list:
+    """Every node ``type`` in a vector file's expression trees."""
+    data = json.loads((vectors_dir / name).read_text(encoding="utf-8"))
+    out: list = []
+
+    def walk(x: Any) -> None:
+        if isinstance(x, list):
+            for item in x:
+                walk(item)
+        elif isinstance(x, dict):
+            t = x.get("type")
+            if isinstance(t, str):
+                out.append(t)
+            for item in x.values():
+                walk(item)
+
+    for v in data["vectors"]:
+        walk(v["expr"])
+    return out
+
+
 def main() -> int:
     vectors_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("../vectors")
     p1, t1 = run_file(vectors_dir, "expression-vectors.json")
     p2, t2 = run_file(vectors_dir, "expression-vectors-2.json")
     p3, t3 = run_align_file(vectors_dir, "expression-alignment-vectors.json")
-    if p1 != t1 or p2 != t2 or p3 != t3:
-        print(f"\n{(t1 - p1) + (t2 - p2) + (t3 - p3)} FAILURES")
+    p4, t4 = run_surface_file(vectors_dir, "expression-surface-vectors.json", [
+        *node_types(vectors_dir, "expression-vectors.json"),
+        *node_types(vectors_dir, "expression-vectors-2.json"),
+    ])
+    if p1 != t1 or p2 != t2 or p3 != t3 or p4 != t4:
+        print(f"\n{(t1 - p1) + (t2 - p2) + (t3 - p3) + (t4 - p4)} FAILURES")
         return 1
     print("ALL VECTORS PASS")
     return 0

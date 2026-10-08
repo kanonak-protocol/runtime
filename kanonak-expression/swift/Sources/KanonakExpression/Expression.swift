@@ -51,6 +51,22 @@ public struct ExpressionError: Error, CustomStringConvertible {
 private let tx = "kanonak.org/transformations"
 private let math = "kanonak.org/math"
 
+// The operators the fold dispatches by name, beside its dispatch functions.
+private let notType = "\(tx)/Not"
+private let isAtLeastType = "\(tx)/IsAtLeast"
+private let dominatesType = "\(tx)/Dominates"
+private let containsType = "\(tx)/Contains"
+private let isSetType = "\(tx)/IsSet"
+private let listItemAtType = "\(tx)/ListItemAt"
+private let matchesType = "\(tx)/Matches"
+
+// The literal classes the kernel answers itself (see `literalValue`).
+private let integerLiteralType = "\(tx)/IntegerLiteral"
+private let decimalLiteralType = "\(tx)/DecimalLiteral"
+private let booleanLiteralType = "\(tx)/BooleanLiteral"
+private let stringLiteralType = "\(tx)/StringLiteral"
+private let uriLiteralType = "\(tx)/UriLiteral"
+
 /// A node in the expression tree: `type` is the operator/literal/leaf canonical
 /// URI; operand keys are the frozen `tx` operand property local names.
 public typealias ExprNode = [String: Any]
@@ -279,17 +295,17 @@ private func toNumber(_ v: Any?) throws -> Double {
 /// A literal node's value, or nil when not a literal.
 private func literalValue(_ node: ExprNode, _ typ: String) throws -> EvalValue? {
     switch typ {
-    case "\(tx)/IntegerLiteral": return .num(try toNumber(node["integerLiteral"]))
-    case "\(tx)/DecimalLiteral": return .num(try toNumber(node["decimalLiteral"]))
-    case "\(tx)/BooleanLiteral":
+    case integerLiteralType: return .num(try toNumber(node["integerLiteral"]))
+    case decimalLiteralType: return .num(try toNumber(node["decimalLiteral"]))
+    case booleanLiteralType:
         let b = node["booleanLiteral"]
         return .num(boolNum((b as? Bool) == true || (b as? String) == "true"))
-    case "\(tx)/StringLiteral":
+    case stringLiteralType:
         guard let s = node["stringLiteral"] as? String else {
             throw ExpressionError("StringLiteral is missing stringLiteral")
         }
         return .str(s)
-    case "\(tx)/UriLiteral":
+    case uriLiteralType:
         guard let s = node["refTo"] as? String, !s.isEmpty else {
             throw ExpressionError("UriLiteral is missing refTo")
         }
@@ -406,8 +422,9 @@ private func quantifierAt(_ chars: [Character], _ start: Int) -> Bool {
 
 /// Check a WHOLE pattern against the pinned subset, flag prefix included. Thin
 /// wrapper over `parseMatchesPattern` so this checker and the evaluator can
-/// never disagree about what is a valid pattern.
-func validateMatchesPattern(_ pattern: String) throws {
+/// never disagree about what is a valid pattern. Throws `ExpressionError` for a
+/// pattern outside the subset — a host pre-flights an authored pattern with it.
+public func validateMatchesPattern(_ pattern: String) throws {
     _ = try parseMatchesPattern(pattern)
 }
 
@@ -573,11 +590,23 @@ private func matchesPattern(_ input: String, _ pattern: String) throws -> Bool {
     return re.firstMatch(in: input, options: [], range: range) != nil
 }
 
+/// Test `input` against `pattern` exactly as `tx.Matches` evaluates it: the
+/// pinned RE2-compatible XSD-regex subset under fn:matches semantics —
+/// UNANCHORED, counting code points, with a whole-pattern flag prefix. A
+/// pattern outside the subset throws `ExpressionError`, never a silent false.
+///
+/// For a host engine that evaluates `Matches` over its own value domain: it
+/// calls this rather than re-implement the dialect, and pre-flights an authored
+/// pattern with `validateMatchesPattern`, which applies the same rules.
+public func matches(_ input: String, _ pattern: String) throws -> Bool {
+    try matchesPattern(input, pattern)
+}
+
 // MARK: - Ordered comparisons (unchanged from v1)
 
 private func identityOf<C>(_ node: ExprNode, _ ctx: C, _ options: EvalOptions<C>?) throws -> String {
     let typ = try nodeType(node)
-    if typ == "\(tx)/UriLiteral" {
+    if typ == uriLiteralType {
         guard let s = node["refTo"] as? String, !s.isEmpty else {
             throw ExpressionError("UriLiteral is missing refTo")
         }
@@ -602,11 +631,40 @@ private func foldOrdered<C>(
     }
     let value: Double
     if left == right {
-        value = boolNum(typ == "\(tx)/IsAtLeast")
+        value = boolNum(typ == isAtLeastType)
     } else {
         value = boolNum(closure[left]?.contains(right) ?? false)
     }
     return (value, left, right)
+}
+
+// MARK: - The kernel's node classes
+
+/// The operators the fold dispatches by name, and the literals it answers.
+private let byNameOperators: Set<String> = [
+    notType, isAtLeastType, dominatesType, containsType, isSetType, listItemAtType, matchesType,
+]
+private let literalTypes: Set<String> = [
+    integerLiteralType, decimalLiteralType, booleanLiteralType, stringLiteralType, uriLiteralType,
+]
+
+/// True when the kernel folds a node of class `typeUri` (a canonical versionless
+/// URI) itself — an operator or a literal. False for everything `evaluate` hands
+/// to the caller's `resolve`: a binding (`tx.VarRef`; the kernel binds only its
+/// own iterators' loop variables), a graph read (`tx.PropertyRead`), a domain
+/// leaf, and any expression class only a host engine implements.
+///
+/// A host that compiles authored expressions checks a tree against this — every
+/// node either `evaluates`, or is a leaf the host resolves — instead of probing
+/// `evaluate` class by class. Asked of the fold's own dispatch, so the two cannot
+/// disagree; pinned across ports by `expression-surface-vectors.json`.
+public func evaluates(_ typeUri: String) -> Bool {
+    operatorArity(typeUri) != nil
+        || iteratorBody(typeUri) != nil
+        || isListFold(typeUri)
+        || kindPredicate(typeUri, .num(0)) != nil
+        || byNameOperators.contains(typeUri)
+        || literalTypes.contains(typeUri)
 }
 
 // MARK: - The fold
@@ -680,12 +738,12 @@ private func go<C>(
         }
     }
 
-    if typ == "\(tx)/Not" {
+    if typ == notType {
         let x = try go(try operand(node, typ, "operand"), ctx, resolve, options, &frames)
         return .num(boolNum(!truthy(try requireNum(x, typ))))
     }
 
-    if typ == "\(tx)/IsAtLeast" || typ == "\(tx)/Dominates" {
+    if typ == isAtLeastType || typ == dominatesType {
         return .num(try foldOrdered(node, typ, ctx, options).value)
     }
 
@@ -719,7 +777,7 @@ private func go<C>(
         return .list(out)
     }
 
-    if typ == "\(tx)/Contains" {
+    if typ == containsType {
         let hay = try go(try operand(node, typ, "haystack"), ctx, resolve, options, &frames)
         let needle = try go(try operand(node, typ, "needle"), ctx, resolve, options, &frames)
         let items: [EvalValue]
@@ -727,12 +785,12 @@ private func go<C>(
         return .num(boolNum(items.contains { valuesEqual($0, needle) }))
     }
 
-    if typ == "\(tx)/IsSet" {
+    if typ == isSetType {
         let v = try go(try operand(node, typ, "checkExpr"), ctx, resolve, options, &frames)
         return .num(boolNum(isSetValue(v)))
     }
 
-    if typ == "\(tx)/ListItemAt" {
+    if typ == listItemAtType {
         let items = try sourceList(node, typ, ctx, resolve, options, &frames)
         let idx = try go(try operand(node, typ, "itemIndex"), ctx, resolve, options, &frames)
         guard case let .num(n) = idx, n == n.rounded(.down), n >= 0 else {
@@ -743,7 +801,7 @@ private func go<C>(
         return i < items.count ? items[i] : .list([])
     }
 
-    if typ == "\(tx)/Matches" {
+    if typ == matchesType {
         let src = try go(try operand(node, typ, "matchSource"), ctx, resolve, options, &frames)
         guard case let .str(s) = src else {
             throw ExpressionError("Matches requires a string matchSource, got \(src.kind)")
@@ -859,12 +917,12 @@ private func trace<C>(
         }
     }
 
-    if typ == "\(tx)/Not" {
+    if typ == notType {
         let x = try trace(try operand(node, typ, "operand"), ctx, resolve, options, &frames)
         return TraceNode(typ, .num(boolNum(!truthy(try requireNum(x.value, typ)))), [x])
     }
 
-    if typ == "\(tx)/IsAtLeast" || typ == "\(tx)/Dominates" {
+    if typ == isAtLeastType || typ == dominatesType {
         let r = try foldOrdered(node, typ, ctx, options)
         return TraceNode(typ, .num(r.value), [], leftRef: r.left, rightRef: r.right)
     }
@@ -905,7 +963,7 @@ private func trace<C>(
         return TraceNode(typ, .list(out), children)
     }
 
-    if typ == "\(tx)/Contains" {
+    if typ == containsType {
         let hay = try trace(try operand(node, typ, "haystack"), ctx, resolve, options, &frames)
         let needle = try trace(try operand(node, typ, "needle"), ctx, resolve, options, &frames)
         let items: [EvalValue]
@@ -914,12 +972,12 @@ private func trace<C>(
         return TraceNode(typ, .num(v), [hay, needle])
     }
 
-    if typ == "\(tx)/IsSet" {
+    if typ == isSetType {
         let x = try trace(try operand(node, typ, "checkExpr"), ctx, resolve, options, &frames)
         return TraceNode(typ, .num(boolNum(isSetValue(x.value))), [x])
     }
 
-    if typ == "\(tx)/ListItemAt" {
+    if typ == listItemAtType {
         let src = try trace(try operand(node, typ, "source"), ctx, resolve, options, &frames)
         let idx = try trace(try operand(node, typ, "itemIndex"), ctx, resolve, options, &frames)
         let items: [EvalValue]
@@ -932,7 +990,7 @@ private func trace<C>(
         return TraceNode(typ, value, [src, idx])
     }
 
-    if typ == "\(tx)/Matches" {
+    if typ == matchesType {
         let src = try trace(try operand(node, typ, "matchSource"), ctx, resolve, options, &frames)
         guard case let .str(s) = src.value else {
             throw ExpressionError("Matches requires a string matchSource, got \(src.value.kind)")
@@ -999,18 +1057,18 @@ public struct AlignedNode {
 }
 
 private func isOrderedComparison(_ typ: String) -> Bool {
-    typ == "\(tx)/IsAtLeast" || typ == "\(tx)/Dominates"
+    typ == isAtLeastType || typ == dominatesType
 }
 
 /// Trace-child order for the direct and list operators — the order `explain`
 /// visits them. Data operands (Join's separator, Matches' pattern) are not children.
 private func directChildren(_ typ: String) -> [String]? {
     switch typ {
-    case "\(tx)/Not": return ["operand"]
-    case "\(tx)/ListItemAt": return ["source", "itemIndex"]
-    case "\(tx)/Contains": return ["haystack", "needle"]
-    case "\(tx)/IsSet": return ["checkExpr"]
-    case "\(tx)/Matches": return ["matchSource"]
+    case notType: return ["operand"]
+    case listItemAtType: return ["source", "itemIndex"]
+    case containsType: return ["haystack", "needle"]
+    case isSetType: return ["checkExpr"]
+    case matchesType: return ["matchSource"]
     case "\(tx)/Count", "\(tx)/Sum", "\(tx)/Min", "\(tx)/Max", "\(tx)/Average", "\(tx)/Join", "\(tx)/Reverse":
         return ["source"]
     case "\(tx)/IsString", "\(tx)/IsNumber", "\(tx)/IsReference", "\(tx)/IsList":

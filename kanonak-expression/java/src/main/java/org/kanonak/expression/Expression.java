@@ -1,8 +1,11 @@
 package org.kanonak.expression;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
@@ -48,6 +51,22 @@ public final class Expression {
 
     private static final String TX = "kanonak.org/transformations";
     private static final String MATH = "kanonak.org/math";
+
+    /** The operators the fold dispatches by name, beside its tables. */
+    private static final String NOT = TX + "/Not";
+    private static final String IS_AT_LEAST = TX + "/IsAtLeast";
+    private static final String DOMINATES = TX + "/Dominates";
+    private static final String CONTAINS = TX + "/Contains";
+    private static final String IS_SET = TX + "/IsSet";
+    private static final String LIST_ITEM_AT = TX + "/ListItemAt";
+    private static final String MATCHES = TX + "/Matches";
+
+    /** The literal classes the kernel answers itself (see {@code literalValue}). */
+    private static final String INTEGER_LITERAL = TX + "/IntegerLiteral";
+    private static final String DECIMAL_LITERAL = TX + "/DecimalLiteral";
+    private static final String BOOLEAN_LITERAL = TX + "/BooleanLiteral";
+    private static final String STRING_LITERAL = TX + "/StringLiteral";
+    private static final String URI_LITERAL = TX + "/UriLiteral";
 
     /** A reference value — a member's canonical versionless URI identity. */
     public static final class Ref {
@@ -176,18 +195,18 @@ public final class Expression {
      * so null is safe as the not-a-literal sentinel). */
     private static Object literalValue(Map<String, Object> node, String typ) {
         switch (typ) {
-            case TX + "/IntegerLiteral": return toNumber(node.get("integerLiteral"));
-            case TX + "/DecimalLiteral": return toNumber(node.get("decimalLiteral"));
-            case TX + "/BooleanLiteral": {
+            case INTEGER_LITERAL: return toNumber(node.get("integerLiteral"));
+            case DECIMAL_LITERAL: return toNumber(node.get("decimalLiteral"));
+            case BOOLEAN_LITERAL: {
                 Object b = node.get("booleanLiteral");
                 return bool(Boolean.TRUE.equals(b) || "true".equals(b));
             }
-            case TX + "/StringLiteral": {
+            case STRING_LITERAL: {
                 Object s = node.get("stringLiteral");
                 if (!(s instanceof String)) throw err("StringLiteral is missing stringLiteral");
                 return s;
             }
-            case TX + "/UriLiteral": {
+            case URI_LITERAL: {
                 Object s = node.get("refTo");
                 if (!(s instanceof String) || ((String) s).isEmpty()) throw err("UriLiteral is missing refTo");
                 return new Ref((String) s);
@@ -227,13 +246,43 @@ public final class Expression {
     private static final Pattern QUANTIFIER = Pattern.compile("^\\{\\d+(,\\d*)?\\}");
     private static final String ALLOWED_ESCAPES = "dDwWsSbBnrtfv.*+?()[]{}|^$\\/";
 
-    /** The same subset scanner as the reference kernel. */
     /**
-     * Check a WHOLE pattern against the pinned subset, flag prefix included.
-     * Thin wrapper over {@link #parseMatchesPattern} so this checker and the
-     * evaluator can never disagree about what is a valid pattern.
+     * Validate a {@code Matches} pattern against the pinned subset — the intersection of RE2 and
+     * the host regex engines, chosen so every port compiles the same pattern to the same language.
+     * RE2 is both the restrictive common denominator and ReDoS-safe (no catastrophic
+     * backtracking), which is a REQUIREMENT for a predicate that may gate on adversarial input.
+     * Out-of-subset constructs are a LOUD {@link ExpressionError}, the same discipline as
+     * Round/Modulo; WIDENING the subset later (an error becoming a defined result) is additive
+     * within v2.
+     *
+     * <p>COUNTING UNIT — pinned: {@code .} and quantifiers count Unicode CODE POINTS, in every
+     * port. An astral-plane character (a surrogate pair in UTF-16 hosts) is ONE {@code .}, and
+     * {@code .{3}} matches exactly three code points.
+     *
+     * <p>Allowed: literals; {@code .}; anchors {@code ^} {@code $}; alternation {@code |}; groups
+     * {@code (...)}, {@code (?:...)}; a WHOLE-PATTERN flag prefix over {@code i}/{@code m}/{@code s}
+     * ({@code (?i)} at position 0 only, each flag at most once); quantifiers {@code *} {@code +}
+     * {@code ?} {@code {m}} {@code {m,}} {@code {m,n}}; character classes with ranges and
+     * negation; escapes {@code \d \D \w \W \s \S \b \B \n \r \t \f \v \xHH}, escaped syntax
+     * punctuation (the regex metacharacters, both braces, {@code \\} and {@code \/}), and
+     * {@code \-} inside character classes.
+     *
+     * <p>Rejected (divergent or unsafe across engines): lookahead/lookbehind, named groups,
+     * backreferences ({@code \1}…, {@code \k}), MID-pattern flag groups ({@code (?i:…)}), a
+     * REPEATED flag in the prefix ({@code (?ii)}), {@code \p{…}}/{@code \P{…}} unicode property
+     * classes, POSIX classes ({@code [[:alpha:]]}), class intersection ({@code &&}), atomic
+     * groups, conditionals, comments, octal, backslash-u and {@code \x{…}} escapes, escaped space,
+     * {@code \-} outside a class, and a bare unescaped brace that is not a quantifier (literal
+     * braces must be escaped — engines disagree on the lenient reading, so the subset requires
+     * the explicit form).
+     *
+     * <p>Checks the WHOLE pattern, flag prefix included. A thin wrapper over the same parse
+     * {@link #matches} runs, so this checker and the evaluator can never disagree about what is a
+     * valid pattern.
+     *
+     * @throws ExpressionError when the pattern is outside the pinned subset
      */
-    static void validateMatchesPattern(String pattern) {
+    public static void validateMatchesPattern(String pattern) {
         parseMatchesPattern(pattern);
     }
 
@@ -408,11 +457,27 @@ public final class Expression {
         return compiled.matcher(input).find();
     }
 
+    /**
+     * Test {@code input} against {@code pattern} exactly as {@code tx.Matches} evaluates it: the
+     * pinned RE2-compatible XSD-regex subset under fn:matches semantics — UNANCHORED, counting
+     * code points, with a whole-pattern flag prefix. A pattern outside the subset is an
+     * {@link ExpressionError}, never a silent false.
+     *
+     * <p>For a host engine that evaluates {@code Matches} over its own value domain: it calls
+     * this rather than re-implement the dialect, and pre-flights an authored pattern with
+     * {@link #validateMatchesPattern}, which applies the same rules.
+     *
+     * @throws ExpressionError when the pattern is outside the pinned subset
+     */
+    public static boolean matches(String input, String pattern) {
+        return matchesPattern(input, pattern);
+    }
+
     // -- ordered comparisons (unchanged from v1) ------------------------------
 
     private static <C> String identityOf(Map<String, Object> node, C ctx, EvalOptions<C> opts) {
         String typ = typeOf(node);
-        if (typ.equals(TX + "/UriLiteral")) {
+        if (typ.equals(URI_LITERAL)) {
             Object s = node.get("refTo");
             if (!(s instanceof String) || ((String) s).isEmpty()) throw err("UriLiteral is missing refTo");
             return (String) s;
@@ -433,7 +498,7 @@ public final class Expression {
         if (closure == null) throw err("No closure supplied for ordering property '" + via + "'");
         double value;
         if (left.equals(right)) {
-            value = bool(typ.equals(TX + "/IsAtLeast"));
+            value = bool(typ.equals(IS_AT_LEAST));
         } else {
             List<String> reach = closure.get(left);
             value = bool(reach != null && reach.contains(right));
@@ -451,26 +516,31 @@ public final class Expression {
     private static final Arity ARITH = new Arity("binary", "arithLeft", "arithRight", null);
     private static final Arity COMPARE = new Arity("binary", "compareLeft", "compareRight", null);
     private static final Arity VALUE = new Arity("unary", "value", null, null);
+    private static final Arity OPERANDS = new Arity("nary", "operands", null, null);
+    private static final Arity CLIP = new Arity("ternary", "clipValue", "clipLower", "clipUpper");
+
+    /** Operand shape per operator, derived from the tx superclass hierarchy: BinaryArithmetic →
+     * arithLeft/Right; UnaryNumericOp → value; BinaryComparison → compareLeft/Right; BooleanLogic →
+     * the operands list; Clip ternary. ({@code Not} is a direct Expression subclass with boolean,
+     * not numeric-unary, semantics — dispatched by name, not via this table.) */
+    private static final Map<String, Arity> OPERATOR_ARITY = Map.ofEntries(
+        Map.entry(TX + "/Add", ARITH), Map.entry(TX + "/Subtract", ARITH),
+        Map.entry(TX + "/Multiply", ARITH), Map.entry(TX + "/Divide", ARITH),
+        Map.entry(MATH + "/Power", ARITH), Map.entry(MATH + "/Modulo", ARITH),
+        Map.entry(MATH + "/Minimum", ARITH), Map.entry(MATH + "/Maximum", ARITH),
+        Map.entry(TX + "/Abs", VALUE), Map.entry(TX + "/Negate", VALUE),
+        Map.entry(MATH + "/Exp", VALUE), Map.entry(MATH + "/Ln", VALUE),
+        Map.entry(MATH + "/Log10", VALUE), Map.entry(MATH + "/Sqrt", VALUE),
+        Map.entry(MATH + "/Floor", VALUE), Map.entry(MATH + "/Ceil", VALUE),
+        Map.entry(MATH + "/Round", VALUE), Map.entry(MATH + "/Sign", VALUE),
+        Map.entry(TX + "/Equals", COMPARE), Map.entry(TX + "/GreaterThan", COMPARE),
+        Map.entry(TX + "/LessThan", COMPARE), Map.entry(TX + "/GreaterThanOrEqual", COMPARE),
+        Map.entry(TX + "/LessThanOrEqual", COMPARE),
+        Map.entry(TX + "/And", OPERANDS), Map.entry(TX + "/Or", OPERANDS),
+        Map.entry(MATH + "/Clip", CLIP));
 
     private static Arity operatorArity(String typ) {
-        switch (typ) {
-            case TX + "/Add": case TX + "/Subtract": case TX + "/Multiply": case TX + "/Divide":
-            case MATH + "/Power": case MATH + "/Modulo": case MATH + "/Minimum": case MATH + "/Maximum":
-                return ARITH;
-            case TX + "/Abs": case TX + "/Negate": case MATH + "/Exp": case MATH + "/Ln":
-            case MATH + "/Log10": case MATH + "/Sqrt": case MATH + "/Floor": case MATH + "/Ceil":
-            case MATH + "/Round": case MATH + "/Sign":
-                return VALUE;
-            case TX + "/Equals": case TX + "/GreaterThan": case TX + "/LessThan":
-            case TX + "/GreaterThanOrEqual": case TX + "/LessThanOrEqual":
-                return COMPARE;
-            case TX + "/And": case TX + "/Or":
-                return new Arity("nary", "operands", null, null);
-            case MATH + "/Clip":
-                return new Arity("ternary", "clipValue", "clipLower", "clipUpper");
-            default:
-                return null;
-        }
+        return OPERATOR_ARITY.get(typ);
     }
 
     private static double unary(String typ, double x) {
@@ -518,22 +588,25 @@ public final class Expression {
         }
     }
 
+    /** IteratingExpression operators: {@code source} + {@code loopVar} + the body operand. */
+    private static final Map<String, String> ITERATOR_BODY = Map.of(
+        TX + "/ForEach", "emit",
+        TX + "/ListMap", "mapBody",
+        TX + "/Filter", "predicate");
+
     private static String iteratorBody(String typ) {
-        switch (typ) {
-            case TX + "/ForEach": return "emit";
-            case TX + "/ListMap": return "mapBody";
-            case TX + "/Filter": return "predicate";
-            default: return null;
-        }
+        return ITERATOR_BODY.get(typ);
     }
 
+    /** ListSourcedExpression / ListAggregate operators: one {@code source} operand, evaluated as a
+     * list (a scalar source promotes to a one-element list; an empty list is absence). Each is
+     * folded by {@code listFold}. */
+    private static final Set<String> LIST_FOLDS = Set.of(
+        TX + "/Count", TX + "/Sum", TX + "/Min", TX + "/Max",
+        TX + "/Average", TX + "/Join", TX + "/Reverse");
+
     private static boolean isListFold(String typ) {
-        switch (typ) {
-            case TX + "/Count": case TX + "/Sum": case TX + "/Min": case TX + "/Max":
-            case TX + "/Average": case TX + "/Join": case TX + "/Reverse":
-                return true;
-            default: return false;
-        }
+        return LIST_FOLDS.contains(typ);
     }
 
     @SuppressWarnings("unchecked")
@@ -590,9 +663,49 @@ public final class Expression {
         }
     }
 
+    /** KindPredicate operators the kernel can answer over ITS value domain (each answered by
+     * {@code kindPredicate}). {@code IsBoolean} and {@code IsEmbedded} name kinds that exist only in
+     * a host object model (booleans are 1/0 numbers here; embedded nodes never enter the kernel),
+     * so they are NOT dispatch entries — they fall through to the caller's resolve, where the host
+     * answers with full fidelity. */
+    private static final Set<String> KIND_PREDICATES = Set.of(
+        TX + "/IsString", TX + "/IsNumber", TX + "/IsReference", TX + "/IsList");
+
     private static boolean isKindPredicate(String typ) {
-        return typ.equals(TX + "/IsString") || typ.equals(TX + "/IsNumber")
-            || typ.equals(TX + "/IsReference") || typ.equals(TX + "/IsList");
+        return KIND_PREDICATES.contains(typ);
+    }
+
+    // -- the kernel's node classes --------------------------------------------
+
+    /** Every node class the fold answers itself: its tables, the operators it dispatches by
+     * name, and its literals. Built once, from the tables above. */
+    private static final Set<String> KERNEL_NODE_CLASSES;
+    static {
+        Set<String> classes = new LinkedHashSet<>();
+        classes.addAll(OPERATOR_ARITY.keySet());
+        classes.addAll(LIST_FOLDS);
+        classes.addAll(ITERATOR_BODY.keySet());
+        classes.addAll(KIND_PREDICATES);
+        Collections.addAll(classes,
+            NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES,
+            INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL);
+        KERNEL_NODE_CLASSES = Collections.unmodifiableSet(classes);
+    }
+
+    /**
+     * True when the kernel folds a node of class {@code typeUri} (a canonical versionless URI)
+     * itself — an operator or a literal. False for everything {@link #evaluate} hands to the
+     * caller's {@code resolve}: a binding ({@code tx.VarRef}; the kernel binds only its own
+     * iterators' loop variables), a graph read ({@code tx.PropertyRead}), a domain leaf, and any
+     * expression class only a host engine implements.
+     *
+     * <p>A host that compiles authored expressions checks a tree against this — every node
+     * either {@code evaluates}, or is a leaf the host resolves — instead of probing
+     * {@code evaluate} class by class. Pinned across ports by
+     * {@code expression-surface-vectors.json}.
+     */
+    public static boolean evaluates(String typeUri) {
+        return KERNEL_NODE_CLASSES.contains(typeUri);
     }
 
     // -- the fold -------------------------------------------------------------
@@ -672,12 +785,12 @@ public final class Expression {
             }
         }
 
-        if (typ.equals(TX + "/Not")) {
+        if (typ.equals(NOT)) {
             Object x = go(operand(node, typ, "operand"), ctx, resolve, options, frames);
             return bool(!truthy(requireNum(x, typ)));
         }
 
-        if (typ.equals(TX + "/IsAtLeast") || typ.equals(TX + "/Dominates")) {
+        if (typ.equals(IS_AT_LEAST) || typ.equals(DOMINATES)) {
             return foldOrdered(node, typ, ctx, options)[0];
         }
 
@@ -714,7 +827,7 @@ public final class Expression {
             return out;
         }
 
-        if (typ.equals(TX + "/Contains")) {
+        if (typ.equals(CONTAINS)) {
             Object hay = go(operand(node, typ, "haystack"), ctx, resolve, options, frames);
             Object needle = go(operand(node, typ, "needle"), ctx, resolve, options, frames);
             List<Object> items = hay instanceof List ? (List<Object>) hay : java.util.Collections.singletonList(hay);
@@ -724,11 +837,11 @@ public final class Expression {
             return 0.0;
         }
 
-        if (typ.equals(TX + "/IsSet")) {
+        if (typ.equals(IS_SET)) {
             return bool(isSet(go(operand(node, typ, "checkExpr"), ctx, resolve, options, frames)));
         }
 
-        if (typ.equals(TX + "/ListItemAt")) {
+        if (typ.equals(LIST_ITEM_AT)) {
             List<Object> items = sourceList(node, typ, ctx, resolve, options, frames);
             Object idx = go(operand(node, typ, "itemIndex"), ctx, resolve, options, frames);
             if (!(idx instanceof Double) || (Double) idx != Math.floor((Double) idx) || (Double) idx < 0) {
@@ -739,7 +852,7 @@ public final class Expression {
             return i < items.size() ? items.get(i) : new ArrayList<>();
         }
 
-        if (typ.equals(TX + "/Matches")) {
+        if (typ.equals(MATCHES)) {
             Object src = go(operand(node, typ, "matchSource"), ctx, resolve, options, frames);
             if (!(src instanceof String)) throw err("Matches requires a string matchSource, got " + kindOf(src));
             Object pattern = node.get("pattern");
@@ -838,12 +951,12 @@ public final class Expression {
             }
         }
 
-        if (typ.equals(TX + "/Not")) {
+        if (typ.equals(NOT)) {
             TraceNode x = trace(operand(node, typ, "operand"), ctx, resolve, options, frames);
             return parent(typ, bool(!truthy(requireNum(x.value, typ))), listOf(x));
         }
 
-        if (typ.equals(TX + "/IsAtLeast") || typ.equals(TX + "/Dominates")) {
+        if (typ.equals(IS_AT_LEAST) || typ.equals(DOMINATES)) {
             Object[] r = foldOrdered(node, typ, ctx, options);
             return new TraceNode(typ, r[0], new ArrayList<>(), (String) r[1], (String) r[2]);
         }
@@ -889,7 +1002,7 @@ public final class Expression {
             return parent(typ, out, children);
         }
 
-        if (typ.equals(TX + "/Contains")) {
+        if (typ.equals(CONTAINS)) {
             TraceNode hay = trace(operand(node, typ, "haystack"), ctx, resolve, options, frames);
             TraceNode needle = trace(operand(node, typ, "needle"), ctx, resolve, options, frames);
             List<Object> items = hay.value instanceof List ? (List<Object>) hay.value
@@ -901,12 +1014,12 @@ public final class Expression {
             return parent(typ, v, listOf(hay, needle));
         }
 
-        if (typ.equals(TX + "/IsSet")) {
+        if (typ.equals(IS_SET)) {
             TraceNode x = trace(operand(node, typ, "checkExpr"), ctx, resolve, options, frames);
             return parent(typ, bool(isSet(x.value)), listOf(x));
         }
 
-        if (typ.equals(TX + "/ListItemAt")) {
+        if (typ.equals(LIST_ITEM_AT)) {
             TraceNode src = trace(operand(node, typ, "source"), ctx, resolve, options, frames);
             TraceNode idx = trace(operand(node, typ, "itemIndex"), ctx, resolve, options, frames);
             List<Object> items = src.value instanceof List ? (List<Object>) src.value
@@ -920,7 +1033,7 @@ public final class Expression {
             return parent(typ, value, listOf(src, idx));
         }
 
-        if (typ.equals(TX + "/Matches")) {
+        if (typ.equals(MATCHES)) {
             TraceNode src = trace(operand(node, typ, "matchSource"), ctx, resolve, options, frames);
             if (!(src.value instanceof String)) throw err("Matches requires a string matchSource, got " + kindOf(src.value));
             Object pattern = node.get("pattern");
@@ -989,17 +1102,17 @@ public final class Expression {
     }
 
     private static boolean isOrderedComparison(String typ) {
-        return (TX + "/IsAtLeast").equals(typ) || (TX + "/Dominates").equals(typ);
+        return IS_AT_LEAST.equals(typ) || DOMINATES.equals(typ);
     }
 
     /** Trace-child order for the direct and list operators — the order explain visits them. */
     private static String[] directChildren(String typ) {
         switch (typ) {
-            case TX + "/Not": return new String[] {"operand"};
-            case TX + "/ListItemAt": return new String[] {"source", "itemIndex"};
-            case TX + "/Contains": return new String[] {"haystack", "needle"};
-            case TX + "/IsSet": return new String[] {"checkExpr"};
-            case TX + "/Matches": return new String[] {"matchSource"};
+            case NOT: return new String[] {"operand"};
+            case LIST_ITEM_AT: return new String[] {"source", "itemIndex"};
+            case CONTAINS: return new String[] {"haystack", "needle"};
+            case IS_SET: return new String[] {"checkExpr"};
+            case MATCHES: return new String[] {"matchSource"};
             case TX + "/Count": case TX + "/Sum": case TX + "/Min": case TX + "/Max": case TX + "/Average":
             case TX + "/Join": case TX + "/Reverse":
                 return new String[] {"source"};

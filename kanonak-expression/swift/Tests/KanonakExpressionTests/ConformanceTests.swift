@@ -288,3 +288,74 @@ final class ExpressionAlignmentTests: XCTestCase {
         print("\(name): \(pass)/\(vectors.count) pass")
     }
 }
+
+/// Every node `type` in a vector file's expression trees.
+private func nodeTypes(_ name: String) throws -> [String] {
+    let doc = try loadJSON(name)
+    var out: [String] = []
+    func walk(_ x: Any) {
+        if let arr = x as? [Any] { arr.forEach(walk); return }
+        if let obj = x as? [String: Any] {
+            if let t = obj["type"] as? String { out.append(t) }
+            obj.values.forEach(walk)
+        }
+    }
+    for v in (doc["vectors"] as? [[String: Any]] ?? []) {
+        if let expr = v["expr"] { walk(expr) }
+    }
+    return out
+}
+
+final class ExpressionSurfaceTests: XCTestCase {
+    /// The public surface beside `evaluate`: `evaluates(_:)` and
+    /// `matches(_:_:)`. Then a cross-check of `evaluates` against the evaluate
+    /// vectors themselves: every node class they exercise is either one the
+    /// kernel folds, or a leaf this harness's `resolve` answers.
+    func testSurfaceVectors() throws {
+        let name = "expression-surface-vectors.json"
+        let doc = try loadJSON(name)
+        guard let evaluatesCases = doc["evaluates"] as? [[String: Any]], !evaluatesCases.isEmpty,
+              let matchesCases = doc["matches"] as? [[String: Any]], !matchesCases.isEmpty else {
+            XCTFail("\(name): no vectors loaded — refusing to report a passing gate")
+            return
+        }
+        var pass = 0
+        var total = 0
+        for v in evaluatesCases {
+            total += 1
+            let id = v["id"] as? String ?? "(no id)"
+            guard let typ = v["type"] as? String, let expected = v["expected"] as? Bool else {
+                XCTFail("[\(name)/\(id)] malformed evaluates case"); continue
+            }
+            if evaluates(typ) == expected { pass += 1 }
+            else { XCTFail("[\(name)/\(id)] evaluates(\(typ)) should be \(expected)") }
+        }
+        for v in matchesCases {
+            total += 1
+            let id = v["id"] as? String ?? "(no id)"
+            guard let input = v["input"] as? String, let pattern = v["pattern"] as? String else {
+                XCTFail("[\(name)/\(id)] malformed matches case"); continue
+            }
+            if v["expectError"] as? Bool ?? false {
+                if (try? matches(input, pattern)) == nil { pass += 1 }
+                else { XCTFail("[\(name)/\(id)] expected an error") }
+                continue
+            }
+            let expected = v["expected"] as? Bool ?? false
+            do {
+                if try matches(input, pattern) == expected { pass += 1 }
+                else { XCTFail("[\(name)/\(id)] matches should be \(expected)") }
+            } catch {
+                XCTFail("[\(name)/\(id)] matches threw \(error)")
+            }
+        }
+        let exercised = Set(try nodeTypes("expression-vectors.json") + nodeTypes("expression-vectors-2.json"))
+        for typ in exercised {
+            total += 1
+            if typ == varRef || typ == propertyRead || evaluates(typ) { pass += 1 }
+            else { XCTFail("[\(name)/exercised] the vectors fold \(typ), but evaluates() says the kernel does not") }
+        }
+        print("\(name): \(pass)/\(total) pass")
+        XCTAssertEqual(pass, total, "\(name): \(total - pass) case(s) failed")
+    }
+}

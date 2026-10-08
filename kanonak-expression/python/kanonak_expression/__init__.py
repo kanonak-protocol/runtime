@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import math
 import re as _re
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
+from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Tuple, Union
 
 # The public API — what a 1.x release keeps compatible (runtime#29). Everything
 # else here is an implementation detail and may change in any release.
@@ -59,7 +59,9 @@ __all__ = [
     "Value",
     "align",
     "evaluate",
+    "evaluates",
     "explain",
+    "matches",
     "validate_matches_pattern",
 ]
 
@@ -179,6 +181,22 @@ OPERATOR_ARITY: Dict[str, tuple] = {
     f"{MATH}/Clip": ("ternary", "clipValue", "clipLower", "clipUpper"),
 }
 
+# The operators the fold dispatches by name, beside its tables.
+_NOT = f"{TX}/Not"
+_IS_AT_LEAST = f"{TX}/IsAtLeast"
+_DOMINATES = f"{TX}/Dominates"
+_CONTAINS = f"{TX}/Contains"
+_IS_SET = f"{TX}/IsSet"
+_LIST_ITEM_AT = f"{TX}/ListItemAt"
+_MATCHES = f"{TX}/Matches"
+
+# The literal classes the kernel answers itself (see ``_literal_value``).
+_INTEGER_LITERAL = f"{TX}/IntegerLiteral"
+_DECIMAL_LITERAL = f"{TX}/DecimalLiteral"
+_BOOLEAN_LITERAL = f"{TX}/BooleanLiteral"
+_STRING_LITERAL = f"{TX}/StringLiteral"
+_URI_LITERAL = f"{TX}/UriLiteral"
+
 _ITERATOR_BODY: Dict[str, str] = {
     f"{TX}/ForEach": "emit",
     f"{TX}/ListMap": "mapBody",
@@ -289,19 +307,19 @@ def _values_equal(a: Value, b: Value) -> bool:
 
 
 def _literal_value(node: ExprNode, typ: str) -> Optional[Value]:
-    if typ == f"{TX}/IntegerLiteral":
+    if typ == _INTEGER_LITERAL:
         return float(node.get("integerLiteral"))
-    if typ == f"{TX}/DecimalLiteral":
+    if typ == _DECIMAL_LITERAL:
         return float(node.get("decimalLiteral"))
-    if typ == f"{TX}/BooleanLiteral":
+    if typ == _BOOLEAN_LITERAL:
         raw = node.get("booleanLiteral")
         return _bool(raw is True or raw == "true")
-    if typ == f"{TX}/StringLiteral":
+    if typ == _STRING_LITERAL:
         s = node.get("stringLiteral")
         if not isinstance(s, str):
             raise ExpressionError("StringLiteral is missing stringLiteral")
         return s
-    if typ == f"{TX}/UriLiteral":
+    if typ == _URI_LITERAL:
         ref = node.get("refTo")
         if not isinstance(ref, str) or not ref:
             raise ExpressionError("UriLiteral is missing refTo")
@@ -543,13 +561,28 @@ def _matches_pattern(text: str, pattern: str) -> bool:
     return compiled.search(text) is not None
 
 
+def matches(input: str, pattern: str) -> bool:
+    """Test ``input`` against ``pattern`` exactly as ``tx.Matches`` evaluates it.
+
+    The pinned RE2-compatible XSD-regex subset under fn:matches semantics --
+    UNANCHORED, counting code points, with a whole-pattern flag prefix. A
+    pattern outside the subset is an :class:`ExpressionError`, never a silent
+    false.
+
+    For a host engine that evaluates ``Matches`` over its own value domain: it
+    calls this rather than re-implement the dialect, and pre-flights an
+    authored pattern with :func:`validate_matches_pattern`, which applies the
+    same rules."""
+    return _matches_pattern(input, pattern)
+
+
 # ---------------------------------------------------------------------------
 # Ordered comparisons (unchanged from v1).
 # ---------------------------------------------------------------------------
 
 def _identity_of(node: ExprNode, ctx: Any, options: Optional[EvalOptions]) -> str:
     typ = node.get("type")
-    if typ == f"{TX}/UriLiteral":
+    if typ == _URI_LITERAL:
         ref = node.get("refTo")
         if not isinstance(ref, str) or not ref:
             raise ExpressionError("UriLiteral is missing refTo")
@@ -571,7 +604,7 @@ def _fold_ordered(
     if closure is None:
         raise ExpressionError(f"No closure supplied for ordering property '{via}'")
     if left == right:
-        value = _bool(typ == f"{TX}/IsAtLeast")
+        value = _bool(typ == _IS_AT_LEAST)
     else:
         value = _bool(right in (closure.get(left) or []))
     return value, left, right
@@ -582,6 +615,38 @@ def _operand(node: ExprNode, typ: str, key: str) -> ExprNode:
     if not isinstance(v, Mapping):
         raise ExpressionError(f"{typ} is missing operand '{key}'")
     return v
+
+
+# ---------------------------------------------------------------------------
+# The kernel's node classes.
+# ---------------------------------------------------------------------------
+
+# Every node class the fold answers itself: its tables, the operators it
+# dispatches by name, and its literals.
+_KERNEL_NODE_CLASSES: FrozenSet[str] = frozenset((
+    *OPERATOR_ARITY,
+    *_LIST_FOLDS,
+    *_ITERATOR_BODY,
+    *_KIND_PREDICATES,
+    _NOT, _IS_AT_LEAST, _DOMINATES, _CONTAINS, _IS_SET, _LIST_ITEM_AT, _MATCHES,
+    _INTEGER_LITERAL, _DECIMAL_LITERAL, _BOOLEAN_LITERAL, _STRING_LITERAL, _URI_LITERAL,
+))
+
+
+def evaluates(type_uri: str) -> bool:
+    """True when the kernel folds a node of class ``type_uri`` (a canonical
+    versionless URI) itself -- an operator or a literal.
+
+    False for everything :func:`evaluate` hands to the caller's ``resolve``: a
+    binding (``tx.VarRef``; the kernel binds only its own iterators' loop
+    variables), a graph read (``tx.PropertyRead``), a domain leaf, and any
+    expression class only a host engine implements.
+
+    A host that compiles authored expressions checks a tree against this --
+    every node either ``evaluates``, or is a leaf the host resolves -- instead
+    of probing :func:`evaluate` class by class. Pinned across ports by
+    ``expression-surface-vectors.json``."""
+    return type_uri in _KERNEL_NODE_CLASSES
 
 
 # ---------------------------------------------------------------------------
@@ -662,11 +727,11 @@ def _go(
         hi = _require_num(_go(_operand(node, typ, arity[3]), ctx, resolve, options, frames), typ)
         return min(max(v, lo), hi)
 
-    if typ == f"{TX}/Not":
+    if typ == _NOT:
         x = _go(_operand(node, typ, "operand"), ctx, resolve, options, frames)
         return _bool(not _truthy(_require_num(x, typ)))
 
-    if typ in (f"{TX}/IsAtLeast", f"{TX}/Dominates"):
+    if typ in (_IS_AT_LEAST, _DOMINATES):
         value, _, _ = _fold_ordered(node, typ, ctx, options)
         return value
 
@@ -701,16 +766,16 @@ def _go(
                 out.append(v)
         return out
 
-    if typ == f"{TX}/Contains":
+    if typ == _CONTAINS:
         hay = _go(_operand(node, typ, "haystack"), ctx, resolve, options, frames)
         needle = _go(_operand(node, typ, "needle"), ctx, resolve, options, frames)
         items = hay if isinstance(hay, list) else [hay]
         return _bool(any(_values_equal(el, needle) for el in items))
 
-    if typ == f"{TX}/IsSet":
+    if typ == _IS_SET:
         return _bool(_is_set(_go(_operand(node, typ, "checkExpr"), ctx, resolve, options, frames)))
 
-    if typ == f"{TX}/ListItemAt":
+    if typ == _LIST_ITEM_AT:
         items = _source_list(node, typ, ctx, resolve, options, frames)
         idx = _go(_operand(node, typ, "itemIndex"), ctx, resolve, options, frames)
         if not _is_number(idx) or float(idx) != int(idx) or idx < 0:
@@ -719,7 +784,7 @@ def _go(
         # Past the end is ABSENCE (the empty list); guard with IsSet.
         return items[i] if i < len(items) else []
 
-    if typ == f"{TX}/Matches":
+    if typ == _MATCHES:
         src = _go(_operand(node, typ, "matchSource"), ctx, resolve, options, frames)
         if not isinstance(src, str):
             raise ExpressionError(f"Matches requires a string matchSource, got {_kind(src)}")
@@ -844,11 +909,11 @@ def _trace(
         hi = _require_num(thi.value, typ)
         return TraceNode(typ, min(max(v, lo), hi), [tv, tlo, thi])
 
-    if typ == f"{TX}/Not":
+    if typ == _NOT:
         x = _trace(_operand(node, typ, "operand"), ctx, resolve, options, frames)
         return TraceNode(typ, _bool(not _truthy(_require_num(x.value, typ))), [x])
 
-    if typ in (f"{TX}/IsAtLeast", f"{TX}/Dominates"):
+    if typ in (_IS_AT_LEAST, _DOMINATES):
         value, left, right = _fold_ordered(node, typ, ctx, options)
         return TraceNode(typ, value, [], left, right)
 
@@ -887,18 +952,18 @@ def _trace(
                 out.append(v)
         return TraceNode(typ, out, children)
 
-    if typ == f"{TX}/Contains":
+    if typ == _CONTAINS:
         hay = _trace(_operand(node, typ, "haystack"), ctx, resolve, options, frames)
         needle = _trace(_operand(node, typ, "needle"), ctx, resolve, options, frames)
         items = hay.value if isinstance(hay.value, list) else [hay.value]
         v = _bool(any(_values_equal(el, needle.value) for el in items))
         return TraceNode(typ, v, [hay, needle])
 
-    if typ == f"{TX}/IsSet":
+    if typ == _IS_SET:
         x = _trace(_operand(node, typ, "checkExpr"), ctx, resolve, options, frames)
         return TraceNode(typ, _bool(_is_set(x.value)), [x])
 
-    if typ == f"{TX}/ListItemAt":
+    if typ == _LIST_ITEM_AT:
         src = _trace(_operand(node, typ, "source"), ctx, resolve, options, frames)
         idx = _trace(_operand(node, typ, "itemIndex"), ctx, resolve, options, frames)
         items = src.value if isinstance(src.value, list) else [src.value]
@@ -909,7 +974,7 @@ def _trace(
         value = items[i] if i < len(items) else []
         return TraceNode(typ, value, [src, idx])
 
-    if typ == f"{TX}/Matches":
+    if typ == _MATCHES:
         src = _trace(_operand(node, typ, "matchSource"), ctx, resolve, options, frames)
         if not isinstance(src.value, str):
             raise ExpressionError(f"Matches requires a string matchSource, got {_kind(src.value)}")
@@ -950,16 +1015,16 @@ def _trace(
 # node.
 # ---------------------------------------------------------------------------
 
-_ORDERED_COMPARISON = {f"{TX}/IsAtLeast", f"{TX}/Dominates"}
+_ORDERED_COMPARISON = {_IS_AT_LEAST, _DOMINATES}
 
 # Trace-child order for the direct and list operators — the order ``explain``
 # visits them. Data operands (Join's separator, Matches' pattern) are not children.
 _DIRECT_CHILDREN: Dict[str, Tuple[str, ...]] = {
-    f"{TX}/Not": ("operand",),
-    f"{TX}/ListItemAt": ("source", "itemIndex"),
-    f"{TX}/Contains": ("haystack", "needle"),
-    f"{TX}/IsSet": ("checkExpr",),
-    f"{TX}/Matches": ("matchSource",),
+    _NOT: ("operand",),
+    _LIST_ITEM_AT: ("source", "itemIndex"),
+    _CONTAINS: ("haystack", "needle"),
+    _IS_SET: ("checkExpr",),
+    _MATCHES: ("matchSource",),
     f"{TX}/Count": ("source",),
     f"{TX}/Sum": ("source",),
     f"{TX}/Min": ("source",),

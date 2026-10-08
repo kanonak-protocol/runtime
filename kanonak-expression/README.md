@@ -163,6 +163,20 @@ The remaining iterating family (`WindowedMap`, `PairwiseMap`, `Scan`,
 `DistinctBy`, `PartitionBy`) is additive within v2 under the reserved lambda
 shape below.
 
+### Which classes the kernel folds — `evaluates` (1.1.0)
+
+`evaluates(typeUri)` is true exactly for the classes in the table above and
+the literals: the node classes the kernel folds itself. It is false for
+everything `evaluate` hands to the caller's `resolve`: a binding (`VarRef`;
+the kernel binds only its own iterators' loop variables), a graph read
+(`PropertyRead`), a domain leaf, and an expression class only a host engine
+implements (`Let`, `When`, `Concat`, `Fallback`, `Traverse`, `DistinctBy`, the
+host kinds `IsBoolean` and `IsEmbedded`, …). A host that compiles authored
+expressions checks each tree against it — every node either `evaluates`, or
+is a leaf the host resolves — instead of probing `evaluate` class by class.
+Each port answers it from the fold's own dispatch, and
+`expression-surface-vectors.json` pins the set across ports.
+
 ## Lambda binding (the one genuinely-new dispatch shape)
 
 The iterating operators bind their `loopVar` per element. Within an iterating
@@ -239,6 +253,14 @@ Arabic-digit / NBSP / `\bé` vectors gate all of this per port.
 Out-of-subset patterns error at evaluation — the same fail-closed discipline
 as `Round`/`Modulo` — and the adversarial vectors probe exactly the
 divergence points. Widening the subset later is additive within v2.
+
+**For a host engine (1.1.0).** `matches(input, pattern)` tests a string
+exactly as `Matches` evaluates it, and `validateMatchesPattern(pattern)`
+pre-flights an authored pattern by the same rules (an out-of-subset pattern
+is an `ExpressionError` from both). An engine that evaluates `Matches` over
+its own value domain — the SDK's look and transformation engine, say — calls
+these rather than re-implement the dialect: the subset is defined once per
+port, here.
 
 ## Ordered comparisons
 
@@ -348,7 +370,8 @@ gates) may rely on it.
 
 ## Vectors
 
-Two files, both required for a v2-complete port:
+Three evaluation files, all required for a v2-complete port, and one for the
+public surface:
 
 - [`vectors/expression-vectors.json`](./vectors/expression-vectors.json) —
   the v1 parity gate (69 vectors, unchanged). **Every vector passes unchanged
@@ -358,6 +381,13 @@ Two files, both required for a v2-complete port:
   — the v2 surface: the value domain, the list/aggregate/membership family,
   lambda binding, polymorphic `Equals`, kind predicates, and the `Matches`
   subset with its adversarial divergence probes.
+- [`vectors/expression-alignment-vectors.json`](./vectors/expression-alignment-vectors.json)
+  — `align(expr, trace)`.
+- [`vectors/expression-surface-vectors.json`](./vectors/expression-surface-vectors.json)
+  — `evaluates(typeUri)` for every kernel class and for the leaves and host
+  classes it must refuse, and `matches(input, pattern)` over the v2 `Matches`
+  cases with a literal source. Each port also cross-checks `evaluates`
+  against the evaluation files: every class they fold must report true.
 
 `expr` is the tree; `env` binds `tx.VarRef` names for the conformance
 `resolve` hook (values are Values: numbers, strings, arrays, `{"ref": …}`

@@ -273,11 +273,119 @@ func main() {
 	p1, t1 := runFile("expression-vectors.json")
 	p2, t2 := runFile("expression-vectors-2.json")
 	p3, t3 := runAlignFile("expression-alignment-vectors.json")
-	if p1 != t1 || p2 != t2 || p3 != t3 {
-		fmt.Fprintf(os.Stderr, "\n%d FAILURES\n", (t1-p1)+(t2-p2)+(t3-p3))
+	p4, t4 := runSurfaceFile("expression-surface-vectors.json", append(
+		nodeTypes("expression-vectors.json"),
+		nodeTypes("expression-vectors-2.json")...))
+	if p1 != t1 || p2 != t2 || p3 != t3 || p4 != t4 {
+		fmt.Fprintf(os.Stderr, "\n%d FAILURES\n", (t1-p1)+(t2-p2)+(t3-p3)+(t4-p4))
 		os.Exit(1)
 	}
 	fmt.Println("ALL VECTORS PASS")
+}
+
+type surfaceFile struct {
+	Evaluates []struct {
+		ID       string `json:"id"`
+		Type     string `json:"type"`
+		Expected bool   `json:"expected"`
+	} `json:"evaluates"`
+	Matches []struct {
+		ID          string `json:"id"`
+		Input       string `json:"input"`
+		Pattern     string `json:"pattern"`
+		Expected    *bool  `json:"expected"`
+		ExpectError bool   `json:"expectError"`
+	} `json:"matches"`
+}
+
+// runSurfaceFile drives the public surface beside Evaluate: Evaluates(typeURI)
+// and Matches(input, pattern). Then a cross-check of Evaluates against the
+// evaluate vectors themselves: every node class they exercise is either one
+// the kernel folds, or a leaf this harness's resolve answers — so a class the
+// fold handles cannot be missing from Evaluates.
+func runSurfaceFile(name string, exercised []string) (pass, total int) {
+	raw, err := os.ReadFile("../vectors/" + name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "read %s: %v\n", name, err)
+		os.Exit(1)
+	}
+	var doc surfaceFile
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		fmt.Fprintf(os.Stderr, "parse %s: %v\n", name, err)
+		os.Exit(1)
+	}
+	for _, v := range doc.Evaluates {
+		total++
+		if got := expr.Evaluates(v.Type); got != v.Expected {
+			fmt.Fprintf(os.Stderr, "%s/%s: Evaluates(%s) should be %v\n", name, v.ID, v.Type, v.Expected)
+			continue
+		}
+		pass++
+	}
+	for _, v := range doc.Matches {
+		total++
+		got, err := expr.Matches(v.Input, v.Pattern)
+		if v.ExpectError {
+			if _, ok := err.(*expr.Error); !ok {
+				fmt.Fprintf(os.Stderr, "%s/%s: expected an *Error, got %v (err %v)\n", name, v.ID, got, err)
+				continue
+			}
+		} else if err != nil || v.Expected == nil || got != *v.Expected {
+			fmt.Fprintf(os.Stderr, "%s/%s: Matches gave %v (err %v)\n", name, v.ID, got, err)
+			continue
+		}
+		pass++
+	}
+	seen := map[string]bool{}
+	for _, typ := range exercised {
+		if seen[typ] {
+			continue
+		}
+		seen[typ] = true
+		total++
+		if typ != varRef && typ != propertyRead && !expr.Evaluates(typ) {
+			fmt.Fprintf(os.Stderr, "%s/exercised: the vectors fold %s, but Evaluates says the kernel does not\n", name, typ)
+			continue
+		}
+		pass++
+	}
+	fmt.Printf("%s: %d/%d pass\n", name, pass, total)
+	return pass, total
+}
+
+// nodeTypes collects every node "type" in a vector file's expression trees.
+func nodeTypes(name string) []string {
+	raw, err := os.ReadFile("../vectors/" + name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "read %s: %v\n", name, err)
+		os.Exit(1)
+	}
+	var doc vectorFile
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		fmt.Fprintf(os.Stderr, "parse %s: %v\n", name, err)
+		os.Exit(1)
+	}
+	var out []string
+	var walk func(x interface{})
+	walk = func(x interface{}) {
+		switch e := x.(type) {
+		case []interface{}:
+			for _, item := range e {
+				walk(item)
+			}
+		case map[string]interface{}:
+			if typ, ok := e["type"].(string); ok {
+				out = append(out, typ)
+			}
+			for _, item := range e {
+				walk(item)
+			}
+		}
+	}
+	for _, v := range doc.Vectors {
+		walk(v["expr"])
+	}
+	return out
 }
 
 // alignedMatches is structural equality of an aligned tree against the

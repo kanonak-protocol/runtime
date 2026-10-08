@@ -144,6 +144,26 @@ func isListFold(typ string) bool {
 	return false
 }
 
+// The operators the fold dispatches by name, beside its dispatch tables.
+const (
+	opNot        = tx + "/Not"
+	opIsAtLeast  = tx + "/IsAtLeast"
+	opDominates  = tx + "/Dominates"
+	opContains   = tx + "/Contains"
+	opIsSet      = tx + "/IsSet"
+	opListItemAt = tx + "/ListItemAt"
+	opMatches    = tx + "/Matches"
+)
+
+// The literal classes the kernel answers itself (see literalValue).
+const (
+	integerLiteral = tx + "/IntegerLiteral"
+	decimalLiteral = tx + "/DecimalLiteral"
+	booleanLiteral = tx + "/BooleanLiteral"
+	stringLiteral  = tx + "/StringLiteral"
+	uriLiteral     = tx + "/UriLiteral"
+)
+
 // --- primitives -------------------------------------------------------------
 
 func flooredMod(a, b float64) float64 {
@@ -315,20 +335,20 @@ func toNumber(v interface{}) float64 {
 // StringLiteral and UriLiteral are kernel-known in v2.
 func literalValue(node Node) (Value, bool) {
 	switch node.Type() {
-	case tx + "/IntegerLiteral":
+	case integerLiteral:
 		return toNumber(node["integerLiteral"]), true
-	case tx + "/DecimalLiteral":
+	case decimalLiteral:
 		return toNumber(node["decimalLiteral"]), true
-	case tx + "/BooleanLiteral":
+	case booleanLiteral:
 		b := node["booleanLiteral"]
 		return boolNum(b == true || b == "true"), true
-	case tx + "/StringLiteral":
+	case stringLiteral:
 		s, ok := node["stringLiteral"].(string)
 		if !ok {
 			raise("StringLiteral is missing stringLiteral")
 		}
 		return s, true
-	case tx + "/UriLiteral":
+	case uriLiteral:
 		s, ok := node["refTo"].(string)
 		if !ok || s == "" {
 			raise("UriLiteral is missing refTo")
@@ -467,6 +487,53 @@ var allowedEscapes = map[rune]bool{
 	'.': true, '*': true, '+': true, '?': true, '(': true, ')': true,
 	'[': true, ']': true, '{': true, '}': true, '|': true, '^': true,
 	'$': true, '\\': true, '/': true,
+}
+
+// ValidateMatchesPattern validates a Matches pattern against the pinned subset
+// — the intersection of RE2 and the host regex engines, chosen so every port
+// compiles the same pattern to the same language. RE2 is both the restrictive
+// common denominator and ReDoS-safe (no catastrophic backtracking), which is a
+// REQUIREMENT for a predicate that may gate on adversarial input. An
+// out-of-subset construct is an *Error (a LOUD error, the same discipline as
+// Round/Modulo); nil means the pattern is in the subset. WIDENING the subset
+// later (an error becoming a defined result) is additive within v2.
+//
+// COUNTING UNIT — pinned: . and quantifiers count Unicode CODE POINTS, in
+// every port. An astral-plane character is ONE ., and .{3} matches exactly
+// three code points — RE2's rune model, native to this port, and what
+// SHACL/SPARQL string length means. The astral vectors gate this.
+//
+// Allowed: literals; .; anchors ^ $; alternation |; groups (...), (?:...); a
+// WHOLE-PATTERN flag prefix over i/m/s ((?i) at position 0 only, each flag at
+// most once); quantifiers * + ? {m} {m,} {m,n}; character classes with ranges
+// and negation; escapes \d \D \w \W \s \S \b \B \n \r \t \f \v \xHH, escaped
+// syntax punctuation (\. \* \+ \? \( \) \[ \] \{ \} \| \^ \$ \\ \/), and \-
+// inside character classes.
+//
+// Rejected (divergent or unsafe across engines): lookahead/lookbehind, named
+// groups, backreferences (\1…, \k), MID-pattern flag groups ((?i:…) — not
+// portable to the JS and Python engines), a REPEATED flag in the prefix ((?ii)
+// — the JS engine rejects it while the Go, Python and Rust engines accept it),
+// \p{…}/\P{…} unicode property classes, POSIX classes ([[:alpha:]]), class
+// intersection (&&), atomic groups, conditionals, comments, octal/\u/\x{…}
+// escapes, escaped space (\ ), \- outside a class, and a bare unescaped { that
+// is not a quantifier (literal braces must be escaped — engines disagree on the
+// lenient reading, so the subset requires the explicit form).
+//
+// It applies exactly the rules Matches and the fold's tx.Matches apply: all
+// three route through the same parser, so they cannot drift apart.
+func ValidateMatchesPattern(pattern string) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if e, ok := r.(*Error); ok {
+				err = e
+				return
+			}
+			panic(r)
+		}
+	}()
+	validateMatchesPattern(pattern)
+	return nil
 }
 
 // validateMatchesPattern — check a WHOLE pattern against the pinned subset,
@@ -650,6 +717,27 @@ func matchesPattern(input, pattern string) bool {
 	return re.MatchString(input)
 }
 
+// Matches tests input against pattern exactly as tx.Matches evaluates it: the
+// pinned RE2-compatible XSD-regex subset under fn:matches semantics —
+// UNANCHORED, counting code points, with a whole-pattern flag prefix. A
+// pattern outside the subset is an *Error, never a silent false.
+//
+// For a host engine that evaluates Matches over its own value domain: it
+// calls this rather than re-implement the dialect, and pre-flights an authored
+// pattern with ValidateMatchesPattern, which applies the same rules.
+func Matches(input, pattern string) (matched bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if e, ok := r.(*Error); ok {
+				err = e
+				return
+			}
+			panic(r)
+		}
+	}()
+	return matchesPattern(input, pattern), nil
+}
+
 func isHex(c rune) bool {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
@@ -665,7 +753,7 @@ func operand(node Node, key string) Node {
 }
 
 func identityOf(node Node, ctx interface{}, opts *Options) string {
-	if node.Type() == tx+"/UriLiteral" {
+	if node.Type() == uriLiteral {
 		s, ok := node["refTo"].(string)
 		if !ok || s == "" {
 			raise("UriLiteral is missing refTo")
@@ -694,7 +782,7 @@ func foldOrdered(node Node, ctx interface{}, opts *Options) (value float64, left
 		raise("No closure supplied for ordering property '%s'", via)
 	}
 	if left == right {
-		return boolNum(typ == tx+"/IsAtLeast"), left, right
+		return boolNum(typ == opIsAtLeast), left, right
 	}
 	for _, m := range closure[left] {
 		if m == right {
@@ -702,6 +790,46 @@ func foldOrdered(node Node, ctx interface{}, opts *Options) (value float64, left
 		}
 	}
 	return 0, left, right
+}
+
+// --- the kernel's node classes ----------------------------------------------
+
+// kernelByName is every node class the fold answers by name rather than
+// through a dispatch table: the by-name operators and the literals.
+var kernelByName = map[string]bool{
+	opNot: true, opIsAtLeast: true, opDominates: true, opContains: true,
+	opIsSet: true, opListItemAt: true, opMatches: true,
+	integerLiteral: true, decimalLiteral: true, booleanLiteral: true,
+	stringLiteral: true, uriLiteral: true,
+}
+
+// Evaluates reports whether the kernel folds a node of class typeURI (a
+// canonical versionless URI) itself — an operator or a literal. False for
+// everything Evaluate hands to the caller's Resolve: a binding (tx.VarRef; the
+// kernel binds only its own iterators' loop variables), a graph read
+// (tx.PropertyRead), a domain leaf, and any expression class only a host
+// engine implements.
+//
+// A host that compiles authored expressions checks a tree against this —
+// every node either Evaluates, or is a leaf the host resolves — instead of
+// probing Evaluate class by class. Pinned across ports by
+// expression-surface-vectors.json.
+func Evaluates(typeURI string) bool {
+	// The fold's own dispatch decides: the same lookups evalNode consults,
+	// then the classes it answers by name.
+	if _, ok := operatorArity(typeURI); ok {
+		return true
+	}
+	if isListFold(typeURI) {
+		return true
+	}
+	if _, ok := iteratorBody(typeURI); ok {
+		return true
+	}
+	if _, ok := kindPredicate(typeURI, nil); ok {
+		return true
+	}
+	return kernelByName[typeURI]
 }
 
 // --- the fold ---------------------------------------------------------------
@@ -784,12 +912,12 @@ func evalNode(node Node, ctx interface{}, resolve Resolve, opts *Options, frames
 		}
 	}
 
-	if typ == tx+"/Not" {
+	if typ == opNot {
 		x := evalNode(operand(node, "operand"), ctx, resolve, opts, frames)
 		return boolNum(!truthy(requireNum(x, typ)))
 	}
 
-	if typ == tx+"/IsAtLeast" || typ == tx+"/Dominates" {
+	if typ == opIsAtLeast || typ == opDominates {
 		v, _, _ := foldOrdered(node, ctx, opts)
 		return v
 	}
@@ -828,7 +956,7 @@ func evalNode(node Node, ctx interface{}, resolve Resolve, opts *Options, frames
 		return out
 	}
 
-	if typ == tx+"/Contains" {
+	if typ == opContains {
 		hay := evalNode(operand(node, "haystack"), ctx, resolve, opts, frames)
 		needle := evalNode(operand(node, "needle"), ctx, resolve, opts, frames)
 		items, ok := hay.([]Value)
@@ -843,11 +971,11 @@ func evalNode(node Node, ctx interface{}, resolve Resolve, opts *Options, frames
 		return float64(0)
 	}
 
-	if typ == tx+"/IsSet" {
+	if typ == opIsSet {
 		return boolNum(isSet(evalNode(operand(node, "checkExpr"), ctx, resolve, opts, frames)))
 	}
 
-	if typ == tx+"/ListItemAt" {
+	if typ == opListItemAt {
 		items := sourceList(node, ctx, resolve, opts, frames)
 		idx := evalNode(operand(node, "itemIndex"), ctx, resolve, opts, frames)
 		n, ok := idx.(float64)
@@ -862,7 +990,7 @@ func evalNode(node Node, ctx interface{}, resolve Resolve, opts *Options, frames
 		return []Value{}
 	}
 
-	if typ == tx+"/Matches" {
+	if typ == opMatches {
 		src := evalNode(operand(node, "matchSource"), ctx, resolve, opts, frames)
 		s, ok := src.(string)
 		if !ok {
@@ -1003,12 +1131,12 @@ func explainPanic(node Node, ctx interface{}, resolve Resolve, opts *Options, fr
 		}
 	}
 
-	if typ == tx+"/Not" {
+	if typ == opNot {
 		x := explainPanic(operand(node, "operand"), ctx, resolve, opts, frames)
 		return &TraceNode{Type: typ, Value: boolNum(!truthy(requireNum(x.Value, typ))), Children: []*TraceNode{x}}
 	}
 
-	if typ == tx+"/IsAtLeast" || typ == tx+"/Dominates" {
+	if typ == opIsAtLeast || typ == opDominates {
 		v, l, r := foldOrdered(node, ctx, opts)
 		return &TraceNode{Type: typ, Value: v, LeftRef: l, RightRef: r, HasRefs: true}
 	}
@@ -1058,7 +1186,7 @@ func explainPanic(node Node, ctx interface{}, resolve Resolve, opts *Options, fr
 		return &TraceNode{Type: typ, Value: out, Children: children}
 	}
 
-	if typ == tx+"/Contains" {
+	if typ == opContains {
 		hay := explainPanic(operand(node, "haystack"), ctx, resolve, opts, frames)
 		needle := explainPanic(operand(node, "needle"), ctx, resolve, opts, frames)
 		items, ok := hay.Value.([]Value)
@@ -1075,12 +1203,12 @@ func explainPanic(node Node, ctx interface{}, resolve Resolve, opts *Options, fr
 		return &TraceNode{Type: typ, Value: v, Children: []*TraceNode{hay, needle}}
 	}
 
-	if typ == tx+"/IsSet" {
+	if typ == opIsSet {
 		x := explainPanic(operand(node, "checkExpr"), ctx, resolve, opts, frames)
 		return &TraceNode{Type: typ, Value: boolNum(isSet(x.Value)), Children: []*TraceNode{x}}
 	}
 
-	if typ == tx+"/ListItemAt" {
+	if typ == opListItemAt {
 		src := explainPanic(operand(node, "source"), ctx, resolve, opts, frames)
 		idx := explainPanic(operand(node, "itemIndex"), ctx, resolve, opts, frames)
 		items, ok := src.Value.([]Value)
@@ -1098,7 +1226,7 @@ func explainPanic(node Node, ctx interface{}, resolve Resolve, opts *Options, fr
 		return &TraceNode{Type: typ, Value: value, Children: []*TraceNode{src, idx}}
 	}
 
-	if typ == tx+"/Matches" {
+	if typ == opMatches {
 		src := explainPanic(operand(node, "matchSource"), ctx, resolve, opts, frames)
 		s, ok := src.Value.(string)
 		if !ok {
@@ -1186,16 +1314,16 @@ type AlignedNode struct {
 	Children []*AlignedNode
 }
 
-var orderedComparison = map[string]bool{tx + "/IsAtLeast": true, tx + "/Dominates": true}
+var orderedComparison = map[string]bool{opIsAtLeast: true, opDominates: true}
 
 // Trace-child order for the direct and list operators — the order Explain
 // visits them. Data operands (Join's separator, Matches' pattern) are not children.
 var directChildren = map[string][]string{
-	tx + "/Not":         {"operand"},
-	tx + "/ListItemAt":  {"source", "itemIndex"},
-	tx + "/Contains":    {"haystack", "needle"},
-	tx + "/IsSet":       {"checkExpr"},
-	tx + "/Matches":     {"matchSource"},
+	opNot:               {"operand"},
+	opListItemAt:        {"source", "itemIndex"},
+	opContains:          {"haystack", "needle"},
+	opIsSet:             {"checkExpr"},
+	opMatches:           {"matchSource"},
 	tx + "/Count":       {"source"},
 	tx + "/Sum":         {"source"},
 	tx + "/Min":         {"source"},

@@ -209,6 +209,22 @@ const OPERATOR_ARITY: Record<string, Arity> = {
  */
 type ListFold = (list: Value[], node: ExprNode) => Value;
 
+/** The operators the fold dispatches by name, beside its tables. */
+const NOT = `${TX}/Not`;
+const IS_AT_LEAST = `${TX}/IsAtLeast`;
+const DOMINATES = `${TX}/Dominates`;
+const CONTAINS = `${TX}/Contains`;
+const IS_SET = `${TX}/IsSet`;
+const LIST_ITEM_AT = `${TX}/ListItemAt`;
+const MATCHES = `${TX}/Matches`;
+
+/** The literal classes the kernel answers itself (see `literalValue`). */
+const INTEGER_LITERAL = `${TX}/IntegerLiteral`;
+const DECIMAL_LITERAL = `${TX}/DecimalLiteral`;
+const BOOLEAN_LITERAL = `${TX}/BooleanLiteral`;
+const STRING_LITERAL = `${TX}/StringLiteral`;
+const URI_LITERAL = `${TX}/UriLiteral`;
+
 /** IteratingExpression operators: `source` + `loopVar` + the body operand. */
 const ITERATOR_BODY: Record<string, string> = {
   [`${TX}/ForEach`]: 'emit',
@@ -324,15 +340,15 @@ function valuesEqual(a: Value, b: Value): boolean {
  * IntegerLiteral's number is its value). */
 function literalValue(node: ExprNode): Value | undefined {
   switch (node.type) {
-    case `${TX}/IntegerLiteral`: return Number(node.integerLiteral);
-    case `${TX}/DecimalLiteral`: return Number(node.decimalLiteral);
-    case `${TX}/BooleanLiteral`: return bool(node.booleanLiteral === true || node.booleanLiteral === 'true');
-    case `${TX}/StringLiteral`: {
+    case INTEGER_LITERAL: return Number(node.integerLiteral);
+    case DECIMAL_LITERAL: return Number(node.decimalLiteral);
+    case BOOLEAN_LITERAL: return bool(node.booleanLiteral === true || node.booleanLiteral === 'true');
+    case STRING_LITERAL: {
       const s = node.stringLiteral;
       if (typeof s !== 'string') throw new ExpressionError('StringLiteral is missing stringLiteral');
       return s;
     }
-    case `${TX}/UriLiteral`: {
+    case URI_LITERAL: {
       const ref = node.refTo;
       if (typeof ref !== 'string' || ref.length === 0) {
         throw new ExpressionError('UriLiteral is missing refTo');
@@ -631,6 +647,20 @@ function matchesPattern(input: string, pattern: string): boolean {
   return re.test(input);
 }
 
+/**
+ * Test `input` against `pattern` exactly as `tx.Matches` evaluates it: the
+ * pinned RE2-compatible XSD-regex subset under fn:matches semantics —
+ * UNANCHORED, counting code points, with a whole-pattern flag prefix. A
+ * pattern outside the subset is an `ExpressionError`, never a silent false.
+ *
+ * For a host engine that evaluates `Matches` over its own value domain: it
+ * calls this rather than re-implement the dialect, and pre-flights an authored
+ * pattern with {@link validateMatchesPattern}, which applies the same rules.
+ */
+export function matches(input: string, pattern: string): boolean {
+  return matchesPattern(input, pattern);
+}
+
 // ---------------------------------------------------------------------------
 // Ordered comparisons (unchanged from v1).
 // ---------------------------------------------------------------------------
@@ -643,7 +673,7 @@ function matchesPattern(input: string, pattern: string): boolean {
  * numeric domain's literals-vs-`resolve`.
  */
 function identityOf<C>(node: ExprNode, ctx: C, options: EvalOptions<C> | undefined): string {
-  if (node.type === `${TX}/UriLiteral`) {
+  if (node.type === URI_LITERAL) {
     const ref = node.refTo;
     if (typeof ref !== 'string' || ref.length === 0) {
       throw new ExpressionError('UriLiteral is missing refTo');
@@ -684,9 +714,41 @@ function foldOrdered<C>(
     throw new ExpressionError(`No closure supplied for ordering property '${via}'`);
   }
   const value = left === right
-    ? bool(node.type === `${TX}/IsAtLeast`)
+    ? bool(node.type === IS_AT_LEAST)
     : bool((closure[left] ?? []).includes(right));
   return { value, left, right };
+}
+
+// ---------------------------------------------------------------------------
+// The kernel's node classes.
+// ---------------------------------------------------------------------------
+
+/** Every node class the fold answers itself: its tables, the operators it
+ * dispatches by name, and its literals. */
+const KERNEL_NODE_CLASSES: ReadonlySet<string> = new Set<string>([
+  ...Object.keys(OPERATOR_ARITY),
+  ...Object.keys(LIST_FOLDS),
+  ...Object.keys(ITERATOR_BODY),
+  ...Object.keys(KIND_PREDICATES),
+  NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES,
+  INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL,
+]);
+
+/**
+ * True when the kernel folds a node of class `typeUri` (a canonical
+ * versionless URI) itself — an operator or a literal. False for everything
+ * {@link evaluate} hands to the caller's `resolve`: a binding (`tx.VarRef`;
+ * the kernel binds only its own iterators' loop variables), a graph read
+ * (`tx.PropertyRead`), a domain leaf, and any expression class only a host
+ * engine implements.
+ *
+ * A host that compiles authored expressions checks a tree against this —
+ * every node either `evaluates`, or is a leaf the host resolves — instead of
+ * probing `evaluate` class by class. Pinned across ports by
+ * `expression-surface-vectors.json`.
+ */
+export function evaluates(typeUri: string): boolean {
+  return KERNEL_NODE_CLASSES.has(typeUri);
 }
 
 // ---------------------------------------------------------------------------
@@ -788,11 +850,11 @@ function evalNode<C>(
     }
   }
 
-  if (node.type === `${TX}/Not`) {
+  if (node.type === NOT) {
     return bool(!truthy(requireNumber(recurse(operand(node, 'operand'), ctx), node.type)));
   }
 
-  if (node.type === `${TX}/IsAtLeast` || node.type === `${TX}/Dominates`) {
+  if (node.type === IS_AT_LEAST || node.type === DOMINATES) {
     return foldOrdered(node, ctx, options).value;
   }
 
@@ -827,18 +889,18 @@ function evalNode<C>(
     return out;
   }
 
-  if (node.type === `${TX}/Contains`) {
+  if (node.type === CONTAINS) {
     const haystack = evalNode(operand(node, 'haystack'), ctx, resolve, options, frames);
     const needle = evalNode(operand(node, 'needle'), ctx, resolve, options, frames);
     const list = Array.isArray(haystack) ? haystack : [haystack];
     return bool(list.some((el) => valuesEqual(el, needle)));
   }
 
-  if (node.type === `${TX}/IsSet`) {
+  if (node.type === IS_SET) {
     return bool(isSet(evalNode(operand(node, 'checkExpr'), ctx, resolve, options, frames)));
   }
 
-  if (node.type === `${TX}/ListItemAt`) {
+  if (node.type === LIST_ITEM_AT) {
     const list = evalSourceList(node, ctx, resolve, options, frames);
     const idx = evalNode(operand(node, 'itemIndex'), ctx, resolve, options, frames);
     if (typeof idx !== 'number' || !Number.isInteger(idx) || idx < 0) {
@@ -848,7 +910,7 @@ function evalNode<C>(
     return idx < list.length ? list[idx]! : [];
   }
 
-  if (node.type === `${TX}/Matches`) {
+  if (node.type === MATCHES) {
     const src = evalNode(operand(node, 'matchSource'), ctx, resolve, options, frames);
     if (typeof src !== 'string') {
       throw new ExpressionError(`Matches requires a string matchSource, got ${kindOf(src)}`);
@@ -1003,12 +1065,12 @@ export function explain<C = unknown>(
       }
     }
 
-    if (n.type === `${TX}/Not`) {
+    if (n.type === NOT) {
       const x = trace(operand(n, 'operand'), c, frames);
       return { type: n.type, value: bool(!truthy(requireNumber(x.value, n.type))), children: [x] };
     }
 
-    if (n.type === `${TX}/IsAtLeast` || n.type === `${TX}/Dominates`) {
+    if (n.type === IS_AT_LEAST || n.type === DOMINATES) {
       const r = foldOrdered(n, c, options);
       return { type: n.type, value: r.value, children: [], leftRef: r.left, rightRef: r.right };
     }
@@ -1048,7 +1110,7 @@ export function explain<C = unknown>(
       return { type: n.type, value: out, children };
     }
 
-    if (n.type === `${TX}/Contains`) {
+    if (n.type === CONTAINS) {
       const hay = trace(operand(n, 'haystack'), c, frames);
       const needle = trace(operand(n, 'needle'), c, frames);
       const list = Array.isArray(hay.value) ? hay.value : [hay.value];
@@ -1059,12 +1121,12 @@ export function explain<C = unknown>(
       };
     }
 
-    if (n.type === `${TX}/IsSet`) {
+    if (n.type === IS_SET) {
       const x = trace(operand(n, 'checkExpr'), c, frames);
       return { type: n.type, value: bool(isSet(x.value)), children: [x] };
     }
 
-    if (n.type === `${TX}/ListItemAt`) {
+    if (n.type === LIST_ITEM_AT) {
       const src = trace(operand(n, 'source'), c, frames);
       const idx = trace(operand(n, 'itemIndex'), c, frames);
       const list = Array.isArray(src.value) ? src.value : [src.value];
@@ -1075,7 +1137,7 @@ export function explain<C = unknown>(
       return { type: n.type, value, children: [src, idx] };
     }
 
-    if (n.type === `${TX}/Matches`) {
+    if (n.type === MATCHES) {
       const src = trace(operand(n, 'matchSource'), c, frames);
       if (typeof src.value !== 'string') {
         throw new ExpressionError(`Matches requires a string matchSource, got ${kindOf(src.value)}`);
@@ -1134,7 +1196,7 @@ export interface AlignedNode {
 }
 
 /** Operators whose trace has NO children: the verdict and the resolved identities are on the node. */
-const ORDERED_COMPARISON: ReadonlySet<string> = new Set([`${TX}/IsAtLeast`, `${TX}/Dominates`]);
+const ORDERED_COMPARISON: ReadonlySet<string> = new Set([IS_AT_LEAST, DOMINATES]);
 
 /**
  * Trace-child order for the direct and list operators — the order `explain`
@@ -1142,11 +1204,11 @@ const ORDERED_COMPARISON: ReadonlySet<string> = new Set([`${TX}/IsAtLeast`, `${T
  * (Data operands — Join's `separator`, Matches' `pattern` — are not children.)
  */
 const DIRECT_CHILDREN: Record<string, readonly string[]> = {
-  [`${TX}/Not`]: ['operand'],
-  [`${TX}/ListItemAt`]: ['source', 'itemIndex'],
-  [`${TX}/Contains`]: ['haystack', 'needle'],
-  [`${TX}/IsSet`]: ['checkExpr'],
-  [`${TX}/Matches`]: ['matchSource'],
+  [NOT]: ['operand'],
+  [LIST_ITEM_AT]: ['source', 'itemIndex'],
+  [CONTAINS]: ['haystack', 'needle'],
+  [IS_SET]: ['checkExpr'],
+  [MATCHES]: ['matchSource'],
   [`${TX}/Count`]: ['source'],
   [`${TX}/Sum`]: ['source'],
   [`${TX}/Min`]: ['source'],
