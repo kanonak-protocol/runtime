@@ -19,7 +19,7 @@
  * entry — TypeScript references `@kanonak-protocol/canonical`. The only depend-
  * ency is that one lightweight canonical-form library.
  */
-import { canonicalForm, canonicalHash, parseCoordinate, isReadableBy } from '@kanonak-protocol/canonical';
+import { canonicalForm, canonicalHash, carrierOf, Carrier, parseCoordinate, isReadableBy } from '@kanonak-protocol/canonical';
 import type { CanonicalInput, CanonicalInputStatement, CanonicalInputValue, CoordinateVersion } from '@kanonak-protocol/canonical';
 
 /** Reserved `$`-envelope keys — never emitted as ontology statements. */
@@ -274,7 +274,29 @@ export interface PackageContext {
 
 /** A scalar's raw lexical token — the precise input the canonical entry normalizes. */
 function lexical(value: unknown): string {
-  return typeof value === 'string' ? value : String(value);
+  if (typeof value === 'string') return value;
+  if (typeof value === 'bigint') return value.toString();
+  return String(value);
+}
+
+/**
+ * A JavaScript number holds every integer exactly only up to 2^53, so an integer or decimal carrier refuses a number
+ * past it rather than hash a neighbouring value (runtime#37); a bigint or a string carries any integer exactly.
+ */
+function exactLexical(prop: CodecProp, raw: unknown): string {
+  if (typeof raw === 'number') {
+    const carrier = carrierOf(prop.datatype!);
+    const unsafe =
+      (carrier === Carrier.Integer && Number.isInteger(raw) && !Number.isSafeInteger(raw)) ||
+      (carrier === Carrier.Decimal && Math.abs(raw) > Number.MAX_SAFE_INTEGER);
+    if (unsafe) {
+      throw new Error(
+        `${prop.predicate}: the number ${raw} is past 2^53, where a JavaScript number can't hold every integer ` +
+          'exactly; pass it as a bigint or a string [unsafe-number]',
+      );
+    }
+  }
+  return lexical(raw);
 }
 
 /**
@@ -543,7 +565,7 @@ function valueOf(prop: CodecProp, raw: unknown, schema: CodecSchema): CanonicalI
     );
   }
   // Datatype property — a typed scalar carrying its datatype URI.
-  return { lit: lexical(raw), datatype: prop.datatype! };
+  return { lit: exactLexical(prop, raw), datatype: prop.datatype! };
 }
 
 /**
