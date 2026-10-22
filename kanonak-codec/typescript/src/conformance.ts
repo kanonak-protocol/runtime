@@ -426,5 +426,35 @@ checkTyped(typ, 'types-in-list-items', [mixedListItems]);
 
 console.log(`typed surface: ${typedPass}/${typedTotal} pass`);
 
+// TypeScript only, since every other port keeps a number's exact source text: a JavaScript number holds every integer
+// exactly only up to 2^53, so an integer or decimal past it is refused, and a bigint carries it exactly (runtime#37).
+{
+  const d: any = JSON.parse(readFileSync(new URL('../../vectors/codec-vectors.json', import.meta.url), 'utf8'));
+  const schema: CodecSchema = d.schema;
+  const pkg: PackageContext = d.cases[0].pkg;
+  const account = (fields: Record<string, unknown>): CodecNode =>
+    ({ $id: 'probe.example.com/data@1.0.0/big', $type: 'probe.example.com/schema@1.0.0/Account', ...fields }) as CodecNode;
+  let pass = 0;
+  const expectRefused = (label: string, node: CodecNode): void => {
+    try {
+      packageContentHash([node], schema, pkg);
+      totalFails++; console.error(`unsafe-number ${label}: expected a refusal, got a hash`);
+    } catch (e) {
+      if ((e as Error).message.endsWith('[unsafe-number]')) pass++;
+      else { totalFails++; console.error(`unsafe-number ${label}: refused for another reason: ${(e as Error).message}`); }
+    }
+  };
+  expectRefused('integer number past 2^53', account({ seats: 9007199254740993 }));
+  expectRefused('decimal number past 2^53', account({ rate: 12345678901234567890 }));
+  const fromBigint = packageContentHash([account({ seats: BigInt('9007199254740993') })], schema, pkg);
+  const fromString = packageContentHash([account({ seats: '9007199254740993' })], schema, pkg);
+  if (fromBigint === fromString) pass++;
+  else { totalFails++; console.error(`unsafe-number bigint: ${fromBigint} differs from the string form's ${fromString}`); }
+  const safe = packageContentHash([account({ seats: 42 })], schema, pkg);
+  if (safe === packageContentHash([account({ seats: '42' })], schema, pkg)) pass++;
+  else { totalFails++; console.error('unsafe-number safe integer: a number and its string hash differently'); }
+  console.log(`unsafe numbers (TypeScript only): ${pass}/4 pass`);
+}
+
 if (totalFails > 0) { console.error(`\n${totalFails} FAILURES`); process.exit(1); }
 console.log('\nALL VECTORS PASS');
