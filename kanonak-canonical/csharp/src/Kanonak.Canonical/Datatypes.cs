@@ -270,7 +270,7 @@ namespace Kanonak.Canonical
                 case Carrier.Boolean: return CanonicalBoolean(raw);
                 case Carrier.String: return CanonicalString(raw);
                 case Carrier.AnyUri: return CanonicalAnyUri(raw);
-                case Carrier.LangString: return CanonicalString(raw);
+                case Carrier.LangString: throw new FormatException($"canonicalLangString: a language string is a structured value, an embedded {{ lexicalForm, language }}, so its tag is hashed with it; the langString carrier has no slot for the tag and refuses the scalar '{raw}'");
                 case Carrier.DateTime: return CanonicalDateTime(raw);
                 case Carrier.Date: return CanonicalDate(raw);
                 case Carrier.Time: return CanonicalTime(raw);

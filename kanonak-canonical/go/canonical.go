@@ -389,8 +389,10 @@ func CanonicalScalarLexical(c Carrier, raw string) (string, error) {
 		return CanonicalFloat(raw)
 	case CarrierBoolean:
 		return CanonicalBoolean(raw)
-	case CarrierString, CarrierAnyURI, CarrierLangString:
+	case CarrierString, CarrierAnyURI:
 		return CanonicalString(raw), nil
+	case CarrierLangString:
+		return "", fmt.Errorf("canonicalLangString: a language string is a structured value, an embedded { lexicalForm, language }, so its tag is hashed with it; the langString carrier has no slot for the tag and refuses the scalar %q", raw)
 	case CarrierDateTime:
 		return CanonicalDateTime(raw)
 	case CarrierDate:

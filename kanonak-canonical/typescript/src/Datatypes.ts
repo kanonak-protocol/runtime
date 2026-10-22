@@ -331,7 +331,7 @@ export function canonicalScalarLexical(carrier: Carrier, raw: string): string {
     case Carrier.Boolean: return canonicalBoolean(raw);
     case Carrier.String: return canonicalString(raw);
     case Carrier.AnyUri: return canonicalAnyUri(raw);
-    case Carrier.LangString: return canonicalString(raw);
+    case Carrier.LangString: throw new Error(`canonicalLangString: a language string is a structured value, an embedded { lexicalForm, language }, so its tag is hashed with it; the langString carrier has no slot for the tag and refuses the scalar '${raw}'`);
     case Carrier.DateTime: return canonicalDateTime(raw);
     case Carrier.Date: return canonicalDate(raw);
     case Carrier.Time: return canonicalTime(raw);

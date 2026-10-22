@@ -452,6 +452,10 @@ pub fn canonical_time(raw: &str) -> Result<String, CanonError> {
     ))
 }
 
+fn lang_string_refused(raw: &str) -> CanonError {
+    CanonError(format!("canonicalLangString: a language string is a structured value, an embedded {{ lexicalForm, language }}, so its tag is hashed with it; the langString carrier has no slot for the tag and refuses the scalar '{}'", raw))
+}
+
 pub fn canonical_scalar_lexical(carrier: Carrier, raw: &str) -> Result<String, CanonError> {
     Ok(match carrier {
         Carrier::Integer => canonical_integer(raw)?,
@@ -461,7 +465,7 @@ pub fn canonical_scalar_lexical(carrier: Carrier, raw: &str) -> Result<String, C
         Carrier::Boolean => canonical_boolean(raw)?,
         Carrier::String => canonical_string(raw),
         Carrier::AnyUri => canonical_string(raw),
-        Carrier::LangString => canonical_string(raw),
+        Carrier::LangString => return Err(lang_string_refused(raw)),
         Carrier::DateTime => canonical_date_time(raw)?,
         Carrier::Date => canonical_date(raw)?,
         Carrier::Time => canonical_time(raw)?,
