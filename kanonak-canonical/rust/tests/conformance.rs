@@ -20,7 +20,16 @@ fn read(name: &str) -> J {
 
 #[test]
 fn lexical_vectors() {
-    let doc = read("lexical-vectors.json");
+    run_lexical("lexical-vectors.json");
+}
+
+#[test]
+fn lexical_ieee_vectors() {
+    run_lexical("lexical-ieee-vectors.json");
+}
+
+fn run_lexical(name: &str) {
+    let doc = read(name);
     let mut fails = 0;
     for v in doc["vectors"].as_array().unwrap() {
         let id = v["id"].as_str().unwrap();
@@ -51,7 +60,7 @@ fn lexical_vectors() {
             }
         }
     }
-    assert_eq!(fails, 0, "{} lexical vector(s) failed", fails);
+    assert_eq!(fails, 0, "{} vector(s) in {} failed", fails, name);
 }
 
 #[test]

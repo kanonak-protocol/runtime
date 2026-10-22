@@ -199,30 +199,51 @@ fn canonical_ieee(raw: &str, single: bool, label: &str) -> Result<String, CanonE
     let n: f64 = t
         .parse()
         .map_err(|_| CanonError(format!("canonical{}: '{}' invalid", label, raw)))?;
-    if single {
-        let f = n as f32;
-        if !f.is_finite() {
-            return Err(CanonError(format!(
-                "canonical{}: '{}' out of range",
-                label, raw
-            )));
-        }
-        if f == 0.0 {
-            return Ok("0".to_string());
-        }
-        Ok(format!("{}", f))
-    } else {
-        if !n.is_finite() {
-            return Err(CanonError(format!(
-                "canonical{}: '{}' out of range",
-                label, raw
-            )));
-        }
-        if n == 0.0 {
-            return Ok("0".to_string());
-        }
-        Ok(format!("{}", n))
+    // A float is its value rounded to 32 bits, then written as that double (runtime#35).
+    let value = if single { (n as f32) as f64 } else { n };
+    if !value.is_finite() {
+        return Err(CanonError(format!(
+            "canonical{}: '{}' out of range",
+            label, raw
+        )));
     }
+    if value == 0.0 {
+        return Ok("0".to_string());
+    }
+    Ok(ecmascript_double_token(value))
+}
+
+/// ECMAScript's Number::toString of a finite, non-zero double: RFC 8785's number notation. `{:e}` gives the
+/// shortest round-tripping digits; only the notation is re-derived, plain while -6 < n <= 21.
+fn ecmascript_double_token(d: f64) -> String {
+    let sign = if d < 0.0 { "-" } else { "" };
+    let scientific = format!("{:e}", d.abs());
+    let (mantissa, exponent) = scientific
+        .split_once('e')
+        .expect("Rust's {:e} always writes an exponent");
+    let exponent: i32 = exponent.parse().expect("Rust's {:e} exponent is an integer");
+    let (int_part, frac_part) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let combined = format!("{}{}", int_part, frac_part);
+    let lead = combined.len() - combined.trim_start_matches('0').len();
+    let digits = combined[lead..].trim_end_matches('0');
+    let n = int_part.len() as i32 - lead as i32 + exponent;
+    let k = digits.len() as i32;
+    let body = if k <= n && n <= 21 {
+        format!("{}{}", digits, "0".repeat((n - k) as usize))
+    } else if 0 < n && n <= 21 {
+        format!("{}.{}", &digits[..n as usize], &digits[n as usize..])
+    } else if -6 < n && n <= 0 {
+        format!("0.{}{}", "0".repeat((-n) as usize), digits)
+    } else {
+        let e = n - 1;
+        let head = if k == 1 {
+            digits.to_string()
+        } else {
+            format!("{}.{}", &digits[..1], &digits[1..])
+        };
+        format!("{}e{}{}", head, if e >= 0 { "+" } else { "-" }, e.abs())
+    };
+    format!("{}{}", sign, body)
 }
 
 pub fn canonical_double(raw: &str) -> Result<String, CanonError> {

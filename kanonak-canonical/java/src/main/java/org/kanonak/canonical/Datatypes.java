@@ -1,5 +1,8 @@
 package org.kanonak.canonical;
 
+import java.math.BigDecimal;
+import java.math.MathContext;
+import java.math.RoundingMode;
 import java.text.Normalizer;
 import java.time.LocalDateTime;
 import java.util.Base64;
@@ -64,22 +67,60 @@ public final class Datatypes {
         if (!IEEE.matcher(t).matches())
             throw new IllegalArgumentException("canonical" + label + ": '" + raw + "' invalid");
         double n = Double.parseDouble(t);
-        if (single) {
-            float f = (float) n;
-            if (Float.isNaN(f) || Float.isInfinite(f))
-                throw new IllegalArgumentException("canonical" + label + ": '" + raw + "' out of range");
-            if (f == 0.0f) return "0";
-            return shortest(Float.toString(f));
-        }
-        if (Double.isNaN(n) || Double.isInfinite(n))
+        // A float is its value rounded to 32 bits, then written as that double (runtime#35).
+        double value = single ? (double) (float) n : n;
+        if (Double.isNaN(value) || Double.isInfinite(value))
             throw new IllegalArgumentException("canonical" + label + ": '" + raw + "' out of range");
-        if (n == 0.0) return "0";
-        return shortest(Double.toString(n));
+        if (value == 0.0) return "0";
+        return ecmaScriptDoubleToken(value);
     }
 
-    /** Java prints whole values as "1000.0"; the canonical form drops the ".0". */
-    private static String shortest(String s) {
-        return s.endsWith(".0") ? s.substring(0, s.length() - 2) : s;
+    /**
+     * ECMAScript's Number::toString of a finite, non-zero double: RFC 8785's number notation, plain while
+     * -6 &lt; n &lt;= 21. The digits are searched for here, since Double.toString is not the shortest
+     * round-tripping decimal before JDK 19.
+     */
+    private static String ecmaScriptDoubleToken(double d) {
+        String sign = d < 0 ? "-" : "";
+        BigDecimal shortest = shortestRoundTrip(Math.abs(d));
+        String digits = shortest.unscaledValue().toString();
+        int k = digits.length();
+        int n = k - shortest.scale();
+        String body;
+        if (k <= n && n <= 21) {
+            body = digits + "0".repeat(n - k);
+        } else if (0 < n && n <= 21) {
+            body = digits.substring(0, n) + "." + digits.substring(n);
+        } else if (-6 < n && n <= 0) {
+            body = "0." + "0".repeat(-n) + digits;
+        } else {
+            int e = n - 1;
+            String head = k == 1 ? digits : digits.charAt(0) + "." + digits.substring(1);
+            body = head + "e" + (e >= 0 ? "+" : "-") + Math.abs(e);
+        }
+        return sign + body;
+    }
+
+    /**
+     * The fewest significant digits that read back as {@code d}, and of those the closest to its exact value,
+     * the even one on a tie: ECMAScript's choice. The rounded value's neighbours are tried too, since a power of
+     * two has a narrower gap below it than above.
+     */
+    private static BigDecimal shortestRoundTrip(double d) {
+        BigDecimal exact = new BigDecimal(d);
+        for (int precision = 1; precision <= 17; precision++) {
+            BigDecimal rounded = exact.round(new MathContext(precision, RoundingMode.HALF_EVEN));
+            BigDecimal ulp = rounded.ulp();
+            BigDecimal best = null;
+            for (BigDecimal candidate : new BigDecimal[] { rounded.subtract(ulp), rounded, rounded.add(ulp) }) {
+                if (candidate.signum() <= 0 || Double.parseDouble(candidate.toString()) != d) continue;
+                if (best == null) { best = candidate; continue; }
+                int closer = candidate.subtract(exact).abs().compareTo(best.subtract(exact).abs());
+                if (closer < 0 || (closer == 0 && !candidate.unscaledValue().testBit(0))) best = candidate;
+            }
+            if (best != null) return best.stripTrailingZeros();
+        }
+        throw new IllegalStateException("no decimal of at most 17 significant digits reads back as " + d);
     }
 
     public static String canonicalDouble(String raw) { return canonicalIeee(raw, false, "Double"); }

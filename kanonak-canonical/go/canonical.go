@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -152,17 +153,62 @@ func canonicalIeee(raw string, single bool, label string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("canonical%s: %q invalid", label, raw)
 	}
+	// A float is its value rounded to 32 bits, then written as that double (runtime#35).
 	if single {
-		f := float64(float32(n))
-		if f == 0 {
-			return "0", nil
-		}
-		return strconv.FormatFloat(f, 'g', -1, 32), nil
+		n = float64(float32(n))
+	}
+	if math.IsInf(n, 0) || math.IsNaN(n) {
+		return "", fmt.Errorf("canonical%s: %q out of range", label, raw)
 	}
 	if n == 0 {
 		return "0", nil
 	}
-	return strconv.FormatFloat(n, 'g', -1, 64), nil
+	return ecmaScriptDoubleToken(n), nil
+}
+
+// ecmaScriptDoubleToken is ECMAScript's Number::toString of a finite, non-zero double: RFC 8785's number
+// notation. FormatFloat gives the shortest round-tripping digits; only the notation is re-derived, plain while
+// -6 < n <= 21.
+func ecmaScriptDoubleToken(d float64) string {
+	sign := ""
+	if d < 0 {
+		sign = "-"
+		d = -d
+	}
+	mantissa, exponentText, _ := strings.Cut(strconv.FormatFloat(d, 'e', -1, 64), "e")
+	exponent, err := strconv.Atoi(exponentText)
+	if err != nil {
+		panic(fmt.Sprintf("strconv.FormatFloat wrote exponent %q, not an integer", exponentText))
+	}
+	intPart, fracPart, _ := strings.Cut(mantissa, ".")
+	combined := intPart + fracPart
+	trimmed := strings.TrimLeft(combined, "0")
+	lead := len(combined) - len(trimmed)
+	digits := strings.TrimRight(trimmed, "0")
+	n := len(intPart) - lead + exponent
+	k := len(digits)
+	var body string
+	switch {
+	case k <= n && n <= 21:
+		body = digits + strings.Repeat("0", n-k)
+	case 0 < n && n <= 21:
+		body = digits[:n] + "." + digits[n:]
+	case -6 < n && n <= 0:
+		body = "0." + strings.Repeat("0", -n) + digits
+	default:
+		e := n - 1
+		head := digits
+		if k > 1 {
+			head = digits[:1] + "." + digits[1:]
+		}
+		exponentSign := "+"
+		if e < 0 {
+			exponentSign = "-"
+			e = -e
+		}
+		body = head + "e" + exponentSign + strconv.Itoa(e)
+	}
+	return sign + body
 }
 
 func CanonicalDouble(raw string) (string, error) { return canonicalIeee(raw, false, "Double") }
