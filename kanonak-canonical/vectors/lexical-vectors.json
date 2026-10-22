@@ -48,6 +48,7 @@
     { "id": "string-no-whitespace-collapse", "carrier": "string", "input": "a  b\t", "expected": "a  b\t" },
 
     { "id": "anyURI-nfc", "carrier": "anyURI", "input": "https://example.org/é", "expected": "https://example.org/é" },
+    { "id": "langstring-scalar-refused", "carrier": "langString", "input": "hello", "expectError": true },
 
     { "id": "hexBinary-lowercase-to-upper", "carrier": "hexBinary", "input": "0fb7", "expected": "0FB7" },
     { "id": "hexBinary-already-upper", "carrier": "hexBinary", "input": "0FB7", "expected": "0FB7" },

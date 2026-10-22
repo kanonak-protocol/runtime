@@ -213,7 +213,8 @@ public final class Datatypes {
             case DOUBLE: return canonicalDouble(raw);
             case FLOAT: return canonicalFloat(raw);
             case BOOLEAN: return canonicalBoolean(raw);
-            case STRING: case ANY_URI: case LANG_STRING: return canonicalString(raw);
+            case STRING: case ANY_URI: return canonicalString(raw);
+            case LANG_STRING: throw new IllegalArgumentException("canonicalLangString: a language string is a structured value, an embedded { lexicalForm, language }, so its tag is hashed with it; the langString carrier has no slot for the tag and refuses the scalar '" + raw + "'");
             case DATE_TIME: return canonicalDateTime(raw);
             case DATE: return canonicalDate(raw);
             case TIME: return canonicalTime(raw);

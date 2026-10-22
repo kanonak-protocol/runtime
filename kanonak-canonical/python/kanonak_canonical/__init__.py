@@ -463,6 +463,10 @@ def canonical_time(raw: str) -> str:
     return f"{hh}:{m.group(2)}:{m.group(3)}{fraction}{_canonical_tz(m.group(5))}"
 
 
+def _refuse_lang_string(raw: str) -> str:
+    raise ValueError(f"canonicalLangString: a language string is a structured value, an embedded {{ lexicalForm, language }}, so its tag is hashed with it; the langString carrier has no slot for the tag and refuses the scalar '{raw}'")
+
+
 _DISPATCH = {
     Carrier.INTEGER: canonical_integer,
     Carrier.DECIMAL: canonical_decimal,
@@ -471,7 +475,7 @@ _DISPATCH = {
     Carrier.BOOLEAN: canonical_boolean,
     Carrier.STRING: canonical_string,
     Carrier.ANY_URI: canonical_string,
-    Carrier.LANG_STRING: canonical_string,
+    Carrier.LANG_STRING: _refuse_lang_string,
     Carrier.DATE_TIME: canonical_date_time,
     Carrier.DATE: canonical_date,
     Carrier.TIME: canonical_time,
