@@ -1,10 +1,10 @@
 package org.kanonak.canonical;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.math.MathContext;
 import java.math.RoundingMode;
 import java.text.Normalizer;
-import java.time.LocalDateTime;
 import java.util.Base64;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -169,41 +169,129 @@ public final class Datatypes {
         return Base64.getEncoder().encodeToString(bytes);
     }
 
-    // -- temporal -----------------------------------------------------------
+    // -- temporal: XSD 1.1's rules, on the proleptic Gregorian calendar with a year 0 --
+    // A year of any length is an exact BigInteger, so a UTC shift across a year boundary has no range limit
+    // (runtime#36).
 
     public static String canonicalDateTime(String raw) {
+        String what = "canonicalDateTime";
         Matcher m = DATE_TIME.matcher(raw.trim());
         if (!m.matches())
-            throw new IllegalArgumentException("canonicalDateTime: '" + raw + "' invalid");
+            throw new IllegalArgumentException(what + ": '" + raw + "' invalid");
         String fraction = canonicalFraction(m.group(7));
         String tz = m.group(8);
-        if (tz == null || tz.isEmpty())
-            return canonicalYear(m.group(1)) + "-" + m.group(2) + "-" + m.group(3)
-                + "T" + m.group(4) + ":" + m.group(5) + ":" + m.group(6) + fraction;
-        LocalDateTime dt = LocalDateTime.of(
-            Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)), Integer.parseInt(m.group(3)),
-            Integer.parseInt(m.group(4)), Integer.parseInt(m.group(5)), Integer.parseInt(m.group(6)));
-        LocalDateTime s = dt.minusMinutes(tzOffsetMinutes(tz));
-        return canonicalYear(Integer.toString(s.getYear())) + "-" + pad2(s.getMonthValue()) + "-" + pad2(s.getDayOfMonth())
-            + "T" + pad2(s.getHour()) + ":" + pad2(s.getMinute()) + ":" + pad2(s.getSecond()) + fraction + "Z";
+        Civil civil = civilOf(m.group(1), m.group(2), m.group(3), what, raw);
+        int[] clock = clockOf(m.group(4), m.group(5), m.group(6), fraction, what, raw);
+        int minutes = clock[0] * 60 + clock[1] - offsetMinutes(tz, what, raw);
+        if (minutes < 0) {
+            minutes += 1440;
+            civil = civil.previousDay();
+        } else if (minutes >= 1440) {
+            minutes -= 1440;
+            civil = civil.nextDay();
+        }
+        return yearText(civil.year) + "-" + pad2(civil.month) + "-" + pad2(civil.day)
+            + "T" + pad2(minutes / 60) + ":" + pad2(minutes % 60) + ":" + m.group(6) + fraction
+            + (tz == null || tz.isEmpty() ? "" : "Z");
     }
 
     public static String canonicalDate(String raw) {
+        String what = "canonicalDate";
         Matcher m = DATE.matcher(raw.trim());
         if (!m.matches())
-            throw new IllegalArgumentException("canonicalDate: '" + raw + "' invalid");
-        return canonicalYear(m.group(1)) + "-" + m.group(2) + "-" + m.group(3) + canonicalTz(m.group(4));
+            throw new IllegalArgumentException(what + ": '" + raw + "' invalid");
+        Civil civil = civilOf(m.group(1), m.group(2), m.group(3), what, raw);
+        offsetMinutes(m.group(4), what, raw);
+        return yearText(civil.year) + "-" + m.group(2) + "-" + m.group(3) + canonicalTz(m.group(4));
     }
 
     public static String canonicalTime(String raw) {
+        String what = "canonicalTime";
         Matcher m = TIME.matcher(raw.trim());
         if (!m.matches())
-            throw new IllegalArgumentException("canonicalTime: '" + raw + "' invalid");
-        String hh = m.group(1);
+            throw new IllegalArgumentException(what + ": '" + raw + "' invalid");
         String fraction = canonicalFraction(m.group(4));
-        if (hh.equals("24") && m.group(2).equals("00") && m.group(3).equals("00") && fraction.isEmpty())
-            hh = "00";
+        int[] clock = clockOf(m.group(1), m.group(2), m.group(3), fraction, what, raw);
+        offsetMinutes(m.group(5), what, raw);
+        String hh = clock[0] == 24 ? "00" : m.group(1);
         return hh + ":" + m.group(2) + ":" + m.group(3) + fraction + canonicalTz(m.group(5));
+    }
+
+    private static final int[] DAYS_IN_MONTH = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+    private static final BigInteger FOUR_HUNDRED = BigInteger.valueOf(400);
+
+    private static boolean isLeapYear(BigInteger year) {
+        int r = year.mod(FOUR_HUNDRED).intValue();
+        return r % 4 == 0 && (r % 100 != 0 || r == 0);
+    }
+
+    private static int daysInMonth(BigInteger year, int month) {
+        return month == 2 && isLeapYear(year) ? 29 : DAYS_IN_MONTH[month - 1];
+    }
+
+    /** A year at least four digits wide, its sign kept; year 0 has none. */
+    private static String yearText(BigInteger year) {
+        String digits = year.abs().toString();
+        while (digits.length() < 4) digits = "0" + digits;
+        return (year.signum() < 0 ? "-" : "") + digits;
+    }
+
+    private static final class Civil {
+        final BigInteger year;
+        final int month;
+        final int day;
+
+        Civil(BigInteger year, int month, int day) {
+            this.year = year;
+            this.month = month;
+            this.day = day;
+        }
+
+        Civil nextDay() {
+            if (day < daysInMonth(year, month)) return new Civil(year, month, day + 1);
+            if (month < 12) return new Civil(year, month + 1, 1);
+            return new Civil(year.add(BigInteger.ONE), 1, 1);
+        }
+
+        Civil previousDay() {
+            if (day > 1) return new Civil(year, month, day - 1);
+            if (month > 1) return new Civil(year, month - 1, daysInMonth(year, month - 1));
+            return new Civil(year.subtract(BigInteger.ONE), 12, 31);
+        }
+    }
+
+    private static Civil civilOf(String yy, String mo, String dd, String what, String raw) {
+        BigInteger year = new BigInteger(yy);
+        int month = Integer.parseInt(mo);
+        int day = Integer.parseInt(dd);
+        if (month < 1 || month > 12)
+            throw new IllegalArgumentException(what + ": '" + raw + "' has month " + mo + "; a month is 01 to 12");
+        if (day < 1 || day > daysInMonth(year, month))
+            throw new IllegalArgumentException(what + ": '" + raw + "' has day " + dd + ", which month " + mo
+                + " of year " + yearText(year) + " doesn't have");
+        return new Civil(year, month, day);
+    }
+
+    /** Minutes east of UTC, and 0 with no offset. XSD 1.1 bounds an offset at 14:00. */
+    private static int offsetMinutes(String tz, String what, String raw) {
+        if (tz == null || tz.isEmpty() || tz.equals("Z")) return 0;
+        int hours = Integer.parseInt(tz.substring(1, 3));
+        int minutes = Integer.parseInt(tz.substring(4, 6));
+        if (minutes > 59 || hours > 14 || (hours == 14 && minutes > 0))
+            throw new IllegalArgumentException(what + ": '" + raw + "' has offset " + tz + "; an offset is at most 14:00 either way");
+        return (tz.charAt(0) == '-' ? -1 : 1) * (hours * 60 + minutes);
+    }
+
+    /** XSD 1.1: no 60th second, and 24:00:00 only as the first instant of the next day. Returns {hour, minute}. */
+    private static int[] clockOf(String hh, String mi, String ss, String fraction, String what, String raw) {
+        int hour = Integer.parseInt(hh);
+        int minute = Integer.parseInt(mi);
+        int second = Integer.parseInt(ss);
+        boolean endOfDay = hour == 24 && minute == 0 && second == 0 && fraction.isEmpty();
+        if (minute > 59 || second > 59 || (hour > 23 && !endOfDay))
+            throw new IllegalArgumentException(what + ": '" + raw + "' has time " + hh + ":" + mi + ":" + ss + fraction
+                + "; XSD 1.1 allows 00:00:00 to 23:59:59, and 24:00:00 exactly");
+        return new int[] { hour, minute };
     }
 
     public static String canonicalScalarLexical(Carrier c, String raw) {
@@ -226,14 +314,6 @@ public final class Datatypes {
 
     // -- helpers ------------------------------------------------------------
 
-    private static String canonicalYear(String raw) {
-        boolean neg = raw.startsWith("-");
-        String d = stripLeading(neg ? raw.substring(1) : raw, '0');
-        if (d.isEmpty()) d = "0";
-        while (d.length() < 4) d = "0" + d;
-        return (neg ? "-" : "") + d;
-    }
-
     private static String canonicalFraction(String frac) {
         if (frac == null || frac.isEmpty()) return "";
         String t = stripTrailing(frac.startsWith(".") ? frac.substring(1) : frac, '0');
@@ -244,12 +324,6 @@ public final class Datatypes {
         if (tz == null || tz.isEmpty()) return "";
         if (tz.equals("Z") || tz.equals("+00:00") || tz.equals("-00:00")) return "Z";
         return tz;
-    }
-
-    private static int tzOffsetMinutes(String tz) {
-        if (tz.equals("Z")) return 0;
-        int sign = tz.charAt(0) == '-' ? -1 : 1;
-        return sign * (Integer.parseInt(tz.substring(1, 3)) * 60 + Integer.parseInt(tz.substring(4, 6)));
     }
 
     private static String pad2(int n) { return n < 10 ? "0" + n : Integer.toString(n); }

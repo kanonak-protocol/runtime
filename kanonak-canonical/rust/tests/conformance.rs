@@ -28,6 +28,11 @@ fn lexical_ieee_vectors() {
     run_lexical("lexical-ieee-vectors.json");
 }
 
+#[test]
+fn lexical_temporal_vectors() {
+    run_lexical("lexical-temporal-vectors.json");
+}
+
 fn run_lexical(name: &str) {
     let doc = read(name);
     let mut fails = 0;

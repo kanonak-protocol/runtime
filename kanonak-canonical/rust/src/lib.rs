@@ -317,7 +317,9 @@ pub fn canonical_base64(raw: &str) -> Result<String, CanonError> {
     Ok(base64_encode(&bytes))
 }
 
-// -- temporal ---------------------------------------------------------------
+// -- temporal: XSD 1.1's rules, on the proleptic Gregorian calendar with a year 0 ---------
+// A year of any length is kept as its sign and digits, so a UTC shift across a year boundary has no range limit
+// (runtime#36). A leap year needs only the year's remainder by 400, and a shift moves the year by one at most.
 
 fn pad2(n: i64) -> String {
     if n < 10 {
@@ -327,16 +329,182 @@ fn pad2(n: i64) -> String {
     }
 }
 
-fn canonical_year(raw: &str) -> String {
-    let neg = raw.starts_with('-');
-    let digits = if neg { &raw[1..] } else { raw }.trim_start_matches('0');
-    let digits = if digits.is_empty() { "0" } else { digits };
-    let padded = if digits.len() < 4 {
-        format!("{:0>4}", digits)
+/// A year of any length: its sign and its digits, without leading zeros. Year 0 is "0", with no sign.
+struct Year {
+    negative: bool,
+    digits: String,
+}
+
+impl Year {
+    fn parse(raw: &str) -> Year {
+        let digits = raw.trim_start_matches('-').trim_start_matches('0');
+        Year::of(raw.starts_with('-'), if digits.is_empty() { "0".to_string() } else { digits.to_string() })
+    }
+
+    fn of(negative: bool, digits: String) -> Year {
+        Year { negative: negative && digits != "0", digits }
+    }
+
+    /// The year's remainder by 400, never negative.
+    fn rem_400(&self) -> u32 {
+        let r = self.digits.bytes().fold(0u32, |acc, b| (acc * 10 + u32::from(b - b'0')) % 400);
+        if self.negative && r != 0 {
+            400 - r
+        } else {
+            r
+        }
+    }
+
+    fn is_leap(&self) -> bool {
+        let r = self.rem_400();
+        r % 4 == 0 && (r % 100 != 0 || r == 0)
+    }
+
+    /// At least four digits wide, its sign kept.
+    fn text(&self) -> String {
+        format!("{}{:0>4}", if self.negative { "-" } else { "" }, self.digits)
+    }
+
+    fn next(&self) -> Year {
+        if self.negative {
+            Year::of(true, decrement_digits(&self.digits))
+        } else {
+            Year::of(false, increment_digits(&self.digits))
+        }
+    }
+
+    fn previous(&self) -> Year {
+        if self.negative || self.digits == "0" {
+            Year::of(true, increment_digits(&self.digits))
+        } else {
+            Year::of(false, decrement_digits(&self.digits))
+        }
+    }
+}
+
+fn increment_digits(digits: &str) -> String {
+    let mut bytes = digits.as_bytes().to_vec();
+    for i in (0..bytes.len()).rev() {
+        if bytes[i] == b'9' {
+            bytes[i] = b'0';
+        } else {
+            bytes[i] += 1;
+            return String::from_utf8(bytes).expect("ASCII digits");
+        }
+    }
+    format!("1{}", String::from_utf8(bytes).expect("ASCII digits"))
+}
+
+/// One less than a positive number written in digits.
+fn decrement_digits(digits: &str) -> String {
+    let mut bytes = digits.as_bytes().to_vec();
+    for i in (0..bytes.len()).rev() {
+        if bytes[i] == b'0' {
+            bytes[i] = b'9';
+        } else {
+            bytes[i] -= 1;
+            break;
+        }
+    }
+    let text = String::from_utf8(bytes).expect("ASCII digits");
+    let trimmed = text.trim_start_matches('0');
+    if trimmed.is_empty() {
+        "0".to_string()
     } else {
-        digits.to_string()
-    };
-    format!("{}{}", if neg { "-" } else { "" }, padded)
+        trimmed.to_string()
+    }
+}
+
+const DAYS_IN_MONTH: [u32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+fn days_in_month(year: &Year, month: u32) -> u32 {
+    if month == 2 && year.is_leap() {
+        29
+    } else {
+        DAYS_IN_MONTH[(month - 1) as usize]
+    }
+}
+
+struct Civil {
+    year: Year,
+    month: u32,
+    day: u32,
+}
+
+fn two_digits(field: &str) -> u32 {
+    field.parse().expect("the pattern matched two digits")
+}
+
+fn civil_of(yy: &str, mo: &str, dd: &str, what: &str, raw: &str) -> Result<Civil, CanonError> {
+    let year = Year::parse(yy);
+    let (month, day) = (two_digits(mo), two_digits(dd));
+    if !(1..=12).contains(&month) {
+        return Err(CanonError(format!("{}: '{}' has month {}; a month is 01 to 12", what, raw, mo)));
+    }
+    if day < 1 || day > days_in_month(&year, month) {
+        return Err(CanonError(format!(
+            "{}: '{}' has day {}, which month {} of year {} doesn't have",
+            what,
+            raw,
+            dd,
+            mo,
+            year.text()
+        )));
+    }
+    Ok(Civil { year, month, day })
+}
+
+fn next_day(c: Civil) -> Civil {
+    if c.day < days_in_month(&c.year, c.month) {
+        Civil { day: c.day + 1, ..c }
+    } else if c.month < 12 {
+        Civil { month: c.month + 1, day: 1, ..c }
+    } else {
+        Civil { year: c.year.next(), month: 1, day: 1 }
+    }
+}
+
+fn previous_day(c: Civil) -> Civil {
+    if c.day > 1 {
+        Civil { day: c.day - 1, ..c }
+    } else if c.month > 1 {
+        let day = days_in_month(&c.year, c.month - 1);
+        Civil { month: c.month - 1, day, ..c }
+    } else {
+        Civil { year: c.year.previous(), month: 12, day: 31 }
+    }
+}
+
+/// Minutes east of UTC, or None with no offset. XSD 1.1 bounds an offset at 14:00.
+fn offset_minutes(tz: &str, what: &str, raw: &str) -> Result<Option<i64>, CanonError> {
+    if tz.is_empty() {
+        return Ok(None);
+    }
+    if tz == "Z" {
+        return Ok(Some(0));
+    }
+    let (hours, minutes) = (i64::from(two_digits(&tz[1..3])), i64::from(two_digits(&tz[4..6])));
+    if minutes > 59 || hours > 14 || (hours == 14 && minutes > 0) {
+        return Err(CanonError(format!(
+            "{}: '{}' has offset {}; an offset is at most 14:00 either way",
+            what, raw, tz
+        )));
+    }
+    let sign = if tz.starts_with('-') { -1 } else { 1 };
+    Ok(Some(sign * (hours * 60 + minutes)))
+}
+
+/// XSD 1.1: no 60th second, and 24:00:00 only as the first instant of the next day.
+fn clock_of(hh: &str, mi: &str, ss: &str, fraction: &str, what: &str, raw: &str) -> Result<(i64, i64), CanonError> {
+    let (hour, minute, second) = (i64::from(two_digits(hh)), i64::from(two_digits(mi)), i64::from(two_digits(ss)));
+    let end_of_day = hour == 24 && minute == 0 && second == 0 && fraction.is_empty();
+    if minute > 59 || second > 59 || (hour > 23 && !end_of_day) {
+        return Err(CanonError(format!(
+            "{}: '{}' has time {}:{}:{}{}; XSD 1.1 allows 00:00:00 to 23:59:59, and 24:00:00 exactly",
+            what, raw, hh, mi, ss, fraction
+        )));
+    }
+    Ok((hour, minute))
 }
 
 fn canonical_fraction(frac: &str) -> String {
@@ -361,92 +529,63 @@ fn canonical_tz(tz: &str) -> String {
     }
 }
 
-fn tz_offset_minutes(tz: &str) -> i64 {
-    if tz == "Z" {
-        return 0;
-    }
-    let sign = if tz.starts_with('-') { -1 } else { 1 };
-    let hh: i64 = tz[1..3].parse().unwrap();
-    let mm: i64 = tz[4..6].parse().unwrap();
-    sign * (hh * 60 + mm)
-}
-
 pub fn canonical_date_time(raw: &str) -> Result<String, CanonError> {
+    let what = "canonicalDateTime";
     let caps =
         re!(r"^(-?\d{4,})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$")
             .captures(raw.trim())
-            .ok_or_else(|| CanonError(format!("canonicalDateTime: '{}' invalid", raw)))?;
+            .ok_or_else(|| CanonError(format!("{}: '{}' invalid", what, raw)))?;
     let g = |i: usize| caps.get(i).map(|m| m.as_str()).unwrap_or("");
-    let (yy, mo, dd, hh, mi, ss) = (g(1), g(2), g(3), g(4), g(5), g(6));
     let fraction = canonical_fraction(g(7));
     let tz = g(8);
-
-    if tz.is_empty() {
-        return Ok(format!(
-            "{}-{}-{}T{}:{}:{}{}",
-            canonical_year(yy),
-            mo,
-            dd,
-            hh,
-            mi,
-            ss,
-            fraction
-        ));
+    let mut civil = civil_of(g(1), g(2), g(3), what, raw)?;
+    let (hour, minute) = clock_of(g(4), g(5), g(6), &fraction, what, raw)?;
+    let mut minutes = hour * 60 + minute - offset_minutes(tz, what, raw)?.unwrap_or(0);
+    if minutes < 0 {
+        minutes += 1440;
+        civil = previous_day(civil);
+    } else if minutes >= 1440 {
+        minutes -= 1440;
+        civil = next_day(civil);
     }
-    // Proleptic-Gregorian UTC shift on the integer fields (days-from-epoch).
-    let days = days_from_civil(
-        yy.parse().unwrap(),
-        mo.parse().unwrap(),
-        dd.parse().unwrap(),
-    );
-    let secs = days * 86400
-        + hh.parse::<i64>().unwrap() * 3600
-        + mi.parse::<i64>().unwrap() * 60
-        + ss.parse::<i64>().unwrap();
-    let shifted = secs - tz_offset_minutes(tz) * 60;
-    let (y, m, d, sod) = civil_from_secs(shifted);
-    let (sh, sm, sss) = (sod / 3600, (sod % 3600) / 60, sod % 60);
     Ok(format!(
-        "{}-{}-{}T{}:{}:{}{}Z",
-        canonical_year(&y.to_string()),
-        pad2(m),
-        pad2(d),
-        pad2(sh),
-        pad2(sm),
-        pad2(sss),
-        fraction
+        "{}-{}-{}T{}:{}:{}{}{}",
+        civil.year.text(),
+        pad2(i64::from(civil.month)),
+        pad2(i64::from(civil.day)),
+        pad2(minutes / 60),
+        pad2(minutes % 60),
+        g(6),
+        fraction,
+        if tz.is_empty() { "" } else { "Z" }
     ))
 }
 
 pub fn canonical_date(raw: &str) -> Result<String, CanonError> {
+    let what = "canonicalDate";
     let caps = re!(r"^(-?\d{4,})-(\d{2})-(\d{2})(Z|[+-]\d{2}:\d{2})?$")
         .captures(raw.trim())
-        .ok_or_else(|| CanonError(format!("canonicalDate: '{}' invalid", raw)))?;
+        .ok_or_else(|| CanonError(format!("{}: '{}' invalid", what, raw)))?;
     let g = |i: usize| caps.get(i).map(|m| m.as_str()).unwrap_or("");
-    Ok(format!(
-        "{}-{}-{}{}",
-        canonical_year(g(1)),
-        g(2),
-        g(3),
-        canonical_tz(g(4))
-    ))
+    let civil = civil_of(g(1), g(2), g(3), what, raw)?;
+    offset_minutes(g(4), what, raw)?;
+    Ok(format!("{}-{}-{}{}", civil.year.text(), g(2), g(3), canonical_tz(g(4))))
 }
 
 pub fn canonical_time(raw: &str) -> Result<String, CanonError> {
+    let what = "canonicalTime";
     let caps = re!(r"^(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$")
         .captures(raw.trim())
-        .ok_or_else(|| CanonError(format!("canonicalTime: '{}' invalid", raw)))?;
+        .ok_or_else(|| CanonError(format!("{}: '{}' invalid", what, raw)))?;
     let g = |i: usize| caps.get(i).map(|m| m.as_str()).unwrap_or("");
-    let (mut hh, mi, ss) = (g(1).to_string(), g(2), g(3));
     let fraction = canonical_fraction(g(4));
-    if hh == "24" && mi == "00" && ss == "00" && fraction.is_empty() {
-        hh = "00".to_string();
-    }
+    let (hour, _) = clock_of(g(1), g(2), g(3), &fraction, what, raw)?;
+    offset_minutes(g(5), what, raw)?;
     Ok(format!(
         "{}:{}:{}{}{}",
-        hh,
-        mi,
-        ss,
+        if hour == 24 { "00" } else { g(1) },
+        g(2),
+        g(3),
         fraction,
         canonical_tz(g(5))
     ))
@@ -472,32 +611,6 @@ pub fn canonical_scalar_lexical(carrier: Carrier, raw: &str) -> Result<String, C
         Carrier::HexBinary => canonical_hex_binary(raw)?,
         Carrier::Base64Binary => canonical_base64(raw)?,
     })
-}
-
-// -- proleptic-Gregorian calendar (Howard Hinnant's algorithms) -------------
-
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = (y - era * 400) as i64;
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146097 + doe - 719468
-}
-
-fn civil_from_secs(secs: i64) -> (i64, i64, i64, i64) {
-    let days = secs.div_euclid(86400);
-    let sod = secs.rem_euclid(86400);
-    let z = days + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m, d, sod)
 }
 
 // -- base64 (RFC 4648, standard alphabet) -----------------------------------

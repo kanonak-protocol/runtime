@@ -22,6 +22,7 @@ class Program
         int failures = 0;
         failures += RunLexical(Path.Combine(vectorsDir, "lexical-vectors.json"));
         failures += RunLexical(Path.Combine(vectorsDir, "lexical-ieee-vectors.json"));
+        failures += RunLexical(Path.Combine(vectorsDir, "lexical-temporal-vectors.json"));
         failures += RunFullForm(Path.Combine(vectorsDir, "full-form-vectors.json"));
         failures += RunCoordinate(Path.Combine(vectorsDir, "coordinate-vectors.json"));
 

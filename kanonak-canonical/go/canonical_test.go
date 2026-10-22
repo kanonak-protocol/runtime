@@ -18,8 +18,9 @@ func readVectors(t *testing.T, name string) map[string]interface{} {
 	return doc
 }
 
-func TestLexicalVectors(t *testing.T) { runLexical(t, "lexical-vectors.json") }
-func TestLexicalIeeeVectors(t *testing.T) { runLexical(t, "lexical-ieee-vectors.json") }
+func TestLexicalVectors(t *testing.T)         { runLexical(t, "lexical-vectors.json") }
+func TestLexicalIeeeVectors(t *testing.T)     { runLexical(t, "lexical-ieee-vectors.json") }
+func TestLexicalTemporalVectors(t *testing.T) { runLexical(t, "lexical-temporal-vectors.json") }
 
 func runLexical(t *testing.T, name string) {
 	doc := readVectors(t, name)

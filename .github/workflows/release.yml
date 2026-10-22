@@ -185,6 +185,7 @@ jobs:
       - run: npm install --no-audit --no-fund
       # Derived vectors stay derived: the committed file must be exactly what its generator makes.
       - run: node kanonak-canonical/vectors/gen-ieee-vectors/generate.mjs --check
+      - run: node kanonak-canonical/vectors/gen-temporal-vectors/generate.mjs --check
       - run: |
           npm run build      -w @kanonak-protocol/canonical
           npm run typecheck  -w @kanonak-protocol/canonical

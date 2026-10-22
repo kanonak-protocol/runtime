@@ -9,11 +9,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"math/big"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"golang.org/x/text/unicode/norm"
 )
@@ -275,25 +275,107 @@ func CanonicalBase64(raw string) (string, error) {
 	return base64.StdEncoding.EncodeToString(bytes), nil
 }
 
-// -- temporal ---------------------------------------------------------------
+// -- temporal: XSD 1.1's rules, on the proleptic Gregorian calendar with a year 0 ----
+// A year of any length is an exact big.Int, so a UTC shift across a year boundary has no range limit
+// (runtime#36).
 
-func canonicalYear(raw string) string {
-	neg := strings.HasPrefix(raw, "-")
-	d := raw
-	if neg {
-		d = raw[1:]
+var daysInMonthTable = [12]int{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
+
+func isLeapYear(year *big.Int) bool {
+	r := new(big.Int).Mod(year, big.NewInt(400)).Int64()
+	return r%4 == 0 && (r%100 != 0 || r == 0)
+}
+
+func daysInMonth(year *big.Int, month int) int {
+	if month == 2 && isLeapYear(year) {
+		return 29
 	}
-	d = strings.TrimLeft(d, "0")
-	if d == "" {
-		d = "0"
+	return daysInMonthTable[month-1]
+}
+
+// yearText is a year at least four digits wide, its sign kept; year 0 has none.
+func yearText(year *big.Int) string {
+	digits := new(big.Int).Abs(year).String()
+	if len(digits) < 4 {
+		digits = strings.Repeat("0", 4-len(digits)) + digits
 	}
-	if len(d) < 4 {
-		d = strings.Repeat("0", 4-len(d)) + d
+	if year.Sign() < 0 {
+		return "-" + digits
 	}
-	if neg {
-		return "-" + d
+	return digits
+}
+
+type civil struct {
+	year       *big.Int
+	month, day int
+}
+
+func twoDigits(field string) int {
+	n, err := strconv.Atoi(field)
+	if err != nil {
+		panic(fmt.Sprintf("the pattern matched two digits, not %q", field))
 	}
-	return d
+	return n
+}
+
+func civilOf(yy, mo, dd, what, raw string) (civil, error) {
+	year, ok := new(big.Int).SetString(yy, 10)
+	if !ok {
+		panic(fmt.Sprintf("the pattern matched a year, not %q", yy))
+	}
+	month, day := twoDigits(mo), twoDigits(dd)
+	if month < 1 || month > 12 {
+		return civil{}, fmt.Errorf("%s: %q has month %s; a month is 01 to 12", what, raw, mo)
+	}
+	if day < 1 || day > daysInMonth(year, month) {
+		return civil{}, fmt.Errorf("%s: %q has day %s, which month %s of year %s doesn't have", what, raw, dd, mo, yearText(year))
+	}
+	return civil{year, month, day}, nil
+}
+
+func nextDay(c civil) civil {
+	if c.day < daysInMonth(c.year, c.month) {
+		return civil{c.year, c.month, c.day + 1}
+	}
+	if c.month < 12 {
+		return civil{c.year, c.month + 1, 1}
+	}
+	return civil{new(big.Int).Add(c.year, big.NewInt(1)), 1, 1}
+}
+
+func previousDay(c civil) civil {
+	if c.day > 1 {
+		return civil{c.year, c.month, c.day - 1}
+	}
+	if c.month > 1 {
+		return civil{c.year, c.month - 1, daysInMonth(c.year, c.month-1)}
+	}
+	return civil{new(big.Int).Sub(c.year, big.NewInt(1)), 12, 31}
+}
+
+// offsetMinutes is minutes east of UTC, and 0 with no offset. XSD 1.1 bounds an offset at 14:00.
+func offsetMinutes(tz, what, raw string) (int, error) {
+	if tz == "" || tz == "Z" {
+		return 0, nil
+	}
+	hours, minutes := twoDigits(tz[1:3]), twoDigits(tz[4:6])
+	if minutes > 59 || hours > 14 || (hours == 14 && minutes > 0) {
+		return 0, fmt.Errorf("%s: %q has offset %s; an offset is at most 14:00 either way", what, raw, tz)
+	}
+	if tz[0] == '-' {
+		return -(hours*60 + minutes), nil
+	}
+	return hours*60 + minutes, nil
+}
+
+// clockOf applies XSD 1.1: no 60th second, and 24:00:00 only as the first instant of the next day.
+func clockOf(hh, mi, ss, fraction, what, raw string) (int, int, error) {
+	hour, minute, second := twoDigits(hh), twoDigits(mi), twoDigits(ss)
+	endOfDay := hour == 24 && minute == 0 && second == 0 && fraction == ""
+	if minute > 59 || second > 59 || (hour > 23 && !endOfDay) {
+		return 0, 0, fmt.Errorf("%s: %q has time %s:%s:%s%s; XSD 1.1 allows 00:00:00 to 23:59:59, and 24:00:00 exactly", what, raw, hh, mi, ss, fraction)
+	}
+	return hour, minute, nil
 }
 
 func canonicalFraction(frac string) string {
@@ -317,54 +399,74 @@ func canonicalTz(tz string) string {
 	return tz
 }
 
-func tzOffsetMinutes(tz string) int {
-	if tz == "Z" {
-		return 0
-	}
-	sign := 1
-	if tz[0] == '-' {
-		sign = -1
-	}
-	hh, _ := strconv.Atoi(tz[1:3])
-	mm, _ := strconv.Atoi(tz[4:6])
-	return sign * (hh*60 + mm)
-}
-
-func atoi(s string) int { n, _ := strconv.Atoi(s); return n }
-
 func CanonicalDateTime(raw string) (string, error) {
+	const what = "canonicalDateTime"
 	m := dateTimeRe.FindStringSubmatch(strings.TrimSpace(raw))
 	if m == nil {
-		return "", fmt.Errorf("canonicalDateTime: %q invalid", raw)
+		return "", fmt.Errorf("%s: %q invalid", what, raw)
 	}
 	fraction := canonicalFraction(m[7])
 	tz := m[8]
-	if tz == "" {
-		return fmt.Sprintf("%s-%s-%sT%s:%s:%s%s", canonicalYear(m[1]), m[2], m[3], m[4], m[5], m[6], fraction), nil
+	c, err := civilOf(m[1], m[2], m[3], what, raw)
+	if err != nil {
+		return "", err
 	}
-	t := time.Date(atoi(m[1]), time.Month(atoi(m[2])), atoi(m[3]), atoi(m[4]), atoi(m[5]), atoi(m[6]), 0, time.UTC)
-	t = t.Add(-time.Duration(tzOffsetMinutes(tz)) * time.Minute)
-	return fmt.Sprintf("%s-%s-%sT%s:%s:%s%sZ",
-		canonicalYear(strconv.Itoa(t.Year())), pad2(int(t.Month())), pad2(t.Day()),
-		pad2(t.Hour()), pad2(t.Minute()), pad2(t.Second()), fraction), nil
+	hour, minute, err := clockOf(m[4], m[5], m[6], fraction, what, raw)
+	if err != nil {
+		return "", err
+	}
+	offset, err := offsetMinutes(tz, what, raw)
+	if err != nil {
+		return "", err
+	}
+	minutes := hour*60 + minute - offset
+	if minutes < 0 {
+		minutes += 1440
+		c = previousDay(c)
+	} else if minutes >= 1440 {
+		minutes -= 1440
+		c = nextDay(c)
+	}
+	zone := ""
+	if tz != "" {
+		zone = "Z"
+	}
+	return fmt.Sprintf("%s-%s-%sT%s:%s:%s%s%s", yearText(c.year), pad2(c.month), pad2(c.day),
+		pad2(minutes/60), pad2(minutes%60), m[6], fraction, zone), nil
 }
 
 func CanonicalDate(raw string) (string, error) {
+	const what = "canonicalDate"
 	m := dateRe.FindStringSubmatch(strings.TrimSpace(raw))
 	if m == nil {
-		return "", fmt.Errorf("canonicalDate: %q invalid", raw)
+		return "", fmt.Errorf("%s: %q invalid", what, raw)
 	}
-	return fmt.Sprintf("%s-%s-%s%s", canonicalYear(m[1]), m[2], m[3], canonicalTz(m[4])), nil
+	c, err := civilOf(m[1], m[2], m[3], what, raw)
+	if err != nil {
+		return "", err
+	}
+	if _, err := offsetMinutes(m[4], what, raw); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s-%s-%s%s", yearText(c.year), m[2], m[3], canonicalTz(m[4])), nil
 }
 
 func CanonicalTime(raw string) (string, error) {
+	const what = "canonicalTime"
 	m := timeRe.FindStringSubmatch(strings.TrimSpace(raw))
 	if m == nil {
-		return "", fmt.Errorf("canonicalTime: %q invalid", raw)
+		return "", fmt.Errorf("%s: %q invalid", what, raw)
+	}
+	fraction := canonicalFraction(m[4])
+	hour, _, err := clockOf(m[1], m[2], m[3], fraction, what, raw)
+	if err != nil {
+		return "", err
+	}
+	if _, err := offsetMinutes(m[5], what, raw); err != nil {
+		return "", err
 	}
 	hh := m[1]
-	fraction := canonicalFraction(m[4])
-	if hh == "24" && m[2] == "00" && m[3] == "00" && fraction == "" {
+	if hour == 24 {
 		hh = "00"
 	}
 	return fmt.Sprintf("%s:%s:%s%s%s", hh, m[2], m[3], fraction, canonicalTz(m[5])), nil
