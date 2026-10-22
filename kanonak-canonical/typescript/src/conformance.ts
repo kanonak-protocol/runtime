@@ -19,27 +19,31 @@ const read = (f: string): any => JSON.parse(readFileSync(new URL(f, vdir), 'utf8
 
 let fails = 0;
 
-const lx = read('lexical-vectors.json');
-let lpass = 0;
-for (const v of lx.vectors) {
-  if (v.expectError) {
-    // Negative case: a valid implementation must reject the malformed lexical.
+function runLexical(file: string): void {
+  const lx = read(file);
+  let lpass = 0;
+  for (const v of lx.vectors) {
+    if (v.expectError) {
+      // Negative case: a valid implementation must reject the malformed lexical.
+      try {
+        const got = canonicalScalarLexical(v.carrier as Carrier, v.input);
+        fails++; console.error(`lexical ${v.id}: expected an error, got ${JSON.stringify(got)}`);
+      } catch { lpass++; }
+      continue;
+    }
+    let got: string;
     try {
-      const got = canonicalScalarLexical(v.carrier as Carrier, v.input);
-      fails++; console.error(`lexical ${v.id}: expected an error, got ${JSON.stringify(got)}`);
-    } catch { lpass++; }
-    continue;
+      got = canonicalScalarLexical(v.carrier as Carrier, v.input);
+    } catch (e) {
+      fails++; console.error(`lexical ${v.id}: threw ${(e as Error).message}`); continue;
+    }
+    if (got === v.expected) lpass++;
+    else { fails++; console.error(`lexical ${v.id}: expected ${JSON.stringify(v.expected)} got ${JSON.stringify(got)}`); }
   }
-  let got: string;
-  try {
-    got = canonicalScalarLexical(v.carrier as Carrier, v.input);
-  } catch (e) {
-    fails++; console.error(`lexical ${v.id}: threw ${(e as Error).message}`); continue;
-  }
-  if (got === v.expected) lpass++;
-  else { fails++; console.error(`lexical ${v.id}: expected ${JSON.stringify(v.expected)} got ${JSON.stringify(got)}`); }
+  console.log(`${file.replace(/\.json$/, '')}: ${lpass}/${lx.vectors.length} pass`);
 }
-console.log(`lexical-vectors: ${lpass}/${lx.vectors.length} pass`);
+runLexical('lexical-vectors.json');
+runLexical('lexical-ieee-vectors.json');
 
 const ff = read('full-form-vectors.json');
 let fpass = 0;

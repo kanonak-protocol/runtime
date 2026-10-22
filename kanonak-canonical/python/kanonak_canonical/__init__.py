@@ -298,8 +298,30 @@ def _to_float32(x: float) -> float:
     return struct.unpack("<f", struct.pack("<f", x))[0]
 
 
-def _shortest(s: str) -> str:
-    return s[:-2] if s.endswith(".0") else s
+def _ecmascript_double_token(d: float) -> str:
+    """ECMAScript's Number::toString of a finite, non-zero double: RFC 8785's number notation.
+
+    repr gives the shortest round-tripping digits; only the notation is re-derived, plain while -6 < n <= 21.
+    """
+    sign = "-" if d < 0 else ""
+    mantissa, _, exponent = repr(abs(d)).partition("e")
+    int_part, _, frac_part = mantissa.partition(".")
+    combined = int_part + frac_part
+    lead = len(combined) - len(combined.lstrip("0"))
+    digits = combined[lead:].rstrip("0")
+    n = len(int_part) - lead + (int(exponent) if exponent else 0)
+    k = len(digits)
+    if k <= n <= 21:
+        body = digits + "0" * (n - k)
+    elif 0 < n <= 21:
+        body = f"{digits[:n]}.{digits[n:]}"
+    elif -6 < n <= 0:
+        body = "0." + "0" * -n + digits
+    else:
+        e = n - 1
+        head = digits if k == 1 else f"{digits[0]}.{digits[1:]}"
+        body = f"{head}e{'+' if e >= 0 else '-'}{abs(e)}"
+    return sign + body
 
 
 def _canonical_ieee(raw: str, single: bool, label: str) -> str:
@@ -319,7 +341,7 @@ def _canonical_ieee(raw: str, single: bool, label: str) -> str:
         raise ValueError(f"canonical{label}: '{raw}' out of range")
     if n == 0.0:
         return "0"
-    return _shortest(repr(n))
+    return _ecmascript_double_token(n)
 
 
 def canonical_double(raw: str) -> str:

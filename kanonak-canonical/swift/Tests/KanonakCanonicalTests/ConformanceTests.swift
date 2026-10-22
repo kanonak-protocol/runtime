@@ -27,7 +27,15 @@ private func loadJSON(_ name: String) throws -> [String: Any] {
 
 final class LexicalVectorTests: XCTestCase {
     func testLexicalVectors() throws {
-        let doc = try loadJSON("lexical-vectors.json")
+        try runLexical("lexical-vectors.json")
+    }
+
+    func testLexicalIeeeVectors() throws {
+        try runLexical("lexical-ieee-vectors.json")
+    }
+
+    private func runLexical(_ name: String) throws {
+        let doc = try loadJSON(name)
         let vectors = doc["vectors"] as! [[String: Any]]
         XCTAssertFalse(vectors.isEmpty)
         for v in vectors {

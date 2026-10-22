@@ -21,6 +21,7 @@ class Program
 
         int failures = 0;
         failures += RunLexical(Path.Combine(vectorsDir, "lexical-vectors.json"));
+        failures += RunLexical(Path.Combine(vectorsDir, "lexical-ieee-vectors.json"));
         failures += RunFullForm(Path.Combine(vectorsDir, "full-form-vectors.json"));
         failures += RunCoordinate(Path.Combine(vectorsDir, "coordinate-vectors.json"));
 
@@ -62,7 +63,7 @@ class Program
                 else { fail++; Console.WriteLine($"  FAIL [{id}] threw: {ex.Message}"); }
             }
         }
-        Console.WriteLine($"lexical-vectors: {pass}/{total} pass, {fail} fail");
+        Console.WriteLine($"{Path.GetFileNameWithoutExtension(path)}: {pass}/{total} pass, {fail} fail");
         return fail;
     }
 

@@ -21,6 +21,7 @@ public final class Conformance {
         String vdir = args.length > 0 ? args[0] : "../vectors";
         int fails = 0;
         fails += runLexical(Paths.get(vdir, "lexical-vectors.json"));
+        fails += runLexical(Paths.get(vdir, "lexical-ieee-vectors.json"));
         fails += runFullForm(Paths.get(vdir, "full-form-vectors.json"));
         fails += runCoordinate(Paths.get(vdir, "coordinate-vectors.json"));
         System.out.println(fails == 0 ? "\nALL VECTORS PASS" : "\n" + fails + " VECTOR(S) FAILED");
@@ -51,7 +52,7 @@ public final class Conformance {
                 else { fail++; System.out.println("  FAIL [" + id + "] threw: " + e.getMessage()); }
             }
         }
-        System.out.println("lexical-vectors: " + pass + "/" + total + " pass, " + fail + " fail");
+        System.out.println(path.getFileName().toString().replace(".json", "") + ": " + pass + "/" + total + " pass, " + fail + " fail");
         return fail;
     }
 

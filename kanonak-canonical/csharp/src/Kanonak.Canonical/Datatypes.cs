@@ -68,8 +68,44 @@ namespace Kanonak.Canonical
             if (double.IsNaN(n) || double.IsInfinity(n))
                 throw new FormatException($"canonical{label}: '{raw}' is out of the finite range");
             if (n == 0.0) return "0"; // collapses -0
-            // .NET Core 3.0+ default ToString is the shortest round-tripping decimal.
-            return n.ToString(CultureInfo.InvariantCulture);
+            return EcmaScriptDoubleToken(n);
+        }
+
+        /// <summary>
+        /// ECMAScript's Number::toString of a finite, non-zero double: RFC 8785's number notation, plain while
+        /// -6 &lt; n &lt;= 21. "R" gives the shortest round-tripping digits on .NET Core 3.0 and later; only the
+        /// notation is re-derived.
+        /// </summary>
+        private static string EcmaScriptDoubleToken(double d)
+        {
+            string sign = d < 0 ? "-" : "";
+            string shortest = Math.Abs(d).ToString("R", CultureInfo.InvariantCulture);
+            int e = shortest.IndexOf('E');
+            string mantissa = e < 0 ? shortest : shortest.Substring(0, e);
+            int exponent = e < 0 ? 0 : int.Parse(shortest.Substring(e + 1), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+            int dot = mantissa.IndexOf('.');
+            string intPart = dot < 0 ? mantissa : mantissa.Substring(0, dot);
+            string fracPart = dot < 0 ? "" : mantissa.Substring(dot + 1);
+            string combined = intPart + fracPart;
+            string trimmed = combined.TrimStart('0');
+            int lead = combined.Length - trimmed.Length;
+            string digits = trimmed.TrimEnd('0');
+            int n = intPart.Length - lead + exponent;
+            int k = digits.Length;
+            string body;
+            if (k <= n && n <= 21)
+                body = digits + new string('0', n - k);
+            else if (0 < n && n <= 21)
+                body = digits.Substring(0, n) + "." + digits.Substring(n);
+            else if (-6 < n && n <= 0)
+                body = "0." + new string('0', -n) + digits;
+            else
+            {
+                int exp = n - 1;
+                string head = k == 1 ? digits : digits.Substring(0, 1) + "." + digits.Substring(1);
+                body = head + "e" + (exp >= 0 ? "+" : "-") + Math.Abs(exp).ToString(CultureInfo.InvariantCulture);
+            }
+            return sign + body;
         }
 
         public static string CanonicalDouble(string raw) => CanonicalIeee(raw, false, "Double");
