@@ -172,6 +172,7 @@ def main():
     vdir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / "vectors"
     fails = run_lexical(vdir / "lexical-vectors.json")
     fails += run_lexical(vdir / "lexical-ieee-vectors.json")
+    fails += run_lexical(vdir / "lexical-temporal-vectors.json")
     fails += run_full_form(vdir / "full-form-vectors.json")
     fails += run_coordinate(vdir / "coordinate-vectors.json")
     print("\nALL VECTORS PASS" if fails == 0 else f"\n{fails} VECTOR(S) FAILED")

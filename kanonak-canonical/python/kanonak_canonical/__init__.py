@@ -15,7 +15,6 @@ import re
 import struct
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import List, Optional
 
@@ -397,15 +396,72 @@ def canonical_base64(raw: str) -> str:
     return _base64.b64encode(data).decode("ascii")
 
 
-# -- temporal ---------------------------------------------------------------
+# -- temporal: XSD 1.1's rules, on the proleptic Gregorian calendar with a year 0 ----
+# A year of any length is an exact int, so a UTC shift across a year boundary has no range limit (runtime#36).
+
+_DAYS_IN_MONTH = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
 
 
-def _canonical_year(raw: str) -> str:
-    neg = raw.startswith("-")
-    digits = (raw[1:] if neg else raw).lstrip("0") or "0"
-    if len(digits) < 4:
-        digits = digits.rjust(4, "0")
-    return ("-" if neg else "") + digits
+def _is_leap_year(year: int) -> bool:
+    r = year % 400
+    return r % 4 == 0 and (r % 100 != 0 or r == 0)
+
+
+def _days_in_month(year: int, month: int) -> int:
+    return 29 if month == 2 and _is_leap_year(year) else _DAYS_IN_MONTH[month - 1]
+
+
+def _year_text(year: int) -> str:
+    """A year at least four digits wide, its sign kept; year 0 has none."""
+    digits = str(abs(year)).rjust(4, "0")
+    return f"-{digits}" if year < 0 else digits
+
+
+def _civil_of(yy: str, mo: str, dd: str, what: str, raw: str) -> "tuple[int, int, int]":
+    year, month, day = int(yy), int(mo), int(dd)
+    if not 1 <= month <= 12:
+        raise ValueError(f"{what}: '{raw}' has month {mo}; a month is 01 to 12")
+    if not 1 <= day <= _days_in_month(year, month):
+        raise ValueError(f"{what}: '{raw}' has day {dd}, which month {mo} of year {_year_text(year)} doesn't have")
+    return year, month, day
+
+
+def _next_day(year: int, month: int, day: int) -> "tuple[int, int, int]":
+    if day < _days_in_month(year, month):
+        return year, month, day + 1
+    if month < 12:
+        return year, month + 1, 1
+    return year + 1, 1, 1
+
+
+def _previous_day(year: int, month: int, day: int) -> "tuple[int, int, int]":
+    if day > 1:
+        return year, month, day - 1
+    if month > 1:
+        return year, month - 1, _days_in_month(year, month - 1)
+    return year - 1, 12, 31
+
+
+def _offset_minutes(tz: Optional[str], what: str, raw: str) -> Optional[int]:
+    """Minutes east of UTC, or None with no offset. XSD 1.1 bounds an offset at 14:00."""
+    if not tz:
+        return None
+    if tz == "Z":
+        return 0
+    hours, minutes = int(tz[1:3]), int(tz[4:6])
+    if minutes > 59 or hours > 14 or (hours == 14 and minutes > 0):
+        raise ValueError(f"{what}: '{raw}' has offset {tz}; an offset is at most 14:00 either way")
+    return (-1 if tz[0] == "-" else 1) * (hours * 60 + minutes)
+
+
+def _clock_of(hh: str, mi: str, ss: str, fraction: str, what: str, raw: str) -> "tuple[int, int]":
+    """XSD 1.1: no 60th second, and 24:00:00 only as the first instant of the next day."""
+    hour, minute, second = int(hh), int(mi), int(ss)
+    end_of_day = hour == 24 and minute == 0 and second == 0 and fraction == ""
+    if minute > 59 or second > 59 or (hour > 23 and not end_of_day):
+        raise ValueError(f"{what}: '{raw}' has time {hh}:{mi}:{ss}{fraction}; "
+                         "XSD 1.1 allows 00:00:00 to 23:59:59, and 24:00:00 exactly")
+    return hour, minute
 
 
 def _canonical_fraction(frac: Optional[str]) -> str:
@@ -423,44 +479,48 @@ def _canonical_tz(tz: Optional[str]) -> str:
     return tz
 
 
-def _tz_offset_minutes(tz: str) -> int:
-    if tz == "Z":
-        return 0
-    sign = -1 if tz[0] == "-" else 1
-    return sign * (int(tz[1:3]) * 60 + int(tz[4:6]))
-
-
 def canonical_date_time(raw: str) -> str:
+    what = "canonicalDateTime"
     m = _DATE_TIME.match(raw.strip())
     if not m:
-        raise ValueError(f"canonicalDateTime: '{raw}' invalid")
-    fraction = _canonical_fraction(m.group(7))
-    tz = m.group(8)
-    if not tz:
-        return f"{_canonical_year(m.group(1))}-{m.group(2)}-{m.group(3)}T{m.group(4)}:{m.group(5)}:{m.group(6)}{fraction}"
-    dt = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)),
-                  int(m.group(4)), int(m.group(5)), int(m.group(6)), tzinfo=timezone.utc)
-    s = dt - timedelta(minutes=_tz_offset_minutes(tz))
-    return (f"{_canonical_year(str(s.year))}-{s.month:02d}-{s.day:02d}"
-            f"T{s.hour:02d}:{s.minute:02d}:{s.second:02d}{fraction}Z")
+        raise ValueError(f"{what}: '{raw}' invalid")
+    yy, mo, dd, hh, mi, ss, frac, tz = m.groups()
+    fraction = _canonical_fraction(frac)
+    civil = _civil_of(yy, mo, dd, what, raw)
+    hour, minute = _clock_of(hh, mi, ss, fraction, what, raw)
+    minutes = hour * 60 + minute - (_offset_minutes(tz, what, raw) or 0)
+    if minutes < 0:
+        minutes += 1440
+        civil = _previous_day(*civil)
+    elif minutes >= 1440:
+        minutes -= 1440
+        civil = _next_day(*civil)
+    year, month, day = civil
+    return (f"{_year_text(year)}-{month:02d}-{day:02d}"
+            f"T{minutes // 60:02d}:{minutes % 60:02d}:{ss}{fraction}{'Z' if tz else ''}")
 
 
 def canonical_date(raw: str) -> str:
+    what = "canonicalDate"
     m = _DATE.match(raw.strip())
     if not m:
-        raise ValueError(f"canonicalDate: '{raw}' invalid")
-    return f"{_canonical_year(m.group(1))}-{m.group(2)}-{m.group(3)}{_canonical_tz(m.group(4))}"
+        raise ValueError(f"{what}: '{raw}' invalid")
+    yy, mo, dd, tz = m.groups()
+    year, _, _ = _civil_of(yy, mo, dd, what, raw)
+    _offset_minutes(tz, what, raw)
+    return f"{_year_text(year)}-{mo}-{dd}{_canonical_tz(tz)}"
 
 
 def canonical_time(raw: str) -> str:
+    what = "canonicalTime"
     m = _TIME.match(raw.strip())
     if not m:
-        raise ValueError(f"canonicalTime: '{raw}' invalid")
-    hh = m.group(1)
-    fraction = _canonical_fraction(m.group(4))
-    if hh == "24" and m.group(2) == "00" and m.group(3) == "00" and fraction == "":
-        hh = "00"
-    return f"{hh}:{m.group(2)}:{m.group(3)}{fraction}{_canonical_tz(m.group(5))}"
+        raise ValueError(f"{what}: '{raw}' invalid")
+    hh, mi, ss, frac, tz = m.groups()
+    fraction = _canonical_fraction(frac)
+    hour, _ = _clock_of(hh, mi, ss, fraction, what, raw)
+    _offset_minutes(tz, what, raw)
+    return f"{'00' if hour == 24 else hh}:{mi}:{ss}{fraction}{_canonical_tz(tz)}"
 
 
 def _refuse_lang_string(raw: str) -> str:

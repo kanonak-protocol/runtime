@@ -247,15 +247,77 @@ function base64Encode(bytes: Uint8Array): string {
   return out;
 }
 
-// --- Temporal carriers — dateTime / date / time. ----------------------------
+// --- Temporal carriers — dateTime / date / time, by XSD 1.1's rules. ----------
+//
+// The proleptic Gregorian calendar with a year 0, as XSD 1.1's. A year of any length is an exact integer, so a
+// UTC shift that crosses a year boundary carries into it without a range limit (runtime#36).
 
 const pad2 = (n: number): string => (n < 10 ? `0${n}` : `${n}`);
 
-function canonicalYear(raw: string): string {
-  const neg = raw.startsWith('-');
-  const digits = (neg ? raw.slice(1) : raw).replace(/^0+/, '') || '0';
-  const padded = digits.length < 4 ? digits.padStart(4, '0') : digits;
-  return `${neg ? '-' : ''}${padded}`;
+const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+function isLeapYear(year: bigint): boolean {
+  const r = ((year % BigInt(400)) + BigInt(400)) % BigInt(400);
+  return r % BigInt(4) === BigInt(0) && (r % BigInt(100) !== BigInt(0) || r === BigInt(0));
+}
+
+function daysInMonth(year: bigint, month: number): number {
+  return month === 2 && isLeapYear(year) ? 29 : DAYS_IN_MONTH[month - 1];
+}
+
+/** A year at least four digits wide, its sign kept; year 0 has none. */
+function yearText(year: bigint): string {
+  const digits = (year < BigInt(0) ? -year : year).toString().padStart(4, '0');
+  return year < BigInt(0) ? `-${digits}` : digits;
+}
+
+interface Civil { year: bigint; month: number; day: number }
+
+function civilOf(yy: string, mo: string, dd: string, what: string, raw: string): Civil {
+  const year = BigInt(yy);
+  const month = Number(mo);
+  const day = Number(dd);
+  if (month < 1 || month > 12) throw new Error(`${what}: '${raw}' has month ${mo}; a month is 01 to 12`);
+  if (day < 1 || day > daysInMonth(year, month)) {
+    throw new Error(`${what}: '${raw}' has day ${dd}, which month ${mo} of year ${yearText(year)} doesn't have`);
+  }
+  return { year, month, day };
+}
+
+function nextDay(c: Civil): Civil {
+  if (c.day < daysInMonth(c.year, c.month)) return { ...c, day: c.day + 1 };
+  if (c.month < 12) return { year: c.year, month: c.month + 1, day: 1 };
+  return { year: c.year + BigInt(1), month: 1, day: 1 };
+}
+
+function previousDay(c: Civil): Civil {
+  if (c.day > 1) return { ...c, day: c.day - 1 };
+  if (c.month > 1) return { year: c.year, month: c.month - 1, day: daysInMonth(c.year, c.month - 1) };
+  return { year: c.year - BigInt(1), month: 12, day: 31 };
+}
+
+/** Minutes east of UTC, or undefined with no offset. XSD 1.1 bounds an offset at 14:00. */
+function offsetMinutes(tz: string | undefined, what: string, raw: string): number | undefined {
+  if (!tz) return undefined;
+  if (tz === 'Z') return 0;
+  const hours = Number(tz.slice(1, 3));
+  const minutes = Number(tz.slice(4, 6));
+  if (minutes > 59 || hours > 14 || (hours === 14 && minutes > 0)) {
+    throw new Error(`${what}: '${raw}' has offset ${tz}; an offset is at most 14:00 either way`);
+  }
+  return (tz[0] === '-' ? -1 : 1) * (hours * 60 + minutes);
+}
+
+/** XSD 1.1: no 60th second, and 24:00:00 only as the first instant of the next day. */
+function clockOf(hh: string, mi: string, ss: string, fraction: string, what: string, raw: string): { hour: number; minute: number } {
+  const hour = Number(hh);
+  const minute = Number(mi);
+  const second = Number(ss);
+  const endOfDay = hour === 24 && minute === 0 && second === 0 && fraction === '';
+  if (minute > 59 || second > 59 || (hour > 23 && !endOfDay)) {
+    throw new Error(`${what}: '${raw}' has time ${hh}:${mi}:${ss}${fraction}; XSD 1.1 allows 00:00:00 to 23:59:59, and 24:00:00 exactly`);
+  }
+  return { hour, minute };
 }
 
 function canonicalFraction(frac: string | undefined): string {
@@ -270,53 +332,52 @@ function canonicalTz(tz: string | undefined): string {
   return tz;
 }
 
-function tzOffsetMinutes(tz: string): number {
-  if (tz === 'Z') return 0;
-  const sign = tz[0] === '-' ? -1 : 1;
-  return sign * (Number(tz.slice(1, 3)) * 60 + Number(tz.slice(4, 6)));
-}
-
 const DATETIME_RE = /^(-?\d{4,})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/;
 const DATE_RE = /^(-?\d{4,})-(\d{2})-(\d{2})(Z|[+-]\d{2}:\d{2})?$/;
 const TIME_RE = /^(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/;
 
-/** Canonical `xsd:dateTime`. Offset-bearing -> UTC `Z`; timezone-less -> floating. */
+/** Canonical `xsd:dateTime`. Offset-bearing -> UTC `Z`; timezone-less -> floating; 24:00:00 -> next day. */
 export function canonicalDateTime(raw: string): string {
+  const what = 'canonicalDateTime';
   const m = DATETIME_RE.exec(raw.trim());
-  if (!m) throw new Error(`canonicalDateTime: '${raw}' is not a valid xsd:dateTime lexical`);
+  if (!m) throw new Error(`${what}: '${raw}' is not a valid xsd:dateTime lexical`);
   const [, yy, mo, dd, hh, mi, ss, frac, tz] = m;
   const fraction = canonicalFraction(frac);
-
-  if (!tz) {
-    return `${canonicalYear(yy)}-${mo}-${dd}T${hh}:${mi}:${ss}${fraction}`;
+  let civil = civilOf(yy, mo, dd, what, raw);
+  const clock = clockOf(hh, mi, ss, fraction, what, raw);
+  let minutes = clock.hour * 60 + clock.minute - (offsetMinutes(tz, what, raw) ?? 0);
+  if (minutes < 0) {
+    minutes += 1440;
+    civil = previousDay(civil);
+  } else if (minutes >= 1440) {
+    minutes -= 1440;
+    civil = nextDay(civil);
   }
-
-  const dt = new Date(0);
-  dt.setUTCFullYear(Number(yy), Number(mo) - 1, Number(dd));
-  dt.setUTCHours(Number(hh), Number(mi), Number(ss), 0);
-  const shifted = new Date(dt.getTime() - tzOffsetMinutes(tz) * 60000);
-  const y = canonicalYear(String(shifted.getUTCFullYear()));
-  return `${y}-${pad2(shifted.getUTCMonth() + 1)}-${pad2(shifted.getUTCDate())}T`
-    + `${pad2(shifted.getUTCHours())}:${pad2(shifted.getUTCMinutes())}:${pad2(shifted.getUTCSeconds())}${fraction}Z`;
+  const date = `${yearText(civil.year)}-${pad2(civil.month)}-${pad2(civil.day)}`;
+  return `${date}T${pad2(Math.floor(minutes / 60))}:${pad2(minutes % 60)}:${ss}${fraction}${tz ? 'Z' : ''}`;
 }
 
 /** Canonical `xsd:date`: lexical only — canonical year width + tz spelling, NO UTC shift. */
 export function canonicalDate(raw: string): string {
+  const what = 'canonicalDate';
   const m = DATE_RE.exec(raw.trim());
-  if (!m) throw new Error(`canonicalDate: '${raw}' is not a valid xsd:date lexical`);
+  if (!m) throw new Error(`${what}: '${raw}' is not a valid xsd:date lexical`);
   const [, yy, mo, dd, tz] = m;
-  return `${canonicalYear(yy)}-${mo}-${dd}${canonicalTz(tz)}`;
+  const civil = civilOf(yy, mo, dd, what, raw);
+  offsetMinutes(tz, what, raw);
+  return `${yearText(civil.year)}-${mo}-${dd}${canonicalTz(tz)}`;
 }
 
 /** Canonical `xsd:time`: lexical only; `24:00:00` -> `00:00:00`. */
 export function canonicalTime(raw: string): string {
+  const what = 'canonicalTime';
   const m = TIME_RE.exec(raw.trim());
-  if (!m) throw new Error(`canonicalTime: '${raw}' is not a valid xsd:time lexical`);
+  if (!m) throw new Error(`${what}: '${raw}' is not a valid xsd:time lexical`);
   const [, hh, mi, ss, frac, tz] = m;
   const fraction = canonicalFraction(frac);
-  let h = hh;
-  if (hh === '24' && mi === '00' && ss === '00' && fraction === '') h = '00';
-  return `${h}:${mi}:${ss}${fraction}${canonicalTz(tz)}`;
+  const clock = clockOf(hh, mi, ss, fraction, what, raw);
+  offsetMinutes(tz, what, raw);
+  return `${clock.hour === 24 ? '00' : hh}:${mi}:${ss}${fraction}${canonicalTz(tz)}`;
 }
 
 // --- Dispatch — the single carrier -> canonical-lexical entry. ---------------

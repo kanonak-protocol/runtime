@@ -230,14 +230,148 @@ public func canonicalBase64(_ raw: String) throws -> String {
     return bytes.base64EncodedString()
 }
 
-// -- temporal ---------------------------------------------------------------
+// -- temporal: XSD 1.1's rules, on the proleptic Gregorian calendar with a year 0 ---------
+// A year of any length is kept as its sign and digits, so a UTC shift across a year boundary has no range limit
+// (runtime#36). A leap year needs only the year's remainder by 400, and a shift moves the year by one at most.
 
-private func canonicalYear(_ raw: String) -> String {
-    let neg = raw.hasPrefix("-")
-    var digits = String((neg ? String(raw.dropFirst()) : raw).drop(while: { $0 == "0" }))
-    if digits.isEmpty { digits = "0" }
-    if digits.count < 4 { digits = String(repeating: "0", count: 4 - digits.count) + digits }
-    return (neg ? "-" : "") + digits
+/// A year of any length: its sign and its digits, without leading zeros. Year 0 is "0", with no sign.
+private struct Year {
+    let negative: Bool
+    let digits: String
+
+    init(negative: Bool, digits: String) {
+        self.negative = negative && digits != "0"
+        self.digits = digits
+    }
+
+    init(parsing raw: String) {
+        let unsigned = raw.hasPrefix("-") ? String(raw.dropFirst()) : raw
+        let significant = String(unsigned.drop(while: { $0 == "0" }))
+        self.init(negative: raw.hasPrefix("-"), digits: significant.isEmpty ? "0" : significant)
+    }
+
+    /// The year's remainder by 400, never negative.
+    var remainderBy400: Int {
+        let r = digits.utf8.reduce(0) { ($0 * 10 + Int($1 - UInt8(ascii: "0"))) % 400 }
+        return negative && r != 0 ? 400 - r : r
+    }
+
+    var isLeap: Bool {
+        let r = remainderBy400
+        return r % 4 == 0 && (r % 100 != 0 || r == 0)
+    }
+
+    /// At least four digits wide, its sign kept.
+    var text: String {
+        let padded = digits.count < 4 ? String(repeating: "0", count: 4 - digits.count) + digits : digits
+        return (negative ? "-" : "") + padded
+    }
+
+    var next: Year {
+        negative ? Year(negative: true, digits: decrementDigits(digits)) : Year(negative: false, digits: incrementDigits(digits))
+    }
+
+    var previous: Year {
+        (negative || digits == "0")
+            ? Year(negative: true, digits: incrementDigits(digits))
+            : Year(negative: false, digits: decrementDigits(digits))
+    }
+}
+
+private func incrementDigits(_ digits: String) -> String {
+    var bytes = Array(digits.utf8)
+    var i = bytes.count - 1
+    while i >= 0 {
+        if bytes[i] == UInt8(ascii: "9") {
+            bytes[i] = UInt8(ascii: "0")
+            i -= 1
+        } else {
+            bytes[i] += 1
+            return String(decoding: bytes, as: UTF8.self)
+        }
+    }
+    return "1" + String(decoding: bytes, as: UTF8.self)
+}
+
+/// One less than a positive number written in digits.
+private func decrementDigits(_ digits: String) -> String {
+    var bytes = Array(digits.utf8)
+    var i = bytes.count - 1
+    while i >= 0 {
+        if bytes[i] == UInt8(ascii: "0") {
+            bytes[i] = UInt8(ascii: "9")
+            i -= 1
+        } else {
+            bytes[i] -= 1
+            break
+        }
+    }
+    let text = String(String(decoding: bytes, as: UTF8.self).drop(while: { $0 == "0" }))
+    return text.isEmpty ? "0" : text
+}
+
+private let daysInMonthTable = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+private func daysInMonth(_ year: Year, _ month: Int) -> Int {
+    month == 2 && year.isLeap ? 29 : daysInMonthTable[month - 1]
+}
+
+private struct Civil {
+    var year: Year
+    var month: Int
+    var day: Int
+}
+
+private func twoDigits<S: StringProtocol>(_ field: S) -> Int {
+    guard let n = Int(field) else { preconditionFailure("the pattern matched two digits, not '\(field)'") }
+    return n
+}
+
+private func civilOf(_ yy: String, _ mo: String, _ dd: String, _ what: String, _ raw: String) throws -> Civil {
+    let year = Year(parsing: yy)
+    let month = twoDigits(mo), day = twoDigits(dd)
+    guard (1...12).contains(month) else {
+        throw CanonicalError("\(what): '\(raw)' has month \(mo); a month is 01 to 12")
+    }
+    guard day >= 1 && day <= daysInMonth(year, month) else {
+        throw CanonicalError("\(what): '\(raw)' has day \(dd), which month \(mo) of year \(year.text) doesn't have")
+    }
+    return Civil(year: year, month: month, day: day)
+}
+
+private func nextDay(_ c: Civil) -> Civil {
+    if c.day < daysInMonth(c.year, c.month) { return Civil(year: c.year, month: c.month, day: c.day + 1) }
+    if c.month < 12 { return Civil(year: c.year, month: c.month + 1, day: 1) }
+    return Civil(year: c.year.next, month: 1, day: 1)
+}
+
+private func previousDay(_ c: Civil) -> Civil {
+    if c.day > 1 { return Civil(year: c.year, month: c.month, day: c.day - 1) }
+    if c.month > 1 { return Civil(year: c.year, month: c.month - 1, day: daysInMonth(c.year, c.month - 1)) }
+    return Civil(year: c.year.previous, month: 12, day: 31)
+}
+
+/// Minutes east of UTC, and 0 with no offset. XSD 1.1 bounds an offset at 14:00.
+private func offsetMinutes(_ tz: String?, _ what: String, _ raw: String) throws -> Int {
+    guard let tz, !tz.isEmpty, tz != "Z" else { return 0 }
+    let hours = twoDigits(tz.dropFirst().prefix(2)), minutes = twoDigits(tz.suffix(2))
+    guard minutes <= 59 && hours <= 14 && !(hours == 14 && minutes > 0) else {
+        throw CanonicalError("\(what): '\(raw)' has offset \(tz); an offset is at most 14:00 either way")
+    }
+    return (tz.hasPrefix("-") ? -1 : 1) * (hours * 60 + minutes)
+}
+
+/// XSD 1.1: no 60th second, and 24:00:00 only as the first instant of the next day.
+private func clockOf(
+    _ hh: String, _ mi: String, _ ss: String, _ fraction: String, _ what: String, _ raw: String
+) throws -> (hour: Int, minute: Int) {
+    let hour = twoDigits(hh), minute = twoDigits(mi), second = twoDigits(ss)
+    let endOfDay = hour == 24 && minute == 0 && second == 0 && fraction.isEmpty
+    guard minute <= 59 && second <= 59 && (hour <= 23 || endOfDay) else {
+        throw CanonicalError(
+            "\(what): '\(raw)' has time \(hh):\(mi):\(ss)\(fraction); XSD 1.1 allows 00:00:00 to 23:59:59, and 24:00:00 exactly")
+    }
+    return (hour, minute)
 }
 
 private func canonicalFraction(_ frac: String?) -> String {
@@ -253,79 +387,50 @@ private func canonicalTz(_ tz: String?) -> String {
     return tz
 }
 
-private func tzOffsetMinutes(_ tz: String) -> Int {
-    if tz == "Z" { return 0 }
-    let sign = tz.hasPrefix("-") ? -1 : 1
-    let hh = Int(tz.dropFirst().prefix(2)) ?? 0
-    let mm = Int(tz.suffix(2)) ?? 0
-    return sign * (hh * 60 + mm)
-}
-
-// Proleptic-Gregorian civil-date arithmetic (Howard Hinnant's algorithms) —
-// deterministic and free of any calendar/timezone library, and valid across
-// negative years.
-private func daysFromCivil(_ y: Int, _ m: Int, _ d: Int) -> Int {
-    let yy = y - (m <= 2 ? 1 : 0)
-    let era = (yy >= 0 ? yy : yy - 399) / 400
-    let yoe = yy - era * 400
-    let doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
-    return era * 146097 + doe - 719468
-}
-
-private func civilFromDays(_ z0: Int) -> (y: Int, m: Int, d: Int) {
-    let z = z0 + 719468
-    let era = (z >= 0 ? z : z - 146096) / 146097
-    let doe = z - era * 146097
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
-    let y = yoe + era * 400
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
-    let mp = (5 * doy + 2) / 153
-    let d = doy - (153 * mp + 2) / 5 + 1
-    let m = mp + (mp < 10 ? 3 : -9)
-    return (y + (m <= 2 ? 1 : 0), m, d)
-}
-
-private func floorDiv(_ a: Int, _ b: Int) -> Int {
-    let q = a / b
-    return (a % b != 0 && (a < 0) != (b < 0)) ? q - 1 : q
-}
-
 private func pad2(_ n: Int) -> String { n < 10 ? "0\(n)" : "\(n)" }
 
 public func canonicalDateTime(_ raw: String) throws -> String {
+    let what = "canonicalDateTime"
     guard let m = wholeMatch(dateTimeRe, trimmed(raw)) else {
-        throw CanonicalError("canonicalDateTime: '\(raw)' invalid")
+        throw CanonicalError("\(what): '\(raw)' invalid")
     }
     let fraction = canonicalFraction(m[7])
-    guard let tz = m[8], !tz.isEmpty else {
-        return "\(canonicalYear(m[1]!))-\(m[2]!)-\(m[3]!)T\(m[4]!):\(m[5]!):\(m[6]!)\(fraction)"
+    let tz = m[8]
+    var civil = try civilOf(m[1]!, m[2]!, m[3]!, what, raw)
+    let clock = try clockOf(m[4]!, m[5]!, m[6]!, fraction, what, raw)
+    let offset = try offsetMinutes(tz, what, raw)
+    var minutes = clock.hour * 60 + clock.minute - offset
+    if minutes < 0 {
+        minutes += 1440
+        civil = previousDay(civil)
+    } else if minutes >= 1440 {
+        minutes -= 1440
+        civil = nextDay(civil)
     }
-    let y = Int(m[1]!)!, mo = Int(m[2]!)!, dd = Int(m[3]!)!
-    let hh = Int(m[4]!)!, mi = Int(m[5]!)!
-    let total = (daysFromCivil(y, mo, dd) * 24 + hh) * 60 + mi - tzOffsetMinutes(tz)
-    let day = floorDiv(total, 1440)
-    let rem = total - day * 1440
-    let (cy, cm, cd) = civilFromDays(day)
-    return "\(canonicalYear(String(cy)))-\(pad2(cm))-\(pad2(cd))"
-        + "T\(pad2(rem / 60)):\(pad2(rem % 60)):\(m[6]!)\(fraction)Z"
+    let zone = (tz ?? "").isEmpty ? "" : "Z"
+    return "\(civil.year.text)-\(pad2(civil.month))-\(pad2(civil.day))"
+        + "T\(pad2(minutes / 60)):\(pad2(minutes % 60)):\(m[6]!)\(fraction)\(zone)"
 }
 
 public func canonicalDate(_ raw: String) throws -> String {
+    let what = "canonicalDate"
     guard let m = wholeMatch(dateRe, trimmed(raw)) else {
-        throw CanonicalError("canonicalDate: '\(raw)' invalid")
+        throw CanonicalError("\(what): '\(raw)' invalid")
     }
-    return "\(canonicalYear(m[1]!))-\(m[2]!)-\(m[3]!)\(canonicalTz(m[4]))"
+    let civil = try civilOf(m[1]!, m[2]!, m[3]!, what, raw)
+    _ = try offsetMinutes(m[4], what, raw)
+    return "\(civil.year.text)-\(m[2]!)-\(m[3]!)\(canonicalTz(m[4]))"
 }
 
 public func canonicalTime(_ raw: String) throws -> String {
+    let what = "canonicalTime"
     guard let m = wholeMatch(timeRe, trimmed(raw)) else {
-        throw CanonicalError("canonicalTime: '\(raw)' invalid")
+        throw CanonicalError("\(what): '\(raw)' invalid")
     }
-    var hh = m[1]!
     let fraction = canonicalFraction(m[4])
-    if hh == "24" && m[2]! == "00" && m[3]! == "00" && fraction.isEmpty { hh = "00" }
-    return "\(hh):\(m[2]!):\(m[3]!)\(fraction)\(canonicalTz(m[5]))"
+    let clock = try clockOf(m[1]!, m[2]!, m[3]!, fraction, what, raw)
+    _ = try offsetMinutes(m[5], what, raw)
+    return "\(clock.hour == 24 ? "00" : m[1]!):\(m[2]!):\(m[3]!)\(fraction)\(canonicalTz(m[5]))"
 }
 
 public func canonicalScalarLexical(_ carrier: Carrier, _ raw: String) throws -> String {

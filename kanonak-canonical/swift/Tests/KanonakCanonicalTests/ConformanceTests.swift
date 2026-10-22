@@ -34,6 +34,10 @@ final class LexicalVectorTests: XCTestCase {
         try runLexical("lexical-ieee-vectors.json")
     }
 
+    func testLexicalTemporalVectors() throws {
+        try runLexical("lexical-temporal-vectors.json")
+    }
+
     private func runLexical(_ name: String) throws {
         let doc = try loadJSON(name)
         let vectors = doc["vectors"] as! [[String: Any]]

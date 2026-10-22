@@ -44,6 +44,7 @@ function runLexical(file: string): void {
 }
 runLexical('lexical-vectors.json');
 runLexical('lexical-ieee-vectors.json');
+runLexical('lexical-temporal-vectors.json');
 
 const ff = read('full-form-vectors.json');
 let fpass = 0;

@@ -174,17 +174,90 @@ namespace Kanonak.Canonical
             return Convert.ToBase64String(bytes);
         }
 
-        // -- Temporal carriers. -------------------------------------------------
+        // -- Temporal carriers: XSD 1.1's rules, on the proleptic Gregorian calendar with a year 0. --
+        // A year of any length is an exact BigInteger, so a UTC shift across a year boundary has no range limit
+        // (runtime#36).
 
         private static string Pad2(int n) => n < 10 ? "0" + n : n.ToString(CultureInfo.InvariantCulture);
 
-        private static string CanonicalYear(string raw)
+        private static readonly int[] DaysInMonthTable = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+
+        private static bool IsLeapYear(BigInteger year)
         {
-            bool neg = raw.StartsWith("-", StringComparison.Ordinal);
-            string digits = (neg ? raw.Substring(1) : raw).TrimStart('0');
-            if (digits == "") digits = "0";
-            string padded = digits.Length < 4 ? digits.PadLeft(4, '0') : digits;
-            return (neg ? "-" : "") + padded;
+            int r = (int)(((year % 400) + 400) % 400);
+            return r % 4 == 0 && (r % 100 != 0 || r == 0);
+        }
+
+        private static int DaysInMonth(BigInteger year, int month) =>
+            month == 2 && IsLeapYear(year) ? 29 : DaysInMonthTable[month - 1];
+
+        /// <summary>A year at least four digits wide, its sign kept; year 0 has none.</summary>
+        private static string YearText(BigInteger year)
+        {
+            string digits = BigInteger.Abs(year).ToString(CultureInfo.InvariantCulture).PadLeft(4, '0');
+            return (year.Sign < 0 ? "-" : "") + digits;
+        }
+
+        private sealed class Civil
+        {
+            public readonly BigInteger Year;
+            public readonly int Month;
+            public readonly int Day;
+
+            public Civil(BigInteger year, int month, int day)
+            {
+                Year = year;
+                Month = month;
+                Day = day;
+            }
+
+            public Civil NextDay()
+            {
+                if (Day < DaysInMonth(Year, Month)) return new Civil(Year, Month, Day + 1);
+                if (Month < 12) return new Civil(Year, Month + 1, 1);
+                return new Civil(Year + 1, 1, 1);
+            }
+
+            public Civil PreviousDay()
+            {
+                if (Day > 1) return new Civil(Year, Month, Day - 1);
+                if (Month > 1) return new Civil(Year, Month - 1, DaysInMonth(Year, Month - 1));
+                return new Civil(Year - 1, 12, 31);
+            }
+        }
+
+        private static int TwoDigits(string field) => int.Parse(field, CultureInfo.InvariantCulture);
+
+        private static Civil CivilOf(string yy, string mo, string dd, string what, string raw)
+        {
+            BigInteger year = BigInteger.Parse(yy, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+            int month = TwoDigits(mo), day = TwoDigits(dd);
+            if (month < 1 || month > 12)
+                throw new FormatException($"{what}: '{raw}' has month {mo}; a month is 01 to 12");
+            if (day < 1 || day > DaysInMonth(year, month))
+                throw new FormatException($"{what}: '{raw}' has day {dd}, which month {mo} of year {YearText(year)} doesn't have");
+            return new Civil(year, month, day);
+        }
+
+        /// <summary>Minutes east of UTC, and 0 with no offset. XSD 1.1 bounds an offset at 14:00.</summary>
+        private static int OffsetMinutes(string tz, string what, string raw)
+        {
+            if (string.IsNullOrEmpty(tz) || tz == "Z") return 0;
+            int hours = TwoDigits(tz.Substring(1, 2)), minutes = TwoDigits(tz.Substring(4, 2));
+            if (minutes > 59 || hours > 14 || (hours == 14 && minutes > 0))
+                throw new FormatException($"{what}: '{raw}' has offset {tz}; an offset is at most 14:00 either way");
+            return (tz[0] == '-' ? -1 : 1) * (hours * 60 + minutes);
+        }
+
+        /// <summary>XSD 1.1: no 60th second, and 24:00:00 only as the first instant of the next day.</summary>
+        private static void ClockOf(string hh, string mi, string ss, string fraction, string what, string raw, out int hour, out int minute)
+        {
+            hour = TwoDigits(hh);
+            minute = TwoDigits(mi);
+            int second = TwoDigits(ss);
+            bool endOfDay = hour == 24 && minute == 0 && second == 0 && fraction == "";
+            if (minute > 59 || second > 59 || (hour > 23 && !endOfDay))
+                throw new FormatException($"{what}: '{raw}' has time {hh}:{mi}:{ss}{fraction}; XSD 1.1 allows 00:00:00 to 23:59:59, and 24:00:00 exactly");
         }
 
         private static string CanonicalFraction(string frac)
@@ -201,59 +274,54 @@ namespace Kanonak.Canonical
             return tz;
         }
 
-        private static int TzOffsetMinutes(string tz)
-        {
-            if (tz == "Z") return 0;
-            int sign = tz[0] == '-' ? -1 : 1;
-            int hh = int.Parse(tz.Substring(1, 2), CultureInfo.InvariantCulture);
-            int mm = int.Parse(tz.Substring(4, 2), CultureInfo.InvariantCulture);
-            return sign * (hh * 60 + mm);
-        }
-
         public static string CanonicalDateTime(string raw)
         {
+            const string what = "canonicalDateTime";
             Match m = DateTimeRe.Match(raw.Trim());
             if (!m.Success)
-                throw new FormatException($"canonicalDateTime: '{raw}' is not a valid xsd:dateTime lexical");
-            string yy = m.Groups[1].Value, mo = m.Groups[2].Value, dd = m.Groups[3].Value;
-            string hh = m.Groups[4].Value, mi = m.Groups[5].Value, ss = m.Groups[6].Value;
+                throw new FormatException($"{what}: '{raw}' is not a valid xsd:dateTime lexical");
+            string ss = m.Groups[6].Value;
             string fraction = CanonicalFraction(m.Groups[7].Value);
             string tz = m.Groups[8].Value;
-
-            if (string.IsNullOrEmpty(tz))
-                return $"{CanonicalYear(yy)}-{mo}-{dd}T{hh}:{mi}:{ss}{fraction}";
-
-            // Shift integer fields to UTC on the proleptic Gregorian calendar.
-            var dt = new DateTime(
-                int.Parse(yy, CultureInfo.InvariantCulture),
-                int.Parse(mo, CultureInfo.InvariantCulture),
-                int.Parse(dd, CultureInfo.InvariantCulture),
-                int.Parse(hh, CultureInfo.InvariantCulture),
-                int.Parse(mi, CultureInfo.InvariantCulture),
-                int.Parse(ss, CultureInfo.InvariantCulture),
-                DateTimeKind.Utc);
-            var shifted = dt.AddMinutes(-TzOffsetMinutes(tz));
-            string y = CanonicalYear(shifted.Year.ToString(CultureInfo.InvariantCulture));
-            return $"{y}-{Pad2(shifted.Month)}-{Pad2(shifted.Day)}T{Pad2(shifted.Hour)}:{Pad2(shifted.Minute)}:{Pad2(shifted.Second)}{fraction}Z";
+            Civil civil = CivilOf(m.Groups[1].Value, m.Groups[2].Value, m.Groups[3].Value, what, raw);
+            ClockOf(m.Groups[4].Value, m.Groups[5].Value, ss, fraction, what, raw, out int hour, out int minute);
+            int minutes = hour * 60 + minute - OffsetMinutes(tz, what, raw);
+            if (minutes < 0)
+            {
+                minutes += 1440;
+                civil = civil.PreviousDay();
+            }
+            else if (minutes >= 1440)
+            {
+                minutes -= 1440;
+                civil = civil.NextDay();
+            }
+            string zone = string.IsNullOrEmpty(tz) ? "" : "Z";
+            return $"{YearText(civil.Year)}-{Pad2(civil.Month)}-{Pad2(civil.Day)}T{Pad2(minutes / 60)}:{Pad2(minutes % 60)}:{ss}{fraction}{zone}";
         }
 
         public static string CanonicalDate(string raw)
         {
+            const string what = "canonicalDate";
             Match m = DateRe.Match(raw.Trim());
             if (!m.Success)
-                throw new FormatException($"canonicalDate: '{raw}' is not a valid xsd:date lexical");
-            return $"{CanonicalYear(m.Groups[1].Value)}-{m.Groups[2].Value}-{m.Groups[3].Value}{CanonicalTz(m.Groups[4].Value)}";
+                throw new FormatException($"{what}: '{raw}' is not a valid xsd:date lexical");
+            Civil civil = CivilOf(m.Groups[1].Value, m.Groups[2].Value, m.Groups[3].Value, what, raw);
+            OffsetMinutes(m.Groups[4].Value, what, raw);
+            return $"{YearText(civil.Year)}-{m.Groups[2].Value}-{m.Groups[3].Value}{CanonicalTz(m.Groups[4].Value)}";
         }
 
         public static string CanonicalTime(string raw)
         {
+            const string what = "canonicalTime";
             Match m = TimeRe.Match(raw.Trim());
             if (!m.Success)
-                throw new FormatException($"canonicalTime: '{raw}' is not a valid xsd:time lexical");
+                throw new FormatException($"{what}: '{raw}' is not a valid xsd:time lexical");
             string hh = m.Groups[1].Value, mi = m.Groups[2].Value, ss = m.Groups[3].Value;
             string fraction = CanonicalFraction(m.Groups[4].Value);
-            if (hh == "24" && mi == "00" && ss == "00" && fraction == "") hh = "00";
-            return $"{hh}:{mi}:{ss}{fraction}{CanonicalTz(m.Groups[5].Value)}";
+            ClockOf(hh, mi, ss, fraction, what, raw, out int hour, out _);
+            OffsetMinutes(m.Groups[5].Value, what, raw);
+            return $"{(hour == 24 ? "00" : hh)}:{mi}:{ss}{fraction}{CanonicalTz(m.Groups[5].Value)}";
         }
 
         // -- Dispatch. ----------------------------------------------------------
