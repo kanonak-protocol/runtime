@@ -528,13 +528,22 @@ jobs:
         run: |
           fix="Configure the trusted publisher on EACH package — https://www.npmjs.com/package/@kanonak-protocol/<canonical|codec|expression|wire>/access -> Trusted Publisher -> GitHub Actions: organization kanonak-protocol, repository runtime, workflow release.yml, environment production. Then DELETE the NPM_TOKEN secret ($SECRETS_URL -> production) so the workflow uses OIDC. (Fallback: mint a granular token at https://www.npmjs.com/settings/~/tokens/granular-access-tokens/new with publish rights on @kanonak-protocol, note its expiry, and update NPM_TOKEN.)"
           if [ -n "$NODE_AUTH_TOKEN" ]; then
-            if who=$(npm whoami --registry https://registry.npmjs.org 2>&1); then
-              echo "OK   npm: NPM_TOKEN accepted (user $who). It WILL expire — prefer trusted publishing: $fix"
-            else
-              echo "::error::npm: NPM_TOKEN is set but npm rejected it ($who) — expired or revoked. $fix"
-              echo "- **npm**: NPM_TOKEN rejected (expired/revoked). $fix" >> "$F"; exit 1
-            fi
-            exit 0
+            # A 5xx or a network error is npm failing, and says nothing about the token: retry, then say so.
+            # On 2026-10-22 an npm outage answered 503 and this check called the token "expired or revoked".
+            outage='E5[0-9][0-9]|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN'
+            for attempt in 1 2 3; do
+              if who=$(npm whoami --registry https://registry.npmjs.org 2>&1); then
+                echo "OK   npm: NPM_TOKEN accepted (user $who). It WILL expire — prefer trusted publishing: $fix"
+                exit 0
+              fi
+              if ! grep -qE "$outage" <<<"$who"; then
+                echo "::error::npm: NPM_TOKEN is set but npm rejected it ($who) — expired or revoked. $fix"
+                echo "- **npm**: NPM_TOKEN rejected (expired/revoked). $fix" >> "$F"; exit 1
+              fi
+              [ "$attempt" -lt 3 ] && sleep 20
+            done
+            echo "::error::npm: the registry did not answer after 3 tries ($who), so NPM_TOKEN was NOT tested. Check https://status.npmjs.org and re-run."
+            echo "- **npm**: the registry was unavailable, so NPM_TOKEN was not tested. Check https://status.npmjs.org and re-run." >> "$F"; exit 1
           fi
           # OIDC: perform npm's own exchange for each package — it succeeds only
           # when a trusted publisher matching THIS repo/workflow/environment exists.
@@ -852,12 +861,22 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          if [ -n "$NODE_AUTH_TOKEN" ] && npm whoami --registry https://registry.npmjs.org >/dev/null 2>&1; then
-            echo "has_token=true" >> "$GITHUB_OUTPUT"; echo "Using NPM_TOKEN (one-time bootstrap; npm accepted it)"
-            exit 0
-          fi
           if [ -n "$NODE_AUTH_TOKEN" ]; then
-            echo "::warning::NPM_TOKEN is set but npm rejected it (npm whoami failed) — it has expired or been revoked. Falling back to npm trusted publishing (OIDC); delete the dead secret (PUBLISHING.md)."
+            # A 5xx or a network error is npm failing, not the token: retry, then stop rather than fall back.
+            outage='E5[0-9][0-9]|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN'
+            for attempt in 1 2 3; do
+              if who=$(npm whoami --registry https://registry.npmjs.org 2>&1); then
+                echo "has_token=true" >> "$GITHUB_OUTPUT"; echo "Using NPM_TOKEN (one-time bootstrap; npm accepted it)"
+                exit 0
+              fi
+              grep -qE "$outage" <<<"$who" || break
+              if [ "$attempt" -eq 3 ]; then
+                echo "::error::npm did not answer after 3 tries ($who), so NPM_TOKEN was NOT tested and nothing was published to npm. Check https://status.npmjs.org and re-run the workflow."
+                exit 1
+              fi
+              sleep 20
+            done
+            echo "::warning::NPM_TOKEN is set but npm rejected it ($who) — it has expired or been revoked. Falling back to npm trusted publishing (OIDC); delete the dead secret (PUBLISHING.md)."
           else
             echo "Using npm trusted publishing (OIDC)"
           fi
