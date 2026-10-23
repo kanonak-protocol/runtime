@@ -83,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "kanonak-codec"
-version = "1.0.1"
+version = "2.0.0"
 dependencies = [
  "kanonak-canonical",
  "serde",

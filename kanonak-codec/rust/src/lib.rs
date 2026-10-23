@@ -581,7 +581,7 @@ fn embedded_value(
         .get("props")
         .ok_or_else(|| CodecError::Malformed(format!("class {} is missing 'props'", cls_uri)))?;
 
-    let mut statements = field_statements(map, props, schema)?;
+    let mut statements = field_statements(map, cls_uri, props, schema)?;
     if let Some(members) = types {
         // A multi-typed embedded ($types implies an explicit $type): one type
         // statement per member, in $types (UTF-8 sorted) order — all hash-relevant.
@@ -618,6 +618,7 @@ fn embedded_value(
 /// when explicitly typed).
 fn field_statements(
     source: &Map<String, Json>,
+    class_uri: &str,
     props: &Json,
     schema: &Json,
 ) -> Result<Vec<Statement>, CodecError> {
@@ -628,10 +629,7 @@ fn field_statements(
             continue;
         }
         match props.get(key) {
-            None => out.push(Statement {
-                predicate: key.clone(),
-                value: Value::Raw(lexical(raw)),
-            }),
+            None => return undeclared_statement(class_uri, &format!("\"{}\"", key)),
             Some(prop) => {
                 let predicate =
                     prop.get("predicate")
@@ -663,6 +661,8 @@ fn field_statements(
         }
     }
 
+    // Open-world extras ride through serialize and deserialize, but this codec
+    // can't type them, so it refuses to hash them rather than hash them as text.
     if let Some(extra) = source.get("$extra") {
         let extra = extra
             .as_object()
@@ -671,13 +671,23 @@ fn field_statements(
             if raw.is_null() {
                 continue;
             }
-            out.push(Statement {
-                predicate: predicate.clone(),
-                value: Value::Raw(lexical(raw)),
-            });
+            return undeclared_statement(class_uri, &format!("$extra statement {}", predicate));
         }
     }
     Ok(out)
+}
+
+/// A codec holds one package's schema, so it can't know the range of a
+/// predicate another package declares on its classes (open-world augmentation).
+/// Hashing such a statement as untyped text would give a hash that differs from
+/// `kanonak hash`'s without a word, so hashing refuses it, naming it
+/// (`[hash-undeclared-statement]`). Serializing and deserializing carry it.
+fn undeclared_statement<T>(class_uri: &str, what: &str) -> Result<T, CodecError> {
+    err(format!(
+        "Cannot hash {}'s {}: this codec's schema doesn't declare it, so it can't type its value. \
+         Hash it with the SDK, over the graph [hash-undeclared-statement]",
+        class_uri, what
+    ))
 }
 
 /// The statements for one subject node: the rdf:type triple(s), then its fields.
@@ -718,7 +728,7 @@ fn statements(node: &Node, schema: &Json) -> Result<Vec<Statement>, CodecError> 
             value: Value::Reference(member),
         })
         .collect();
-    out.extend(field_statements(node, props, schema)?);
+    out.extend(field_statements(node, type_uri, props, schema)?);
     Ok(out)
 }
 

@@ -206,22 +206,36 @@ public final class Conformance {
             }
             PackageContext pkg = parsePkg(asMap(caseObj.get("pkg")));
 
-            String form = Codec.canonicalForm(nodes, schema, pkg);
-            String expForm = (String) caseObj.get("expectedCanonicalForm");
-            if (form.equals(expForm)) {
-                passed++;
+            if (caseObj.get("expectHashError") instanceof String kind) {
+                // Serializing still carries what hashing refuses (runtime#37).
+                for (boolean ok : new boolean[] {
+                    rejectsWithKind(() -> Codec.canonicalForm(nodes, schema, pkg), kind, cid),
+                    rejectsWithKind(() -> Codec.contentHash(nodes, schema, pkg), kind, cid),
+                }) {
+                    if (ok) {
+                        passed++;
+                    } else {
+                        failed++;
+                    }
+                }
             } else {
-                failed++;
-                System.out.println("FAIL [" + cid + "] canonical form\n  got: " + form + "\n  exp: " + expForm);
-            }
+                String form = Codec.canonicalForm(nodes, schema, pkg);
+                String expForm = (String) caseObj.get("expectedCanonicalForm");
+                if (form.equals(expForm)) {
+                    passed++;
+                } else {
+                    failed++;
+                    System.out.println("FAIL [" + cid + "] canonical form\n  got: " + form + "\n  exp: " + expForm);
+                }
 
-            String hash = Codec.contentHash(nodes, schema, pkg);
-            String expHash = (String) caseObj.get("expectedHash");
-            if (hash.equals(expHash)) {
-                passed++;
-            } else {
-                failed++;
-                System.out.println("FAIL [" + cid + "] hash\n  got: " + hash + "\n  exp: " + expHash);
+                String hash = Codec.contentHash(nodes, schema, pkg);
+                String expHash = (String) caseObj.get("expectedHash");
+                if (hash.equals(expHash)) {
+                    passed++;
+                } else {
+                    failed++;
+                    System.out.println("FAIL [" + cid + "] hash\n  got: " + hash + "\n  exp: " + expHash);
+                }
             }
 
             List<Object> expSerialize = asList(caseObj.get("expectedSerialize"));

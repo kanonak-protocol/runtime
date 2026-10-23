@@ -56,10 +56,26 @@ final class CodecVectorTests: XCTestCase {
             let nodes = c["nodes"] as! [[String: Any]]
             let pkg = packageContext(c["pkg"] as! [String: Any])
 
-            XCTAssertEqual(try canonicalForm(nodes, schema: file.schema, pkg: pkg),
-                           c["expectedCanonicalForm"] as! String, "[\(cid)] canonical form")
-            XCTAssertEqual(try contentHash(nodes, schema: file.schema, pkg: pkg),
-                           c["expectedHash"] as! String, "[\(cid)] hash")
+            if let kind = c["expectHashError"] as? String {
+                // Serializing still carries what hashing refuses (runtime#37).
+                for (what, run) in [
+                    ("canonical form", { _ = try canonicalForm(nodes, schema: file.schema, pkg: pkg) }),
+                    ("hash", { _ = try contentHash(nodes, schema: file.schema, pkg: pkg) }),
+                ] as [(String, () throws -> Void)] {
+                    do {
+                        try run()
+                        XCTFail("[\(cid)] expected the \(what) to refuse with [\(kind)], it did not")
+                    } catch {
+                        let message = (error as? CodecError)?.message ?? String(describing: error)
+                        XCTAssertTrue(message.hasSuffix("[\(kind)]"), "[\(cid)] \(what) expected [\(kind)], got: \(message)")
+                    }
+                }
+            } else {
+                XCTAssertEqual(try canonicalForm(nodes, schema: file.schema, pkg: pkg),
+                               c["expectedCanonicalForm"] as! String, "[\(cid)] canonical form")
+                XCTAssertEqual(try contentHash(nodes, schema: file.schema, pkg: pkg),
+                               c["expectedHash"] as! String, "[\(cid)] hash")
+            }
 
             let expectedSerialize = c["expectedSerialize"] as! [[String: Any]]
             for (i, node) in nodes.enumerated() {

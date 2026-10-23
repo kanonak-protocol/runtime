@@ -24,6 +24,8 @@ TypeScript references **`@kanonak-protocol/canonical`** — its only dependency.
   through `$extra` (top-level wire fields, collected under `$extra` on the typed
   node — `[JsonExtensionData]` semantics).
 
+Hashing also refuses a statement the schema doesn't declare, an `$extra` entry or a key the class doesn't model, with `[hash-undeclared-statement]`: a codec holds one package's schema and can't type another package's predicate, so such a node is hashed with the SDK, over the graph. Serializing and deserializing still carry it (codec 2.0.0, runtime#37).
+
 ## Self-contained by design
 
 Carriers come from the schema's datatype URIs, and the resolved foundation URIs

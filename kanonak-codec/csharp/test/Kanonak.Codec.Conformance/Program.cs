@@ -200,17 +200,27 @@ class Program
             foreach (var n in c.GetProperty("nodes").EnumerateArray())
                 nodes.Add((IReadOnlyDictionary<string, object>)DecodeJson(n));
 
-            // Canonical form.
-            string form = Codec.CanonicalForm(nodes, schema, pkg);
-            string expForm = c.GetProperty("expectedCanonicalForm").GetString();
-            if (form == expForm) passed++;
-            else { failed++; Console.WriteLine($"FAIL [{id}] canonical form\n  got: {form}\n  exp: {expForm}"); }
+            if (c.TryGetProperty("expectHashError", out var hashError))
+            {
+                // Serializing still carries what hashing refuses (runtime#37).
+                string kind = hashError.GetString();
+                if (RejectsWithKind(() => Codec.CanonicalForm(nodes, schema, pkg), kind, id)) passed++; else failed++;
+                if (RejectsWithKind(() => Codec.ContentHash(nodes, schema, pkg), kind, id)) passed++; else failed++;
+            }
+            else
+            {
+                // Canonical form.
+                string form = Codec.CanonicalForm(nodes, schema, pkg);
+                string expForm = c.GetProperty("expectedCanonicalForm").GetString();
+                if (form == expForm) passed++;
+                else { failed++; Console.WriteLine($"FAIL [{id}] canonical form\n  got: {form}\n  exp: {expForm}"); }
 
-            // Content hash.
-            string hash = Codec.ContentHash(nodes, schema, pkg);
-            string expHash = c.GetProperty("expectedHash").GetString();
-            if (hash == expHash) passed++;
-            else { failed++; Console.WriteLine($"FAIL [{id}] hash\n  got: {hash}\n  exp: {expHash}"); }
+                // Content hash.
+                string hash = Codec.ContentHash(nodes, schema, pkg);
+                string expHash = c.GetProperty("expectedHash").GetString();
+                if (hash == expHash) passed++;
+                else { failed++; Console.WriteLine($"FAIL [{id}] hash\n  got: {hash}\n  exp: {expHash}"); }
+            }
 
             // Serialize each node + deserialize round-trip.
             var expSer = c.GetProperty("expectedSerialize");
