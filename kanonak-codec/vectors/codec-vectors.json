@@ -125,8 +125,8 @@
           }
         }
       ],
-      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"probe.example.com/data@1.0.0/a2\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"probe.example.com/schema@1.0.0/Account\"},{\"predicate\":\"probe.example.com/schema@1.0.0/accountCode\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"acme\"},{\"predicate\":\"sec.example.com/policy@1.0.0/classification\",\"type\":\"string\",\"value\":\"PII\"}]},{\"uri\":\"probe.example.com/data@1.0.0/data\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"kanonak.org/core-kanonak@1.0.0/Package\"}]}]}",
-      "expectedHash": "sha256:a33f9f0b1867a2182431a6ebf0a37205cbf5cae4604e6bf92838a3ef78312ea3",
+      "why": "Another package's predicate rides through $extra losslessly, but this codec's schema can't type it, so hashing refuses it rather than hash it as untyped text (runtime#37, codec 2.0.0)",
+      "expectHashError": "hash-undeclared-statement",
       "expectedSerialize": [
         {
           "$type": "probe.example.com/schema@1.0.0/Account",

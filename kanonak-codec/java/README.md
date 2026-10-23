@@ -68,6 +68,7 @@ the same member at a version that can read it. Hashing stays EXACT-version
 only: a node or embedded value whose `$type` is only compatibly present is
 rejected with `[hash-needs-exact-version]`, since its predicates would carry
 the schema's version instead of the producer's.
+Hashing also refuses a statement the schema doesn't declare, an `$extra` entry or a key the class doesn't model, with `[hash-undeclared-statement]`: a codec holds one package's schema and can't type another package's predicate, so such a node is hashed with the SDK, over the graph. Serializing and deserializing still carry it (codec 2.0.0, runtime#37).
 
 ## Typed surface (0.3.0)
 

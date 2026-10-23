@@ -20,7 +20,7 @@ for the same canonical form + content hash the `kanonak hash` CLI produces.
 - **`Codec.Serialize(node)` / `Codec.Deserialize(json, schema)`** — the
   normalized-JSON wire form. Open-world assertions outside the type-model
   round-trip losslessly through `$extra` (top-level wire fields, collected under
-  `$extra` on the typed node — `[JsonExtensionData]` semantics).
+  `$extra` on the typed node — `[JsonExtensionData]` semantics). Hashing refuses a statement the schema doesn't declare, an `$extra` entry or a key the class doesn't model, with `[hash-undeclared-statement]`: a codec holds one package's schema and can't type another package's predicate, so such a node is hashed with the SDK, over the graph. Serializing and deserializing still carry it (codec 2.0.0, runtime#37).
 - **`Codec.TypeMatches(node, classUri, schema)`** — what a generated type guard
   asks: is this node (a map or a `KanonakNode`) an instance of `classUri`?
 - **`Codec.EnumMember(schema, reference)` → `EnumMemberMatch`** (`EnumType`,

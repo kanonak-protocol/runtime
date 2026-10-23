@@ -349,12 +349,7 @@ func fieldStatements(source map[string]interface{}, cls Class, schema CodecSchem
 		}
 		prop, has := cls.Props[key]
 		if !has {
-			lex, err := lexical(raw)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, canonical.Statement{Predicate: key, Value: canonical.Raw{Token: lex}})
-			continue
+			return nil, undeclaredStatement(cls, fmt.Sprintf("%q", key))
 		}
 		if list, isList := raw.([]interface{}); isList {
 			// An empty list contributes NO statement — absent and empty are
@@ -381,19 +376,29 @@ func fieldStatements(source map[string]interface{}, cls Class, schema CodecSchem
 		}
 	}
 
+	// Open-world extras ride through Serialize and Deserialize, but this codec
+	// can't type them, so it refuses to hash them rather than hash them as text.
 	if extra, ok := source["$extra"].(map[string]interface{}); ok {
 		for predicate, raw := range extra {
 			if raw == nil {
 				continue
 			}
-			lex, err := lexical(raw)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, canonical.Statement{Predicate: predicate, Value: canonical.Raw{Token: lex}})
+			return nil, undeclaredStatement(cls, "$extra statement "+predicate)
 		}
 	}
 	return out, nil
+}
+
+// undeclaredStatement refuses to hash a statement the class doesn't declare. A
+// codec holds one package's schema, so it can't know the range of a predicate
+// another package declares on its classes (open-world augmentation). Hashing it
+// as untyped text would give a hash that differs from `kanonak hash`'s without
+// a word ([hash-undeclared-statement]). Serialize and Deserialize carry it.
+func undeclaredStatement(cls Class, what string) error {
+	return fmt.Errorf(
+		"codec: cannot hash %s's %s: this codec's schema doesn't declare it, so it can't type its value. "+
+			"Hash it with the SDK, over the graph [hash-undeclared-statement]",
+		cls.TypeURI, what)
 }
 
 // statements builds the canonical statements for one subject node: the rdf:type

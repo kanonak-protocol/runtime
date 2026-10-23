@@ -64,20 +64,32 @@ function fail(msg) {
 function runFile(file) {
   const doc = readDoc(file);
   for (const c of doc.cases) {
-    const form = tryCall("canonicalForm", c.nodes, doc.schema, c.pkg);
-    if (form.err !== undefined) {
-      fail(`[${c.id}] canonical-form rejected: ${form.err}`);
-    } else if (form.ok !== c.expectedCanonicalForm) {
-      fail(
-        `[${c.id}] form\n  expected: ${c.expectedCanonicalForm}\n  actual:   ${form.ok}`,
-      );
-    }
+    if (c.expectHashError) {
+      // Serializing still carries what hashing refuses (runtime#37).
+      for (const [what, fn] of [["canonical-form", "canonicalForm"], ["content-hash", "contentHash"]]) {
+        const refused = tryCall(fn, c.nodes, doc.schema, c.pkg);
+        if (refused.err === undefined) {
+          fail(`[${c.id}] expected ${what} to refuse with [${c.expectHashError}], it did not`);
+        } else if (!String(refused.err).endsWith(`[${c.expectHashError}]`)) {
+          fail(`[${c.id}] ${what} expected [${c.expectHashError}], got: ${refused.err}`);
+        }
+      }
+    } else {
+      const form = tryCall("canonicalForm", c.nodes, doc.schema, c.pkg);
+      if (form.err !== undefined) {
+        fail(`[${c.id}] canonical-form rejected: ${form.err}`);
+      } else if (form.ok !== c.expectedCanonicalForm) {
+        fail(
+          `[${c.id}] form\n  expected: ${c.expectedCanonicalForm}\n  actual:   ${form.ok}`,
+        );
+      }
 
-    const hash = tryCall("contentHash", c.nodes, doc.schema, c.pkg);
-    if (hash.err !== undefined) {
-      fail(`[${c.id}] content-hash rejected: ${hash.err}`);
-    } else if (hash.ok !== c.expectedHash) {
-      fail(`[${c.id}] hash expected ${c.expectedHash} got ${hash.ok}`);
+      const hash = tryCall("contentHash", c.nodes, doc.schema, c.pkg);
+      if (hash.err !== undefined) {
+        fail(`[${c.id}] content-hash rejected: ${hash.err}`);
+      } else if (hash.ok !== c.expectedHash) {
+        fail(`[${c.id}] hash expected ${c.expectedHash} got ${hash.ok}`);
+      }
     }
 
     c.nodes.forEach((node, i) => {

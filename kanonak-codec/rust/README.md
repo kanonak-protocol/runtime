@@ -55,6 +55,7 @@ bracketed kind — `[unknown-type]`, `[newer-version]`, `[other-major]`,
 computed over the producer's versioned URIs, so a node (or embedded value)
 whose class the schema has only at a compatible later version fails with
 `[hash-needs-exact-version]` rather than producing a different hash.
+Hashing also refuses a statement the schema doesn't declare, an `$extra` entry or a key the class doesn't model, with `[hash-undeclared-statement]`: a codec holds one package's schema and can't type another package's predicate, so such a node is hashed with the SDK, over the graph. Serializing and deserializing still carry it (codec 2.0.0, runtime#37).
 
 **Reference values (runtime#6).** A `{"$ref": uri}` must address a named
 resource (`publisher/package[@version]/name`); a `$ref` containing a URI

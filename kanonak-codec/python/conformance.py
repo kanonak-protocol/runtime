@@ -35,6 +35,23 @@ ENUMS_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-enums.js
 COMPAT_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-compat.json")
 
 
+def _expect_form_and_hash(case, cid, nodes, schema, pkg, passed, failed):
+    form = canonical_form(nodes, schema, pkg)
+    if form != case["expectedCanonicalForm"]:
+        failed += 1
+        print(f"FAIL [{cid}] canonical form\n  got: {form}\n  exp: {case['expectedCanonicalForm']}")
+    else:
+        passed += 1
+
+    h = content_hash(nodes, schema, pkg)
+    if h != case["expectedHash"]:
+        failed += 1
+        print(f"FAIL [{cid}] hash\n  got: {h}\n  exp: {case['expectedHash']}")
+    else:
+        passed += 1
+    return passed, failed
+
+
 def run_file(vectors: str) -> "tuple[int, int]":
     with io.open(vectors, encoding="utf-8") as fh:
         data = json.load(fh)
@@ -47,19 +64,22 @@ def run_file(vectors: str) -> "tuple[int, int]":
         nodes = case["nodes"]
         pkg = case["pkg"]
 
-        form = canonical_form(nodes, schema, pkg)
-        if form != case["expectedCanonicalForm"]:
-            failed += 1
-            print(f"FAIL [{cid}] canonical form\n  got: {form}\n  exp: {case['expectedCanonicalForm']}")
+        if "expectHashError" in case:
+            # Serializing still carries what hashing refuses (runtime#37).
+            kind = case["expectHashError"]
+            for what, run in (("canonical form", canonical_form), ("hash", content_hash)):
+                try:
+                    run(nodes, schema, pkg)
+                    failed += 1
+                    print(f"FAIL [{cid}] expected the {what} to refuse with [{kind}], it did not")
+                except ValueError as err:
+                    if str(err).endswith(f"[{kind}]"):
+                        passed += 1
+                    else:
+                        failed += 1
+                        print(f"FAIL [{cid}] {what} expected [{kind}], got: {err}")
         else:
-            passed += 1
-
-        h = content_hash(nodes, schema, pkg)
-        if h != case["expectedHash"]:
-            failed += 1
-            print(f"FAIL [{cid}] hash\n  got: {h}\n  exp: {case['expectedHash']}")
-        else:
-            passed += 1
+            passed, failed = _expect_form_and_hash(case, cid, nodes, schema, pkg, passed, failed)
 
         for i, node in enumerate(nodes):
             got = serialize(node)
