@@ -36,13 +36,33 @@ function runFile(relative: string): void {
   for (const c of d.cases) {
     const nodes: CodecNode[] = c.nodes;
     const pkg: PackageContext = c.pkg;
+    const ser = nodes.map((n) => serialize(n));
+    const serOk = JSON.stringify(ser) === JSON.stringify(c.expectedSerialize);
+
+    if (c.expectHashError) {
+      // Serializing still carries what hashing refuses (runtime#37).
+      const refuses = (what: string, run: () => unknown): boolean => {
+        try {
+          run();
+          console.error(`${c.id}: expected ${what} to refuse with [${c.expectHashError}], it did not`);
+          return false;
+        } catch (err) {
+          const ok = (err as Error).message.endsWith(`[${c.expectHashError}]`);
+          if (!ok) console.error(`${c.id}: ${what} expected [${c.expectHashError}], got: ${(err as Error).message}`);
+          return ok;
+        }
+      };
+      const formOk = refuses('the canonical form', () => packageCanonicalForm(nodes, schema, pkg));
+      const hashOk = refuses('the hash', () => packageContentHash(nodes, schema, pkg));
+      if (!serOk) console.error(`${c.id}: serialize mismatch\n  expected ${JSON.stringify(c.expectedSerialize)}\n  got      ${JSON.stringify(ser)}`);
+      formOk && hashOk && serOk ? pass++ : fails++;
+      continue;
+    }
+
     const form = packageCanonicalForm(nodes, schema, pkg);
     const hash = packageContentHash(nodes, schema, pkg);
-    const ser = nodes.map((n) => serialize(n));
-
     const formOk = form === c.expectedCanonicalForm;
     const hashOk = hash === c.expectedHash;
-    const serOk = JSON.stringify(ser) === JSON.stringify(c.expectedSerialize);
 
     if (formOk && hashOk && serOk) {
       pass++;

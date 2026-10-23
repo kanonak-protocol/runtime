@@ -154,21 +154,42 @@ fn run_file(file: &str) {
             .map(as_node)
             .collect();
 
-        let form = canonical_form(&nodes, &schema, &pkg).unwrap();
-        let exp_form = case["expectedCanonicalForm"].as_str().unwrap();
-        if form != exp_form {
-            fails += 1;
-            eprintln!(
-                "FAIL [{}] form\n  expected: {}\n  actual:   {}",
-                id, exp_form, form
-            );
-        }
+        if let Some(kind) = case.get("expectHashError").and_then(|k| k.as_str()) {
+            // Serializing still carries what hashing refuses (runtime#37).
+            let suffix = format!("[{}]", kind);
+            for (what, refused) in [
+                ("canonical form", canonical_form(&nodes, &schema, &pkg).err().map(|e| e.to_string())),
+                ("hash", content_hash(&nodes, &schema, &pkg).err().map(|e| e.to_string())),
+            ] {
+                match refused {
+                    Some(message) if message.ends_with(&suffix) => {}
+                    Some(message) => {
+                        fails += 1;
+                        eprintln!("FAIL [{}] {} expected {}, got: {}", id, what, suffix, message);
+                    }
+                    None => {
+                        fails += 1;
+                        eprintln!("FAIL [{}] expected the {} to refuse with {}, it did not", id, what, suffix);
+                    }
+                }
+            }
+        } else {
+            let form = canonical_form(&nodes, &schema, &pkg).unwrap();
+            let exp_form = case["expectedCanonicalForm"].as_str().unwrap();
+            if form != exp_form {
+                fails += 1;
+                eprintln!(
+                    "FAIL [{}] form\n  expected: {}\n  actual:   {}",
+                    id, exp_form, form
+                );
+            }
 
-        let hash = content_hash(&nodes, &schema, &pkg).unwrap();
-        let exp_hash = case["expectedHash"].as_str().unwrap();
-        if hash != exp_hash {
-            fails += 1;
-            eprintln!("FAIL [{}] hash expected {} got {}", id, exp_hash, hash);
+            let hash = content_hash(&nodes, &schema, &pkg).unwrap();
+            let exp_hash = case["expectedHash"].as_str().unwrap();
+            if hash != exp_hash {
+                fails += 1;
+                eprintln!("FAIL [{}] hash expected {} got {}", id, exp_hash, hash);
+            }
         }
 
         let expected_serialize = case["expectedSerialize"].as_array().unwrap();

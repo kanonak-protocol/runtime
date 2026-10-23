@@ -518,9 +518,7 @@ public final class Codec {
             }
             CodecProp prop = cls.props().get(key);
             if (prop == null) {
-                // Not in the type-model — an open-world assertion. Preserved as a raw token.
-                statements.add(new Statement(key, new Value.Raw(lexical(raw))));
-                continue;
+                throw undeclaredStatement(cls, "\"" + key + "\"");
             }
             if (raw instanceof List<?> list) {
                 // An empty list contributes NO statement — absent and empty are
@@ -539,16 +537,31 @@ public final class Codec {
             }
         }
 
+        // Open-world extras ride through serialize and deserialize, but this codec
+        // can't type them, so it refuses to hash them rather than hash them as text.
         Object extra = source.get("$extra");
         if (extra instanceof Map<?, ?> extraMap) {
             for (Map.Entry<String, Object> e : ((Map<String, Object>) extraMap).entrySet()) {
                 if (e.getValue() == null) {
                     continue;
                 }
-                statements.add(new Statement(e.getKey(), new Value.Raw(lexical(e.getValue()))));
+                throw undeclaredStatement(cls, "$extra statement " + e.getKey());
             }
         }
         return statements;
+    }
+
+    /**
+     * A codec holds one package's schema, so it can't know the range of a
+     * predicate another package declares on its classes (open-world augmentation).
+     * Hashing such a statement as untyped text would give a hash that differs from
+     * {@code kanonak hash}'s without a word, so hashing refuses it, naming it
+     * ({@code [hash-undeclared-statement]}). Serializing and deserializing carry it.
+     */
+    private static IllegalArgumentException undeclaredStatement(CodecClass cls, String what) {
+        return new IllegalArgumentException(
+            "Cannot hash " + cls.typeUri() + "'s " + what + ": this codec's schema doesn't declare it, "
+                + "so it can't type its value. Hash it with the SDK, over the graph [hash-undeclared-statement]");
     }
 
     private static List<Statement> statementsFor(Map<String, Object> node, CodecSchema schema) {

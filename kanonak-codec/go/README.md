@@ -57,7 +57,9 @@ is not a class coordinate. `LookupEnumMember` resolves a member reference the
 same way (`EnumMemberMatch{EnumType, URI, Member}`, or `found == false` for
 "not this schema's"). Hashing stays exact-version only. Every rejection message
 ends in a bracketed kind: `[unknown-type]`, `[newer-version]`, `[other-major]`,
-`[other-minor-line]`, `[hash-needs-exact-version]`.
+`[other-minor-line]`, `[hash-needs-exact-version]`, `[hash-undeclared-statement]`.
+Hashing also refuses a statement the schema doesn't declare, an `$extra` entry or a key the class doesn't model, with `[hash-undeclared-statement]`: a codec holds one package's schema and can't type another package's predicate, so such a node is hashed with the SDK, over the graph. Serializing and deserializing still carry it (codec 2.0.0, runtime#37). From 2.0.0 the module path is
+`github.com/kanonak-protocol/runtime/kanonak-codec/go/v2`.
 
 An object property carries a reference (`{"$ref": "..."}`) or an embedded
 node, gated by `codec-vectors-embedded.json`. Malformed input fails loudly;
