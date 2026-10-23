@@ -33,12 +33,12 @@ on:
 
 jobs:
   unpublish:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: production   # where NPM_TOKEN lives
     steps:
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
-          node-version: '22'
+          node-version: '22.23.4'
 
       - name: Unpublish versions in range
         env:
