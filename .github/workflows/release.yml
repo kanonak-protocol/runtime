@@ -18,7 +18,7 @@
 # schedule turns a dead or dying credential into an issue that says where to
 # go and what to do. Stored tokens expire; nothing else reminds anyone.
 #
-# Runner: ubuntu-latest, toolchains pinned via setup-* (Node-24 majors).
+# Runners, actions, toolchains and tools are pinned by digest, commit or exact version (runtime#45).
 
 name: release
 
@@ -52,12 +52,12 @@ defaults:
 jobs:
   # ======================= TEST (always) =======================
   test-python:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }   # the release plan reads the last release tag
-      - uses: actions/setup-python@v6
-        with: { python-version: "3.12" }
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with: { python-version: "3.12.15" }
       - run: |
           python kanonak-canonical/python/conformance.py
           python kanonak-codec/python/conformance.py
@@ -83,11 +83,12 @@ jobs:
           exit $fail
 
   test-rust:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }   # the release plan reads the last release tag
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # the stable branch; the toolchain is pinned below
+        with: { toolchain: 1.99.1 }
       - run: |
           cargo test --manifest-path kanonak-canonical/rust/Cargo.toml
           cargo test --manifest-path kanonak-codec/rust/Cargo.toml
@@ -107,8 +108,8 @@ jobs:
       # THE 1.x COMPATIBILITY GATE (runtime#29), Rust half: cargo-semver-checks
       # against the crate as published on crates.io, at the release type the
       # declared version allows.
-      - uses: taiki-e/install-action@v2
-        with: { tool: cargo-semver-checks }
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        with: { tool: cargo-semver-checks@0.51.0 }
       - name: API compatibility against the last release (cargo-semver-checks)
         run: |
           fail=0
@@ -129,13 +130,13 @@ jobs:
           exit $fail
 
   test-go:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }   # the release plan reads the last release tag
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: "stable"
+          go-version: "1.27.3"
           cache-dependency-path: "**/go.sum"
       - run: |
           (cd kanonak-canonical/go && go test ./...)
@@ -176,12 +177,12 @@ jobs:
           exit $fail
 
   test-typescript:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }   # the release plan reads the last release tag
-      - uses: actions/setup-node@v6
-        with: { node-version: "22" }
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version: "22.23.4" }
       - run: npm install --no-audit --no-fund
       # Derived vectors stay derived: the committed file must be exactly what its generator makes.
       - run: node kanonak-canonical/vectors/gen-ieee-vectors/generate.mjs --check
@@ -216,12 +217,12 @@ jobs:
           exit $fail
 
   test-csharp:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }   # the release plan reads the last release tag
-      - uses: actions/setup-dotnet@v5
-        with: { dotnet-version: "8.0.x" }
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with: { dotnet-version: "8.0.426" }
       - run: |
           dotnet run -c Release --project kanonak-canonical/csharp/test/Kanonak.Canonical.Conformance -- "$PWD/kanonak-canonical/vectors"
           # arg-less: the codec runner defaults to BOTH vector files (codec-vectors.json + codec-vectors-embedded.json)
@@ -251,12 +252,12 @@ jobs:
           exit $fail
 
   test-java:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }   # the release plan reads the last release tag
-      - uses: actions/setup-java@v5
-        with: { distribution: temurin, java-version: "17" }
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with: { distribution: temurin, java-version: "17.0.21+9" }
       - run: |
           cd kanonak-canonical/java
           javac -d out src/main/java/org/kanonak/canonical/*.java conformance/Conformance.java
@@ -342,10 +343,10 @@ jobs:
   # against ROOT semver tags, so a release is a root `v*` tag — pushed by the
   # publish-swift job below (never manually), gated by this test job.
   test-swift:
-    runs-on: ubuntu-latest
-    container: swift:6.1
+    runs-on: ubuntu-24.04
+    container: swift:6.1@sha256:04b28d4aff67fa4ff4029d6e27dd40f9737cc69cc558a37b06f18b3dceb8942f
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - run: swift test
 
   # THE 1.x COMPATIBILITY GATE (runtime#29), Swift half: SwiftPM's API
@@ -353,9 +354,9 @@ jobs:
   # root tag is one release train over all four products, so its declared
   # version decides what may change. Xcode ships the digester, hence macOS.
   compat-swift:
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }   # the baseline is the last root v* tag
       - name: API compatibility against the last release (swift-api-digester)
         run: |
@@ -372,13 +373,13 @@ jobs:
   # behind the kanonak:codec WIT interface, driven through the SAME golden
   # vectors by a jco-transpiled Node host. Gates publish-wasm (GHCR OCI).
   test-wasm:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with: { targets: wasm32-wasip2 }
-      - uses: actions/setup-node@v6
-        with: { node-version: "22" }
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # the stable branch; the toolchain is pinned below
+        with: { toolchain: 1.99.1, targets: wasm32-wasip2 }
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version: "22.23.4" }
       - run: cargo build --manifest-path kanonak-codec/wasm/Cargo.toml --target wasm32-wasip2 --release
       - run: |
           cd kanonak-codec/wasm/conformance
@@ -399,13 +400,13 @@ jobs:
   # touched. release-audit remains the post-publish verification of the same
   # invariants against the public registries.
   preflight:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }   # the release plan reads the last release tag
       - name: desired-state consistency (manifest parity + tag drift) before any publish
         run: |
-          python3 -m pip install --quiet pyyaml
+          python3 -m pip install --quiet pyyaml==6.0.3
           retry() { local n=$1 s=$2; shift 2; local i
             for i in $(seq 1 "$n"); do "$@" && return 0; [ "$i" -lt "$n" ] && sleep "$s"; done
             return 1
@@ -510,17 +511,17 @@ jobs:
       id-token: write
       contents: read
       issues: write              # the weekly reminder issue (report step)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       SECRETS_URL: https://github.com/kanonak-protocol/runtime/settings/environments   # -> production -> Environment secrets
       F: ${{ github.workspace }}/credential-findings.md   # findings for the report step (never committed)
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - run: ': > "$F"'
 
       # ---------------------------------------------------------------- npm --
-      - uses: actions/setup-node@v6
-        with: { node-version: "22", registry-url: "https://registry.npmjs.org" }
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version: "22.23.4", registry-url: "https://registry.npmjs.org" }
       - name: npm — NPM_TOKEN (if set) or trusted publisher per package
         continue-on-error: true   # every check runs; `report` is the verdict
         env:
@@ -582,7 +583,7 @@ jobs:
         if: steps.cargotok.outputs.has_token != 'true'
         id: cargooidc
         continue-on-error: true
-        uses: rust-lang/crates-io-auth-action@v1
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
       - name: crates.io — trusted publishing verdict
         continue-on-error: true   # every check runs; `report` is the verdict
         if: steps.cargotok.outputs.has_token != 'true'
@@ -613,7 +614,7 @@ jobs:
       - name: NuGet — trusted publishing login (the same one publish-csharp performs)
         id: nugetoidc
         continue-on-error: true
-        uses: NuGet/login@v1
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
         with:
           user: ${{ vars.NUGET_USER }}
       - name: NuGet — verdict
@@ -719,34 +720,35 @@ jobs:
     needs: [test-python, preflight, preflight-credentials]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with: { python-version: "3.12" }
-      - run: pip install build
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with: { python-version: "3.12.15" }
+      - run: pip install build==1.6.1
       - run: python -m build kanonak-canonical/python && python -m build kanonak-codec/python && python -m build kanonak-expression/python && python -m build kanonak-wire/python
       - name: publish canonical (PyPI, OIDC trusted publishing)
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with: { packages-dir: kanonak-canonical/python/dist, skip-existing: true }
       - name: publish codec
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with: { packages-dir: kanonak-codec/python/dist, skip-existing: true }
       - name: publish expression
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with: { packages-dir: kanonak-expression/python/dist, skip-existing: true }
       - name: publish wire
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with: { packages-dir: kanonak-wire/python/dist, skip-existing: true }
 
   publish-rust:
     needs: [test-rust, preflight, preflight-credentials]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # the stable branch; the toolchain is pinned below
+        with: { toolchain: 1.99.1 }
       # crates.io has no "pending publisher", so the FIRST publish of a new crate
       # needs a token. If CARGO_REGISTRY_TOKEN is set AND crates.io still accepts
       # it, use it (one-time bootstrap); otherwise use OIDC trusted publishing.
@@ -776,7 +778,7 @@ jobs:
           fi
       - name: crates.io auth (OIDC trusted publishing)
         if: steps.cargocfg.outputs.has_token != 'true'
-        uses: rust-lang/crates-io-auth-action@v1
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
         id: auth
       - name: publish canonical then codec (skip versions already on crates.io)
         env:
@@ -833,11 +835,11 @@ jobs:
     needs: [test-typescript, preflight, preflight-credentials]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with: { node-version: "22", registry-url: "https://registry.npmjs.org" }
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version: "22.23.4", registry-url: "https://registry.npmjs.org" }
       - run: npm install --no-audit --no-fund
       - run: |
           npm run build -w @kanonak-protocol/canonical
@@ -882,7 +884,7 @@ jobs:
           fi
           echo "has_token=false" >> "$GITHUB_OUTPUT"
           sed -i '/_authToken/d' "$NPM_CONFIG_USERCONFIG"
-          npm install -g npm@latest --no-audit --no-fund
+          npm install -g npm@12.2.1 --no-audit --no-fund
           npm --version
       - name: publish canonical, codec, expression, wire (npm, provenance; skip already-published)
         env:
@@ -920,18 +922,18 @@ jobs:
     needs: [test-csharp, preflight, preflight-credentials]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-dotnet@v5
-        with: { dotnet-version: "8.0.x" }
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with: { dotnet-version: "8.0.426" }
       - run: |
           dotnet pack -c Release kanonak-canonical/csharp/src/Kanonak.Canonical/Kanonak.Canonical.csproj
           dotnet pack -c Release kanonak-codec/csharp/src/Kanonak.Codec/Kanonak.Codec.csproj
           dotnet pack -c Release kanonak-expression/csharp/src/Kanonak.Expression/Kanonak.Expression.csproj
           dotnet pack -c Release kanonak-wire/csharp/src/Kanonak.Wire/Kanonak.Wire.csproj
       - name: NuGet trusted-publishing login (OIDC -> temp API key)
-        uses: NuGet/login@v1
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
         id: nuget-login
         with:
           user: ${{ vars.NUGET_USER }}   # repo Variable = kanonak-oss (the POLICY CREATOR account, NOT the org/package owner)
@@ -948,13 +950,13 @@ jobs:
     needs: [test-java, preflight, preflight-credentials]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     environment: production
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "17.0.21+9"
           server-id: central
           server-username: MAVEN_CENTRAL_USERNAME
           server-password: MAVEN_CENTRAL_PASSWORD
@@ -1044,12 +1046,12 @@ jobs:
     environment: production
     permissions:
       contents: write        # push the module tags with GITHUB_TOKEN
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: tag go modules (skip existing — proxy-cached tags are immutable)
         run: |
-          python3 -m pip install --quiet pyyaml
+          python3 -m pip install --quiet pyyaml==6.0.3
           retry() { local n=$1 s=$2; shift 2; local i
             for i in $(seq 1 "$n"); do "$@" && return 0; [ "$i" -lt "$n" ] && sleep "$s"; done
             return 1
@@ -1103,12 +1105,12 @@ jobs:
     environment: production
     permissions:
       contents: write        # push the root release tag with GITHUB_TOKEN
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: tag root swift release (skip existing — resolved tags are immutable)
         run: |
-          python3 -m pip install --quiet pyyaml
+          python3 -m pip install --quiet pyyaml==6.0.3
           ver=$(python3 -c "import yaml; print(yaml.safe_load(open('release-targets.yml'))['meta']['swift_package_version'])")
           tag="v$ver"
           if [ ! -f Package.swift ]; then
@@ -1165,11 +1167,11 @@ jobs:
     permissions:
       contents: read
       packages: write        # push the OCI artifact with the workflow GITHUB_TOKEN
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with: { targets: wasm32-wasip2 }
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # the stable branch; the toolchain is pinned below
+        with: { toolchain: 1.99.1, targets: wasm32-wasip2 }
       - name: install wkg (pinned)
         run: |
           curl -sSfL -o wkg "https://github.com/bytecodealliance/wasm-pkg-tools/releases/download/v0.15.1/wkg-x86_64-unknown-linux-gnu"
@@ -1230,9 +1232,9 @@ jobs:
   release-audit:
     needs: [publish-python, publish-rust, publish-typescript, publish-csharp, publish-java, publish-go, publish-wasm, publish-swift]
     if: ${{ always() && (github.event_name == 'push' || github.event_name == 'schedule' || inputs.publish) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: audit all members x all registries + go tags
         env:
           # A mirror-backed registry that does not show a version yet is PENDING
@@ -1243,7 +1245,7 @@ jobs:
           PUBLISH_CSHARP: ${{ needs.publish-csharp.result }}
           PUBLISH_JAVA: ${{ needs.publish-java.result }}
         run: |
-          python3 -m pip install --quiet pyyaml
+          python3 -m pip install --quiet pyyaml==6.0.3
           fail=0; pend=0
           retry() { local n=$1 s=$2; shift 2; local i
             for i in $(seq 1 "$n"); do "$@" && return 0; [ "$i" -lt "$n" ] && sleep "$s"; done
