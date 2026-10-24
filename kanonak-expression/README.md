@@ -1,6 +1,6 @@
 # kanonak-expression
 
-The Kanonak **expression runtime** — `expressionRuntimeVersion: "2"`.
+The Kanonak **expression runtime** — `expressionRuntimeVersion: "3"`.
 
 A small, deterministic tree-walker that folds a `kanonak.org/transformations`
 (`tx`) + `kanonak.org/math` expression to a **value**. The codec family's
@@ -16,19 +16,19 @@ differences.
 
 ## Ports
 
-Every port passes BOTH vector files: `expression-vectors.json` (v1 — the
-numeric-regression gate, unchanged) and `expression-vectors-2.json` (the v2
-value-domain surface).
+Every port passes the three evaluation files: `expression-vectors.json` (v1 —
+the numeric-regression gate, unchanged), `expression-vectors-2.json` (the v2
+value-domain surface) and `expression-vectors-3.json` (v3's exact decimals).
 
-| Language | Path | v1 vectors | v2 vectors | Conformance command |
-|---|---|---|---|---|
-| TypeScript | [`typescript/`](./typescript) | ✅ | ✅ | `npm run conformance` |
-| Rust | [`rust/`](./rust) | ✅ | ✅ | `cargo test` |
-| Python | [`python/`](./python) | ✅ | ✅ | `python conformance.py ../vectors` |
-| Go | [`go/`](./go) | ✅ | ✅ | `go test ./...` (or `go run ./cmd/conformance`) |
-| Java | [`java/`](./java) | ✅ | ✅ | `javac -d out src/main/java/org/kanonak/expression/*.java conformance/Conformance.java && java -cp out Conformance ../vectors` |
-| C# | [`csharp/`](./csharp) | ✅ | ✅ | `cd csharp && dotnet run --project test/Kanonak.Expression.Conformance -- ../vectors` |
-| Swift | [`swift/`](./swift) | ✅ | ✅ | `swift test --filter ExpressionVectorTests` (at the repo root) |
+| Language | Path | v1 vectors | v2 vectors | v3 vectors | Conformance command |
+|---|---|---|---|---|---|
+| TypeScript | [`typescript/`](./typescript) | ✅ | ✅ | ✅ | `npm run conformance` |
+| Rust | [`rust/`](./rust) | ✅ | ✅ | not yet | `cargo test` |
+| Python | [`python/`](./python) | ✅ | ✅ | not yet | `python conformance.py ../vectors` |
+| Go | [`go/`](./go) | ✅ | ✅ | not yet | `go test ./...` (or `go run ./cmd/conformance`) |
+| Java | [`java/`](./java) | ✅ | ✅ | not yet | `javac -d out src/main/java/org/kanonak/expression/*.java conformance/Conformance.java && java -cp out Conformance ../vectors` |
+| C# | [`csharp/`](./csharp) | ✅ | ✅ | not yet | `cd csharp && dotnet run --project test/Kanonak.Expression.Conformance -- ../vectors` |
+| Swift | [`swift/`](./swift) | ✅ | ✅ | not yet | `swift test --filter ExpressionVectorTests` (at the repo root) |
 
 All seven ports are conformance-verified: six on the development host, Swift
 in CI (swift:6.1, run 31351227813 — no local Swift toolchain here).
@@ -80,7 +80,7 @@ side; variable binding, graph access, and domain-leaf semantics (the caller's
 
 ## Value domain (new in version 2)
 
-`number | string | ref | list`.
+`number | string | ref | list`, and from version 3 `decimal` (below).
 
 - **Booleans and comparison results are `1` / `0` numbers** (the v1 rule,
   unchanged), so every language keeps one numeric path for logic.
@@ -96,6 +96,41 @@ side; variable binding, graph access, and domain-leaf semantics (the caller's
   (booleans are numbers here) or an *embedded* node — are answered by the
   host: `IsBoolean` / `IsEmbedded` are NOT kernel operators and fall through
   to `resolve`, where the host has full fidelity.
+
+## Exact decimals (new in version 3)
+
+A fifth value kind, **decimal**: an exact `xsd:decimal` of any precision,
+carried in its canonical lexical form. In JSON it is `{"decimal": "-7.001"}`,
+as a ref is `{"ref": …}`.
+
+- **Only a caller makes one.** A host's `resolve` returns a decimal for an
+  `xsd:decimal` value it reads. `DecimalLiteral` still yields a number, so
+  every v1 and v2 expression folds exactly as it did.
+- **A number met by a decimal is read at its shortest round-trip digits**, the
+  value RFC 8785's number serialization gives, which the canonical layer
+  implements in every port: a `DecimalLiteral` of `0.2` reads as exactly 0.2,
+  and `0.1 + 0.2` folded as numbers reads as 0.30000000000000004. It is never
+  read at a host's default formatting, which isn't the shortest in every
+  language, nor at the double's binary expansion.
+- **These close over decimals, exactly:** `Add`, `Subtract`, `Multiply`,
+  `Modulo` (floored, an error on zero), `Minimum`, `Maximum`, `Abs`,
+  `Negate`, `Floor`, `Ceil`, `Round` (half away from zero), `Sign`, `Clip`,
+  and the aggregates `Sum`, `Min` and `Max`. Where any operand or element is a
+  decimal, the result is a decimal.
+- **These don't, so they read a decimal at its nearest double and give a
+  number:** `Divide`, `Power`, `Exp`, `Ln`, `Log10`, `Sqrt` and `Average`,
+  with their v1 traps.
+- **Comparisons are exact.** `Equals`, the orderings and `Contains` compare a
+  decimal with a number or a decimal by value: a decimal `1.0` equals the
+  integer `1`. A decimal against a string or a ref fails closed, as in v2.
+- **A decimal is numeric.** `IsNumber` is `1` for it, the logic operators read
+  it as true unless it is zero, and `Join` writes its canonical form. A
+  `ListItemAt` index is still a number.
+- **Every decimal the kernel computes is canonical:** no `+`, no leading
+  zeros, no trailing fractional zeros, `0` for zero, never `-0`, and no
+  exponent, the form `kanonak-canonical`'s `xsd:decimal` carrier gives. A
+  decimal a caller hands in passes through as given, and a lexical form
+  outside `xsd:decimal`'s grammar, such as `1e3`, is an error.
 
 ## Error contract (frozen by `expressionRuntimeVersion`)
 
@@ -121,7 +156,7 @@ A change to any primitive, value rule, or dispatch entry requires a **new**
 widening the `Matches` subset (an error becoming a defined result), is
 additive **within** a version. **Every v1 vector passes unchanged under v2**
 — the conformance suite runs the v1 file through the v2 kernel as the
-regression gate.
+regression gate — **and every v1 and v2 vector under v3.**
 
 **Always-finite invariant.** Because every numeric domain violation raises
 rather than producing `NaN`/`Inf`, a number reaching a numeric primitive is
@@ -370,7 +405,7 @@ gates) may rely on it.
 
 ## Vectors
 
-Three evaluation files, all required for a v2-complete port, and one for the
+Four evaluation files, all required for a v3-complete port, and one for the
 public surface:
 
 - [`vectors/expression-vectors.json`](./vectors/expression-vectors.json) —
@@ -381,6 +416,10 @@ public surface:
   — the v2 surface: the value domain, the list/aggregate/membership family,
   lambda binding, polymorphic `Equals`, kind predicates, and the `Matches`
   subset with its adversarial divergence probes.
+- [`vectors/expression-vectors-3.json`](./vectors/expression-vectors-3.json)
+  — v3's exact decimals: which operators close over them, how a number is
+  read where it meets one, exact comparison, the canonical form, and the
+  lexical forms that are errors.
 - [`vectors/expression-alignment-vectors.json`](./vectors/expression-alignment-vectors.json)
   — `align(expr, trace)`.
 - [`vectors/expression-surface-vectors.json`](./vectors/expression-surface-vectors.json)
@@ -391,7 +430,7 @@ public surface:
 
 `expr` is the tree; `env` binds `tx.VarRef` names for the conformance
 `resolve` hook (values are Values: numbers, strings, arrays, `{"ref": …}`
-objects); `graph` is a host graph for the hook's `tx.PropertyRead` caller leaf
+objects, and `{"decimal": …}` objects from v3); `graph` is a host graph for the hook's `tx.PropertyRead` caller leaf
 (ref URI → property → Value — the leaf evaluates `readSource` through the
 handed-back `evaluate`, requires a ref, and returns absent → `[]`, several
 values → a list, one value → itself: the reference engine's convention,
@@ -399,6 +438,6 @@ pinned by the vectors so every port's harness agrees rather than each
 inventing it); `refEnv` binds identity leaves for `resolveRef`; `expected` is the
 exact result (`tolerance` for the few transcendentals where libm differs by
 an ULP); `expectError` marks required errors; `trace` structurally asserts
-the `explain` verdict tree. Every language port runs both files;
+the `explain` verdict tree. Every language port runs every file;
 emission/build must fail if any ontology operator lacks a primitive in a
 language.

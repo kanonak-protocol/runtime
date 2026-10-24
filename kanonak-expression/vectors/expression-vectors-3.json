@@ -1,0 +1,329 @@
+{
+  "expressionRuntimeVersion": "3",
+  "description": "Behavior parity vectors for expressionRuntimeVersion 3: the decimal value kind, an exact xsd:decimal carried in its canonical lexical form, {\"decimal\": \"-7.001\"} in JSON. Runs IN ADDITION to expression-vectors.json (v1) and expression-vectors-2.json (v2), every vector of which must pass unchanged under a v3 kernel. A decimal comes only from the caller, here a VarRef's env binding; a DecimalLiteral stays a number. Where a decimal meets a number, the number is read at its ECMAScript string form, the shortest that round-trips (RFC 8785), with no exponent. Add, Subtract, Multiply, Modulo, Minimum, Maximum, Abs, Negate, Floor, Ceil, Round, Sign, Clip, Sum, Min and Max are exact and give a decimal; Divide, Power, Exp, Ln, Log10, Sqrt and Average read a decimal at its nearest double and give a number. Equals and the orderings compare a decimal and a number exactly. An expected decimal is compared by its lexical form, so these vectors pin the canonical form: no + sign, no leading or trailing zeros, 0 for zero, never -0.",
+  "vectors": [
+    {
+      "id": "sum-of-decimals-is-exact",
+      "expr": { "type": "kanonak.org/transformations/Sum", "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" } },
+      "env": { "xs": [{ "decimal": "-40.005" }, { "decimal": "63.004" }, { "decimal": "-30" }] },
+      "expected": { "decimal": "-7.001" }
+    },
+    {
+      "id": "sum-of-decimals-nets-to-zero-with-a-literal",
+      "expr": { "type": "kanonak.org/transformations/Equals", "compareLeft": { "type": "kanonak.org/transformations/Add", "arithLeft": { "type": "kanonak.org/transformations/Sum", "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" } }, "arithRight": { "type": "kanonak.org/transformations/DecimalLiteral", "decimalLiteral": 7.001 } }, "compareRight": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 0 } },
+      "env": { "xs": [{ "decimal": "-40.005" }, { "decimal": "63.004" }, { "decimal": "-30" }] },
+      "expected": 1
+    },
+    {
+      "id": "sum-of-numbers-stays-binary",
+      "expr": { "type": "kanonak.org/transformations/Sum", "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" } },
+      "env": { "xs": [-40.005, 63.004, -30] },
+      "expected": -7.001000000000005
+    },
+    {
+      "id": "sum-mixing-a-decimal-and-a-number-is-a-decimal",
+      "expr": { "type": "kanonak.org/transformations/Sum", "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" } },
+      "env": { "xs": [{ "decimal": "0.1" }, 0.2] },
+      "expected": { "decimal": "0.3" }
+    },
+    {
+      "id": "sum-of-empty-is-still-the-number-0",
+      "expr": { "type": "kanonak.org/transformations/Sum", "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" } },
+      "env": { "xs": [] },
+      "expected": 0
+    },
+    {
+      "id": "add-promotes-a-number-at-its-shortest-form",
+      "expr": { "type": "kanonak.org/transformations/Add", "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "arithRight": { "type": "kanonak.org/transformations/DecimalLiteral", "decimalLiteral": 0.2 } },
+      "env": { "a": { "decimal": "0.1" } },
+      "expected": { "decimal": "0.3" }
+    },
+    {
+      "id": "subtract-exact",
+      "expr": { "type": "kanonak.org/transformations/Subtract", "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "arithRight": { "type": "kanonak.org/transformations/VarRef", "varName": "b" } },
+      "env": { "a": { "decimal": "1.00" }, "b": { "decimal": "0.01" } },
+      "expected": { "decimal": "0.99" }
+    },
+    {
+      "id": "multiply-exact",
+      "expr": { "type": "kanonak.org/transformations/Multiply", "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "arithRight": { "type": "kanonak.org/transformations/VarRef", "varName": "a" } },
+      "env": { "a": { "decimal": "1.1" } },
+      "expected": { "decimal": "1.21" }
+    },
+    {
+      "id": "multiply-by-an-integer",
+      "expr": { "type": "kanonak.org/transformations/Multiply", "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "arithRight": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 3 } },
+      "env": { "a": { "decimal": "19.99" } },
+      "expected": { "decimal": "59.97" }
+    },
+    {
+      "id": "result-is-canonical-trailing-zeros-dropped",
+      "expr": { "type": "kanonak.org/transformations/Negate", "value": { "type": "kanonak.org/transformations/VarRef", "varName": "a" } },
+      "env": { "a": { "decimal": "2.50" } },
+      "expected": { "decimal": "-2.5" }
+    },
+    {
+      "id": "result-is-canonical-zero",
+      "expr": { "type": "kanonak.org/transformations/Subtract", "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "arithRight": { "type": "kanonak.org/transformations/VarRef", "varName": "b" } },
+      "env": { "a": { "decimal": "1.5" }, "b": { "decimal": "1.50" } },
+      "expected": { "decimal": "0" }
+    },
+    {
+      "id": "result-is-never-negative-zero",
+      "expr": { "type": "kanonak.org/transformations/Multiply", "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "arithRight": { "type": "kanonak.org/transformations/VarRef", "varName": "b" } },
+      "env": { "a": { "decimal": "-1" }, "b": { "decimal": "0" } },
+      "expected": { "decimal": "0" }
+    },
+    {
+      "id": "abs-exact",
+      "expr": { "type": "kanonak.org/transformations/Abs", "value": { "type": "kanonak.org/transformations/VarRef", "varName": "a" } },
+      "env": { "a": { "decimal": "-0.010" } },
+      "expected": { "decimal": "0.01" }
+    },
+    {
+      "id": "arbitrary-precision",
+      "expr": { "type": "kanonak.org/transformations/Add", "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "arithRight": { "type": "kanonak.org/transformations/VarRef", "varName": "b" } },
+      "env": { "a": { "decimal": "12345678901234567890.123456789" }, "b": { "decimal": "0.000000001" } },
+      "expected": { "decimal": "12345678901234567890.12345679" }
+    },
+    {
+      "id": "floor-negative",
+      "expr": { "type": "kanonak.org/math/Floor", "value": { "type": "kanonak.org/transformations/VarRef", "varName": "a" } },
+      "env": { "a": { "decimal": "-2.5" } },
+      "expected": { "decimal": "-3" }
+    },
+    {
+      "id": "ceil-negative",
+      "expr": { "type": "kanonak.org/math/Ceil", "value": { "type": "kanonak.org/transformations/VarRef", "varName": "a" } },
+      "env": { "a": { "decimal": "-2.5" } },
+      "expected": { "decimal": "-2" }
+    },
+    {
+      "id": "round-half-away-negative",
+      "expr": { "type": "kanonak.org/math/Round", "value": { "type": "kanonak.org/transformations/VarRef", "varName": "a" } },
+      "env": { "a": { "decimal": "-2.5" } },
+      "expected": { "decimal": "-3" }
+    },
+    {
+      "id": "round-half-away-positive",
+      "expr": { "type": "kanonak.org/math/Round", "value": { "type": "kanonak.org/transformations/VarRef", "varName": "a" } },
+      "env": { "a": { "decimal": "0.5" } },
+      "expected": { "decimal": "1" }
+    },
+    {
+      "id": "round-is-exact-below-a-half",
+      "expr": { "type": "kanonak.org/math/Round", "value": { "type": "kanonak.org/transformations/VarRef", "varName": "a" } },
+      "env": { "a": { "decimal": "0.49999999999999999" } },
+      "expected": { "decimal": "0" }
+    },
+    {
+      "id": "sign-is-a-decimal",
+      "expr": { "type": "kanonak.org/math/Sign", "value": { "type": "kanonak.org/transformations/VarRef", "varName": "a" } },
+      "env": { "a": { "decimal": "-0.001" } },
+      "expected": { "decimal": "-1" }
+    },
+    {
+      "id": "modulo-floored",
+      "expr": { "type": "kanonak.org/math/Modulo", "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "arithRight": { "type": "kanonak.org/transformations/VarRef", "varName": "b" } },
+      "env": { "a": { "decimal": "-7.5" }, "b": { "decimal": "2" } },
+      "expected": { "decimal": "0.5" }
+    },
+    {
+      "id": "modulo-by-zero-errors",
+      "expr": { "type": "kanonak.org/math/Modulo", "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "arithRight": { "type": "kanonak.org/transformations/VarRef", "varName": "b" } },
+      "env": { "a": { "decimal": "1" }, "b": { "decimal": "0.0" } },
+      "expectError": true
+    },
+    {
+      "id": "minimum-with-a-number",
+      "expr": { "type": "kanonak.org/math/Minimum", "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "arithRight": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 2 } },
+      "env": { "a": { "decimal": "1.10" } },
+      "expected": { "decimal": "1.1" }
+    },
+    {
+      "id": "maximum-promotes-the-number",
+      "expr": { "type": "kanonak.org/math/Maximum", "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "arithRight": { "type": "kanonak.org/transformations/DecimalLiteral", "decimalLiteral": -0.5 } },
+      "env": { "a": { "decimal": "-1" } },
+      "expected": { "decimal": "-0.5" }
+    },
+    {
+      "id": "min-over-a-mixed-list",
+      "expr": { "type": "kanonak.org/transformations/Min", "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" } },
+      "env": { "xs": [3, { "decimal": "2.5" }, 4] },
+      "expected": { "decimal": "2.5" }
+    },
+    {
+      "id": "max-over-a-mixed-list-promotes",
+      "expr": { "type": "kanonak.org/transformations/Max", "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" } },
+      "env": { "xs": [{ "decimal": "-1" }, -0.5] },
+      "expected": { "decimal": "-0.5" }
+    },
+    {
+      "id": "average-of-decimals-is-a-number",
+      "expr": { "type": "kanonak.org/transformations/Average", "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" } },
+      "env": { "xs": [{ "decimal": "0.1" }, { "decimal": "0.2" }] },
+      "expected": 0.15
+    },
+    {
+      "id": "divide-gives-a-number",
+      "expr": { "type": "kanonak.org/transformations/Divide", "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "arithRight": { "type": "kanonak.org/transformations/VarRef", "varName": "b" } },
+      "env": { "a": { "decimal": "1" }, "b": { "decimal": "3" } },
+      "expected": 0.3333333333333333
+    },
+    {
+      "id": "divide-by-a-zero-decimal-errors",
+      "expr": { "type": "kanonak.org/transformations/Divide", "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "arithRight": { "type": "kanonak.org/transformations/VarRef", "varName": "b" } },
+      "env": { "a": { "decimal": "1" }, "b": { "decimal": "0" } },
+      "expectError": true
+    },
+    {
+      "id": "sqrt-gives-a-number",
+      "expr": { "type": "kanonak.org/math/Sqrt", "value": { "type": "kanonak.org/transformations/VarRef", "varName": "a" } },
+      "env": { "a": { "decimal": "2.25" } },
+      "expected": 1.5
+    },
+    {
+      "id": "clip-with-a-decimal-bound",
+      "expr": { "type": "kanonak.org/math/Clip", "clipValue": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 7 }, "clipLower": { "type": "kanonak.org/transformations/VarRef", "varName": "lo" }, "clipUpper": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 10 } },
+      "env": { "lo": { "decimal": "0" } },
+      "expected": { "decimal": "7" }
+    },
+    {
+      "id": "clip-exact",
+      "expr": { "type": "kanonak.org/math/Clip", "clipValue": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "clipLower": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 0 }, "clipUpper": { "type": "kanonak.org/transformations/VarRef", "varName": "hi" } },
+      "env": { "a": { "decimal": "5.5" }, "hi": { "decimal": "5" } },
+      "expected": { "decimal": "5" }
+    },
+    {
+      "id": "equals-a-number-at-its-shortest-form",
+      "expr": { "type": "kanonak.org/transformations/Equals", "compareLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "compareRight": { "type": "kanonak.org/transformations/DecimalLiteral", "decimalLiteral": 0.3 } },
+      "env": { "a": { "decimal": "0.3" } },
+      "expected": 1
+    },
+    {
+      "id": "equals-an-integer",
+      "expr": { "type": "kanonak.org/transformations/Equals", "compareLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "compareRight": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 1 } },
+      "env": { "a": { "decimal": "1.0" } },
+      "expected": 1
+    },
+    {
+      "id": "equals-a-computed-number",
+      "expr": { "type": "kanonak.org/transformations/Equals", "compareLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "compareRight": { "type": "kanonak.org/transformations/Divide", "arithLeft": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 1 }, "arithRight": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 10 } } },
+      "env": { "a": { "decimal": "0.1" } },
+      "expected": 1
+    },
+    {
+      "id": "equals-a-string-fails-closed",
+      "expr": { "type": "kanonak.org/transformations/Equals", "compareLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "compareRight": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "1" } },
+      "env": { "a": { "decimal": "1" } },
+      "expected": 0
+    },
+    {
+      "id": "greater-than-a-binary-sum",
+      "expr": { "type": "kanonak.org/transformations/GreaterThan", "compareLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "compareRight": { "type": "kanonak.org/transformations/Add", "arithLeft": { "type": "kanonak.org/transformations/DecimalLiteral", "decimalLiteral": 0.1 }, "arithRight": { "type": "kanonak.org/transformations/DecimalLiteral", "decimalLiteral": 0.2 } } },
+      "env": { "a": { "decimal": "0.30" } },
+      "expected": 0
+    },
+    {
+      "id": "less-than-a-binary-sum",
+      "expr": { "type": "kanonak.org/transformations/LessThan", "compareLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "compareRight": { "type": "kanonak.org/transformations/Add", "arithLeft": { "type": "kanonak.org/transformations/DecimalLiteral", "decimalLiteral": 0.1 }, "arithRight": { "type": "kanonak.org/transformations/DecimalLiteral", "decimalLiteral": 0.2 } } },
+      "env": { "a": { "decimal": "0.3" } },
+      "expected": 1
+    },
+    {
+      "id": "ordering-against-a-string-fails-closed",
+      "expr": { "type": "kanonak.org/transformations/GreaterThan", "compareLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "compareRight": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "0" } },
+      "env": { "a": { "decimal": "1" } },
+      "expected": 0
+    },
+    {
+      "id": "is-number",
+      "expr": { "type": "kanonak.org/transformations/IsNumber", "kindCheck": { "type": "kanonak.org/transformations/VarRef", "varName": "a" } },
+      "env": { "a": { "decimal": "1.5" } },
+      "expected": 1
+    },
+    {
+      "id": "is-not-a-reference",
+      "expr": { "type": "kanonak.org/transformations/IsReference", "kindCheck": { "type": "kanonak.org/transformations/VarRef", "varName": "a" } },
+      "env": { "a": { "decimal": "1.5" } },
+      "expected": 0
+    },
+    {
+      "id": "is-not-a-string",
+      "expr": { "type": "kanonak.org/transformations/IsString", "kindCheck": { "type": "kanonak.org/transformations/VarRef", "varName": "a" } },
+      "env": { "a": { "decimal": "1.5" } },
+      "expected": 0
+    },
+    {
+      "id": "join-writes-the-canonical-form",
+      "expr": { "type": "kanonak.org/transformations/Join", "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }, "separator": "," },
+      "env": { "xs": [{ "decimal": "1.50" }, 2, "x"] },
+      "expected": "1.5,2,x"
+    },
+    {
+      "id": "contains-compares-numerically",
+      "expr": { "type": "kanonak.org/transformations/Contains", "haystack": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }, "needle": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 1 } },
+      "env": { "xs": [{ "decimal": "1.0" }, { "decimal": "2" }] },
+      "expected": 1
+    },
+    {
+      "id": "filter-keeps-decimals",
+      "expr": { "type": "kanonak.org/transformations/Filter", "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }, "loopVar": "x", "predicate": { "type": "kanonak.org/transformations/GreaterThan", "compareLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "x" }, "compareRight": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 0 } } },
+      "env": { "xs": [{ "decimal": "-1" }, { "decimal": "0.5" }, { "decimal": "2" }] },
+      "expected": [{ "decimal": "0.5" }, { "decimal": "2" }]
+    },
+    {
+      "id": "not-of-a-zero-decimal",
+      "expr": { "type": "kanonak.org/transformations/Not", "operand": { "type": "kanonak.org/transformations/VarRef", "varName": "a" } },
+      "env": { "a": { "decimal": "0.00" } },
+      "expected": 1
+    },
+    {
+      "id": "and-of-decimals",
+      "expr": { "type": "kanonak.org/transformations/And", "operands": [{ "type": "kanonak.org/transformations/VarRef", "varName": "a" }, { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 1 }] },
+      "env": { "a": { "decimal": "0.1" } },
+      "expected": 1
+    },
+    {
+      "id": "a-large-number-promotes-without-its-exponent",
+      "expr": { "type": "kanonak.org/transformations/Add", "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "arithRight": { "type": "kanonak.org/transformations/DecimalLiteral", "decimalLiteral": 1e+21 } },
+      "env": { "a": { "decimal": "0" } },
+      "expected": { "decimal": "1000000000000000000000" }
+    },
+    {
+      "id": "a-small-number-promotes-without-its-exponent",
+      "expr": { "type": "kanonak.org/transformations/Add", "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "arithRight": { "type": "kanonak.org/transformations/DecimalLiteral", "decimalLiteral": 1e-07 } },
+      "env": { "a": { "decimal": "0" } },
+      "expected": { "decimal": "0.0000001" }
+    },
+    {
+      "id": "decimal-literal-stays-a-number",
+      "expr": { "type": "kanonak.org/transformations/Add", "arithLeft": { "type": "kanonak.org/transformations/DecimalLiteral", "decimalLiteral": 0.1 }, "arithRight": { "type": "kanonak.org/transformations/DecimalLiteral", "decimalLiteral": 0.2 } },
+      "expected": 0.30000000000000004
+    },
+    {
+      "id": "arithmetic-on-a-string-fails-loud",
+      "expr": { "type": "kanonak.org/transformations/Add", "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "arithRight": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "x" } },
+      "env": { "a": { "decimal": "1" } },
+      "expectError": true
+    },
+    {
+      "id": "sum-with-a-string-fails-loud",
+      "expr": { "type": "kanonak.org/transformations/Sum", "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" } },
+      "env": { "xs": [{ "decimal": "1" }, "a"] },
+      "expectError": true
+    },
+    {
+      "id": "an-exponent-isnt-a-decimal-lexical-form",
+      "expr": { "type": "kanonak.org/transformations/Add", "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "arithRight": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 1 } },
+      "env": { "a": { "decimal": "1e3" } },
+      "expectError": true
+    },
+    {
+      "id": "a-word-isnt-a-decimal-lexical-form",
+      "expr": { "type": "kanonak.org/transformations/Add", "arithLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "a" }, "arithRight": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 1 } },
+      "env": { "a": { "decimal": "abc" } },
+      "expectError": true
+    }
+  ]
+}

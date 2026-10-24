@@ -81,7 +81,7 @@
  */
 
 /** The frozen expression-runtime version (determinism contract). Not hashed. */
-export const EXPRESSION_RUNTIME_VERSION = '2';
+export const EXPRESSION_RUNTIME_VERSION = '3';
 
 const TX = 'kanonak.org/transformations';
 const MATH = 'kanonak.org/math';
@@ -96,14 +96,30 @@ export interface RefValue {
 }
 
 /**
- * The v2 value domain. Booleans are `1`/`0` numbers; absence is the empty
- * list; there is no null.
+ * An exact `xsd:decimal` (version 3), carried in its canonical lexical form:
+ * no `+`, no leading or trailing zeros, `0` for zero, never `-0`. In JSON,
+ * `{"decimal": "-40.005"}`. Only a caller's `resolve` makes one, from a host's
+ * `xsd:decimal` value: a `DecimalLiteral` stays a number, so every v1 and v2
+ * expression folds as it did.
  */
-export type Value = number | string | RefValue | Value[];
+export interface DecimalValue {
+  decimal: string;
+}
 
-/** Discriminate a `RefValue` from the other object shape (arrays). */
+/**
+ * The value domain. Booleans are `1`/`0` numbers; absence is the empty list;
+ * there is no null. A number and a decimal are both numeric.
+ */
+export type Value = number | string | RefValue | DecimalValue | Value[];
+
+/** Discriminate a `RefValue` from the other object shapes (decimals, arrays). */
 export function isRef(v: Value): v is RefValue {
-  return typeof v === 'object' && !Array.isArray(v);
+  return typeof v === 'object' && !Array.isArray(v) && 'ref' in v;
+}
+
+/** Discriminate a `DecimalValue` from the other object shapes (refs, arrays). */
+export function isDecimal(v: Value): v is DecimalValue {
+  return typeof v === 'object' && !Array.isArray(v) && 'decimal' in v;
 }
 
 /** A node in the expression tree. `type` is the operator/literal/leaf canonical
@@ -239,8 +255,8 @@ const ITERATOR_BODY: Record<string, string> = {
  * caller's `resolve`, where the host answers with full fidelity. */
 const KIND_PREDICATES: Record<string, (v: Value) => boolean> = {
   [`${TX}/IsString`]: (v) => typeof v === 'string',
-  [`${TX}/IsNumber`]: (v) => typeof v === 'number',
-  [`${TX}/IsReference`]: (v) => typeof v === 'object' && !Array.isArray(v),
+  [`${TX}/IsNumber`]: (v) => isNumeric(v),
+  [`${TX}/IsReference`]: (v) => isRef(v),
   [`${TX}/IsList`]: (v) => Array.isArray(v),
 };
 
@@ -262,17 +278,36 @@ function requireDomain(ok: boolean, msg: string): void {
   if (!ok) throw new ExpressionError(msg);
 }
 
-/** A computation operand must be a number — fail loud, never coerce. */
-function requireNumber(v: Value, op: string): number {
-  if (typeof v !== 'number') {
+type Numeric = number | DecimalValue;
+
+function isNumeric(v: Value): v is Numeric {
+  return typeof v === 'number' || isDecimal(v);
+}
+
+/** A computation operand must be numeric — fail loud, never coerce. */
+function requireNumeric(v: Value, op: string): Numeric {
+  if (!isNumeric(v)) {
     throw new ExpressionError(`${op} requires a numeric operand, got ${kindOf(v)}`);
   }
   return v;
 }
 
+/** A computation that doesn't close over decimals reads a decimal at its nearest double. */
+function requireNumber(v: Value, op: string): number {
+  const n = requireNumeric(v, op);
+  return typeof n === 'number' ? n : Number(exactDecimal(n).decimal);
+}
+
+/** A logic operand is true when it is numeric and not zero. */
+function requireTruth(v: Value, op: string): boolean {
+  const n = requireNumeric(v, op);
+  return typeof n === 'number' ? truthy(n) : exactOf(n).coef !== 0n;
+}
+
 function kindOf(v: Value): string {
   if (typeof v === 'number') return 'number';
   if (typeof v === 'string') return 'string';
+  if (isDecimal(v)) return 'decimal';
   return Array.isArray(v) ? 'list' : 'ref';
 }
 
@@ -315,11 +350,184 @@ const BINARY_ORDER: Record<string, (a: number, b: number) => number> = {
   [`${TX}/LessThanOrEqual`]: (a, b) => bool(a <= b),
 };
 
+// ---------------------------------------------------------------------------
+// Exact decimals (version 3): a scaled integer, coefficient × 10^-scale.
+// ---------------------------------------------------------------------------
+
+interface Exact {
+  coef: bigint;
+  scale: number;
+}
+
+const DECIMAL_LEXICAL = /^([+-]?)(\d*)(?:\.(\d*))?$/;
+const NUMBER_STRING = /^(-?)(\d+)(?:\.(\d+))?(?:e([+-]\d+))?$/;
+
+/** Read a decimal's lexical form, by the xsd:decimal grammar, which has no exponent. */
+function exactOf(d: DecimalValue): Exact {
+  const m = typeof d.decimal === 'string' ? DECIMAL_LEXICAL.exec(d.decimal) : null;
+  if (!m || (m[2] === '' && (m[3] ?? '') === '')) {
+    throw new ExpressionError(`${JSON.stringify(d.decimal)} is not an xsd:decimal lexical form`);
+  }
+  const frac = m[3] ?? '';
+  const coef = BigInt(`${m[2] || '0'}${frac}`);
+  return { coef: m[1] === '-' ? -coef : coef, scale: frac.length };
+}
+
+const pow10 = (n: number): bigint => 10n ** BigInt(n);
+
+/**
+ * A number met by a decimal is read at its ECMAScript string form, the shortest
+ * that round-trips, which RFC 8785 pins and `Join` already uses. So `7.001`
+ * reads as exactly 7.001 in every port, never as its binary expansion.
+ */
+function exactOfNumber(n: number): Exact {
+  const m = NUMBER_STRING.exec(String(n));
+  if (!m) throw new ExpressionError(`${n} has no decimal reading`);
+  const frac = m[3] ?? '';
+  const exponent = Number(m[4] ?? '0');
+  let coef = BigInt(`${m[2]}${frac}`);
+  let scale = frac.length - exponent;
+  if (scale < 0) {
+    coef *= pow10(-scale);
+    scale = 0;
+  }
+  return { coef: m[1] === '-' ? -coef : coef, scale };
+}
+
+const exactOfNumeric = (n: Numeric): Exact => (typeof n === 'number' ? exactOfNumber(n) : exactOf(n));
+
+/** The canonical lexical form: no trailing fractional zeros, `0` for zero, never `-0`. */
+function decimalOf(x: Exact): DecimalValue {
+  let { coef, scale } = x;
+  while (scale > 0 && coef % 10n === 0n) {
+    coef /= 10n;
+    scale--;
+  }
+  const negative = coef < 0n;
+  const digits = (negative ? -coef : coef).toString().padStart(scale + 1, '0');
+  const int = digits.slice(0, digits.length - scale);
+  const magnitude = scale > 0 ? `${int}.${digits.slice(digits.length - scale)}` : int;
+  return { decimal: negative ? `-${magnitude}` : magnitude };
+}
+
+/** A caller's decimal in canonical form, so `{"decimal": "1.50"}` and `{"decimal": "1.5"}` join and compare alike. */
+const exactDecimal = (d: DecimalValue): DecimalValue => decimalOf(exactOf(d));
+
+/** Both coefficients at one scale. */
+function aligned(a: Exact, b: Exact): [bigint, bigint, number] {
+  const scale = Math.max(a.scale, b.scale);
+  return [a.coef * pow10(scale - a.scale), b.coef * pow10(scale - b.scale), scale];
+}
+
+function compareExact(a: Exact, b: Exact): number {
+  const [x, y] = aligned(a, b);
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+
+/** Floor division of integers: BigInt's `/` truncates toward zero. */
+function floorDiv(a: bigint, b: bigint): bigint {
+  const q = a / b;
+  return a % b !== 0n && (a < 0n) !== (b < 0n) ? q - 1n : q;
+}
+
+const integral = (coef: bigint): Exact => ({ coef, scale: 0 });
+
+/** The operators that close over exact decimals, with the same traps as their double forms. */
+const EXACT_UNARY: Record<string, (x: Exact) => Exact> = {
+  [`${TX}/Abs`]: (x) => ({ coef: x.coef < 0n ? -x.coef : x.coef, scale: x.scale }),
+  [`${TX}/Negate`]: (x) => ({ coef: -x.coef, scale: x.scale }),
+  [`${MATH}/Floor`]: (x) => integral(floorDiv(x.coef, pow10(x.scale))),
+  [`${MATH}/Ceil`]: (x) => integral(-floorDiv(-x.coef, pow10(x.scale))),
+  [`${MATH}/Round`]: (x) => {
+    const p = pow10(x.scale);
+    const magnitude = (2n * (x.coef < 0n ? -x.coef : x.coef) + p) / (2n * p);
+    return integral(x.coef < 0n ? -magnitude : magnitude);
+  },
+  [`${MATH}/Sign`]: (x) => integral(x.coef < 0n ? -1n : x.coef > 0n ? 1n : 0n),
+};
+
+const EXACT_ARITH: Record<string, (a: Exact, b: Exact) => Exact> = {
+  [`${TX}/Add`]: (a, b) => {
+    const [x, y, scale] = aligned(a, b);
+    return { coef: x + y, scale };
+  },
+  [`${TX}/Subtract`]: (a, b) => {
+    const [x, y, scale] = aligned(a, b);
+    return { coef: x - y, scale };
+  },
+  [`${TX}/Multiply`]: (a, b) => ({ coef: a.coef * b.coef, scale: a.scale + b.scale }),
+  [`${MATH}/Modulo`]: (a, b) => {
+    const [x, y, scale] = aligned(a, b);
+    if (y === 0n) throw new ExpressionError('Modulo by zero');
+    return { coef: x - y * floorDiv(x, y), scale };
+  },
+  [`${MATH}/Minimum`]: (a, b) => (compareExact(a, b) <= 0 ? a : b),
+  [`${MATH}/Maximum`]: (a, b) => (compareExact(a, b) >= 0 ? a : b),
+};
+
+const exactSum = (terms: Numeric[]): Exact =>
+  terms.reduce((total, t) => EXACT_ARITH[`${TX}/Add`]!(total, exactOfNumeric(t)), integral(0n));
+
+/** A unary numeric operator: exact over a decimal where it closes, else over doubles. */
+function foldUnary(type: string, v: Value): Value {
+  const x = requireNumeric(v, type);
+  const exact = EXACT_UNARY[type];
+  if (exact && isDecimal(x)) return decimalOf(exact(exactOf(x)));
+  return UNARY[type]!(requireNumber(x, type));
+}
+
+/** A binary operator: `Equals`, an ordering predicate, or arithmetic, exact where a decimal meets it. */
+function foldBinary(type: string, a: Value, b: Value): Value {
+  if (type === `${TX}/Equals`) return bool(valuesEqual(a, b));
+  const order = BINARY_ORDER[type];
+  if (order) {
+    // Predicate: non-numeric operands fail CLOSED.
+    if (!isNumeric(a) || !isNumeric(b)) return 0;
+    if (typeof a === 'number' && typeof b === 'number') return order(a, b);
+    // Two operands order as their exact comparison orders against zero.
+    return order(compareExact(exactOfNumeric(a), exactOfNumeric(b)), 0);
+  }
+  // Arithmetic: computation — fail LOUD on non-numbers.
+  const x = requireNumeric(a, type);
+  const y = requireNumeric(b, type);
+  const exact = EXACT_ARITH[type];
+  if (exact && (isDecimal(x) || isDecimal(y))) return decimalOf(exact(exactOfNumeric(x), exactOfNumeric(y)));
+  return BINARY_ARITH[type]!(requireNumber(x, type), requireNumber(y, type));
+}
+
+/** Clip: clamp a value into [lower, upper], as Maximum then Minimum. */
+function foldClip(type: string, v: Value, lo: Value, hi: Value): Value {
+  const clamped = foldBinary(`${MATH}/Maximum`, requireNumeric(v, type), requireNumeric(lo, type));
+  return foldBinary(`${MATH}/Minimum`, clamped, requireNumeric(hi, type));
+}
+
+/** Min or Max over a list: exact, and a decimal, when any element is a decimal. */
+function extreme(list: Value[], op: string, lower: boolean): Value {
+  if (list.length === 0) throw new ExpressionError(`${op} on an empty list is undefined; guard with IsSet`);
+  const terms = list.map((el) => requireNumeric(el, op));
+  if (terms.some(isDecimal)) {
+    let best = exactOfNumeric(terms[0]!);
+    for (const t of terms.slice(1)) {
+      const x = exactOfNumeric(t);
+      const c = compareExact(x, best);
+      if (lower ? c < 0 : c > 0) best = x;
+    }
+    return decimalOf(best);
+  }
+  let best = terms[0] as number;
+  for (const t of terms.slice(1) as number[]) {
+    if (lower ? t < best : t > best) best = t;
+  }
+  return best;
+}
+
 /**
  * Polymorphic value equality — the full `tx.Equals` ontology contract
  * (v1 implemented its numeric half):
  *
  *   - number/number, string/string: value equality.
+ *   - a decimal and a number or decimal: exact numeric equality, the number
+ *     read at its ECMAScript string form.
  *   - ref/ref: canonical versionless URI-key equality — identity-by-name,
  *     the same rule as the ordered comparisons.
  *   - lists: never equal (a list is a container, not a comparable value).
@@ -327,10 +535,9 @@ const BINARY_ORDER: Record<string, (a: number, b: number) => number> = {
  */
 function valuesEqual(a: Value, b: Value): boolean {
   if (typeof a === 'number' && typeof b === 'number') return a === b;
+  if (isNumeric(a) && isNumeric(b)) return compareExact(exactOfNumeric(a), exactOfNumeric(b)) === 0;
   if (typeof a === 'string' && typeof b === 'string') return a === b;
-  if (typeof a === 'object' && typeof b === 'object' && !Array.isArray(a) && !Array.isArray(b)) {
-    return a.ref === b.ref;
-  }
+  if (isRef(a) && isRef(b)) return a.ref === b.ref;
   return false;
 }
 
@@ -370,6 +577,7 @@ function joinElement(v: Value): string {
   if (typeof v === 'string') return v;
   if (typeof v === 'number') return String(v);
   if (Array.isArray(v)) throw new ExpressionError('Join cannot stringify a nested list');
+  if (isDecimal(v)) return exactDecimal(v).decimal;
   return v.ref.slice(v.ref.lastIndexOf('/') + 1);
 }
 
@@ -385,32 +593,20 @@ function isSet(v: Value): boolean {
 const LIST_FOLDS: Record<string, ListFold> = {
   [`${TX}/Count`]: (list) => list.length,
   [`${TX}/Sum`]: (list) => {
+    const terms = list.map((el) => requireNumeric(el, 'Sum'));
+    if (terms.some(isDecimal)) return decimalOf(exactSum(terms));
     let total = 0;
-    for (const el of list) total += requireNumber(el, 'Sum');
+    for (const t of terms as number[]) total += t;
     return total;
   },
-  [`${TX}/Min`]: (list) => {
-    if (list.length === 0) throw new ExpressionError('Min on an empty list is undefined; guard with IsSet');
-    let best = requireNumber(list[0], 'Min');
-    for (let i = 1; i < list.length; i++) {
-      const n = requireNumber(list[i], 'Min');
-      if (n < best) best = n;
-    }
-    return best;
-  },
-  [`${TX}/Max`]: (list) => {
-    if (list.length === 0) throw new ExpressionError('Max on an empty list is undefined; guard with IsSet');
-    let best = requireNumber(list[0], 'Max');
-    for (let i = 1; i < list.length; i++) {
-      const n = requireNumber(list[i], 'Max');
-      if (n > best) best = n;
-    }
-    return best;
-  },
+  [`${TX}/Min`]: (list) => extreme(list, 'Min', true),
+  [`${TX}/Max`]: (list) => extreme(list, 'Max', false),
   [`${TX}/Average`]: (list) => {
     if (list.length === 0) throw new ExpressionError('Average on an empty list is undefined; guard with IsSet');
+    const terms = list.map((el) => requireNumeric(el, 'Average'));
+    if (terms.some(isDecimal)) return Number(decimalOf(exactSum(terms)).decimal) / list.length;
     let total = 0;
-    for (const el of list) total += requireNumber(el, 'Average');
+    for (const t of terms as number[]) total += t;
     return total / list.length;
   },
   [`${TX}/Join`]: (list, node) => {
@@ -803,38 +999,21 @@ function evalNode<C>(
   frames: readonly Frame[],
 ): Value {
   const recurse = (n: ExprNode, c: C): Value => evalNode(n, c, resolve, options, frames);
-  const recurseNumber = (n: ExprNode, c: C, op: string): number => requireNumber(recurse(n, c), op);
 
   const arity = OPERATOR_ARITY[node.type];
   if (arity) {
     switch (arity.kind) {
-      case 'unary': {
-        const x = recurseNumber(operand(node, arity.operand), ctx, node.type);
-        return UNARY[node.type]!(x);
-      }
-      case 'binary': {
-        const a = recurse(operand(node, arity.left), ctx);
-        const b = recurse(operand(node, arity.right), ctx);
-        if (node.type === `${TX}/Equals`) return bool(valuesEqual(a, b));
-        const order = BINARY_ORDER[node.type];
-        if (order) {
-          // Predicate: non-numeric operands fail CLOSED.
-          if (typeof a !== 'number' || typeof b !== 'number') return 0;
-          return order(a, b);
-        }
-        // Arithmetic: computation — fail LOUD on non-numbers.
-        return BINARY_ARITH[node.type]!(
-          requireNumber(a, node.type),
-          requireNumber(b, node.type),
-        );
-      }
+      case 'unary':
+        return foldUnary(node.type, recurse(operand(node, arity.operand), ctx));
+      case 'binary':
+        return foldBinary(node.type, recurse(operand(node, arity.left), ctx), recurse(operand(node, arity.right), ctx));
       case 'nary': {
         const items = node[arity.operands];
         if (!Array.isArray(items)) throw new ExpressionError(`${node.type} expects an '${arity.operands}' list`);
         const isAnd = node.type === `${TX}/And`;
         // Short-circuit; empty And is vacuously true, empty Or vacuously false.
         for (const item of items) {
-          const v = truthy(requireNumber(recurse(item as ExprNode, ctx), node.type));
+          const v = requireTruth(recurse(item as ExprNode, ctx), node.type);
           if (isAnd && !v) return 0;
           if (!isAnd && v) return 1;
         }
@@ -842,16 +1021,16 @@ function evalNode<C>(
       }
       case 'ternary': {
         // Only Clip today: clamp clipValue into [clipLower, clipUpper].
-        const v = recurseNumber(operand(node, arity.a), ctx, node.type);
-        const lo = recurseNumber(operand(node, arity.b), ctx, node.type);
-        const hi = recurseNumber(operand(node, arity.c), ctx, node.type);
-        return Math.min(Math.max(v, lo), hi);
+        const v = recurse(operand(node, arity.a), ctx);
+        const lo = recurse(operand(node, arity.b), ctx);
+        const hi = recurse(operand(node, arity.c), ctx);
+        return foldClip(node.type, v, lo, hi);
       }
     }
   }
 
   if (node.type === NOT) {
-    return bool(!truthy(requireNumber(recurse(operand(node, 'operand'), ctx), node.type)));
+    return bool(!requireTruth(recurse(operand(node, 'operand'), ctx), node.type));
   }
 
   if (node.type === IS_AT_LEAST || node.type === DOMINATES) {
@@ -876,7 +1055,7 @@ function evalNode<C>(
       const inner = [...frames, { name: loopVar, value: el }];
       const v = evalNode(bodyNode, ctx, resolve, options, inner);
       if (node.type === `${TX}/Filter`) {
-        if (truthy(requireNumber(v, 'Filter predicate'))) out.push(el);
+        if (requireTruth(v, 'Filter predicate')) out.push(el);
       } else if (node.type === `${TX}/ForEach`) {
         // Flatten one level; an empty list contributes nothing — which is
         // exactly the absence rule doing the reference engine's skip.
@@ -1010,28 +1189,12 @@ export function explain<C = unknown>(
       switch (arity.kind) {
         case 'unary': {
           const x = trace(operand(n, arity.operand), c, frames);
-          return { type: n.type, value: UNARY[n.type]!(requireNumber(x.value, n.type)), children: [x] };
+          return { type: n.type, value: foldUnary(n.type, x.value), children: [x] };
         }
         case 'binary': {
           const a = trace(operand(n, arity.left), c, frames);
           const b = trace(operand(n, arity.right), c, frames);
-          let value: Value;
-          if (n.type === `${TX}/Equals`) {
-            value = bool(valuesEqual(a.value, b.value));
-          } else {
-            const order = BINARY_ORDER[n.type];
-            if (order) {
-              value = typeof a.value !== 'number' || typeof b.value !== 'number'
-                ? 0
-                : order(a.value, b.value);
-            } else {
-              value = BINARY_ARITH[n.type]!(
-                requireNumber(a.value, n.type),
-                requireNumber(b.value, n.type),
-              );
-            }
-          }
-          return { type: n.type, value, children: [a, b] };
+          return { type: n.type, value: foldBinary(n.type, a.value, b.value), children: [a, b] };
         }
         case 'nary': {
           const items = n[arity.operands];
@@ -1041,7 +1204,7 @@ export function explain<C = unknown>(
           for (const item of items) {
             const child = trace(item as ExprNode, c, frames);
             children.push(child);
-            const v = truthy(requireNumber(child.value, n.type));
+            const v = requireTruth(child.value, n.type);
             // Same short-circuit as `evaluate`: operands after the deciding
             // one are never evaluated and never appear in the trace.
             if (isAnd && !v) return { type: n.type, value: 0, children };
@@ -1053,21 +1216,14 @@ export function explain<C = unknown>(
           const v = trace(operand(n, arity.a), c, frames);
           const lo = trace(operand(n, arity.b), c, frames);
           const hi = trace(operand(n, arity.c), c, frames);
-          return {
-            type: n.type,
-            value: Math.min(
-              Math.max(requireNumber(v.value, n.type), requireNumber(lo.value, n.type)),
-              requireNumber(hi.value, n.type),
-            ),
-            children: [v, lo, hi],
-          };
+          return { type: n.type, value: foldClip(n.type, v.value, lo.value, hi.value), children: [v, lo, hi] };
         }
       }
     }
 
     if (n.type === NOT) {
       const x = trace(operand(n, 'operand'), c, frames);
-      return { type: n.type, value: bool(!truthy(requireNumber(x.value, n.type))), children: [x] };
+      return { type: n.type, value: bool(!requireTruth(x.value, n.type)), children: [x] };
     }
 
     if (n.type === IS_AT_LEAST || n.type === DOMINATES) {
@@ -1099,7 +1255,7 @@ export function explain<C = unknown>(
         children.push(bodyTrace);
         const v = bodyTrace.value;
         if (n.type === `${TX}/Filter`) {
-          if (truthy(requireNumber(v, 'Filter predicate'))) out.push(el);
+          if (requireTruth(v, 'Filter predicate')) out.push(el);
         } else if (n.type === `${TX}/ForEach`) {
           if (Array.isArray(v)) out.push(...v);
           else out.push(v);

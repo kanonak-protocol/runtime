@@ -1,17 +1,18 @@
 /**
- * Drives the shared expression parity vectors through this port — BOTH files:
+ * Drives the shared expression parity vectors through this port — every file:
  *
  *   - `expression-vectors.json` (v1): every vector must pass UNCHANGED under
- *     the v2 kernel. The value domain is a strict superset and no numeric
+ *     the v3 kernel. The value domain is a strict superset and no numeric
  *     primitive changed; this file is the regression gate that proves it.
  *   - `expression-vectors-2.json` (v2): the value-domain extension — lists,
  *     strings, refs, the list/aggregate/membership family, lambda binding,
  *     polymorphic Equals, Matches over the pinned regex subset.
+ *   - `expression-vectors-3.json` (v3): exact decimals, `{decimal: …}` values.
  *
  * Each vector's `expr` is evaluated with a `resolve` hook that binds
  * `tx.VarRef` names from the vector's `env` — the demonstration that variable
  * binding lives in the caller, not the runtime (`env` values are Values:
- * numbers, strings, arrays, `{ref: …}` objects). Ordered-comparison vectors
+ * numbers, strings, arrays, `{ref: …}` and `{decimal: …}` objects). Ordered-comparison vectors
  * additionally supply `closures` (the ClosureTable) and `refEnv` (identity
  * bindings for the `resolveRef` hook). Every vector also runs through
  * `explain` and its root value must agree with `evaluate` — the guarantee
@@ -31,6 +32,7 @@ import {
   type EvalOptions,
   type ExprNode,
   type TraceNode,
+  isDecimal,
   isRef,
   type Value,
 } from './index.js';
@@ -105,9 +107,9 @@ function valueEqual(a: Value, b: Value): boolean {
   if (Array.isArray(a) && Array.isArray(b)) {
     return a.length === b.length && a.every((x, i) => valueEqual(x, b[i]!));
   }
-  if (typeof a === 'object' && typeof b === 'object' && !Array.isArray(a) && !Array.isArray(b)) {
-    return a.ref === b.ref;
-  }
+  // A decimal result is compared by its lexical form, so a vector pins the canonical form a port emits.
+  if (isDecimal(a) && isDecimal(b)) return a.decimal === b.decimal;
+  if (isRef(a) && isRef(b)) return a.ref === b.ref;
   return false;
 }
 
@@ -257,15 +259,17 @@ function nodeTypes(relPath: string): string[] {
   return out;
 }
 
-// v1 vectors are the regression gate: every one passes unchanged under v2.
+// v1 and v2 vectors are the regression gate: every one passes unchanged under v3.
 const v1 = runFile('../../vectors/expression-vectors.json', 'expression-vectors(v1)');
 const v2 = runFile('../../vectors/expression-vectors-2.json', 'expression-vectors-2');
+const v3 = runFile('../../vectors/expression-vectors-3.json', 'expression-vectors-3');
 const va = runAlignFile('../../vectors/expression-alignment-vectors.json', 'expression-alignment-vectors');
 const vs = runSurfaceFile('../../vectors/expression-surface-vectors.json', 'expression-surface-vectors', [
   ...nodeTypes('../../vectors/expression-vectors.json'),
   ...nodeTypes('../../vectors/expression-vectors-2.json'),
+  ...nodeTypes('../../vectors/expression-vectors-3.json'),
 ]);
 
-const fail = v1.fail + v2.fail + va.fail + vs.fail;
+const fail = v1.fail + v2.fail + v3.fail + va.fail + vs.fail;
 if (fail > 0) { console.error(`\n${fail} FAILURES`); process.exit(1); }
 console.log('ALL VECTORS PASS');
