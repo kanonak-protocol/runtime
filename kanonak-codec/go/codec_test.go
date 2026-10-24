@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -42,6 +43,7 @@ type codecVectors struct {
 		Nodes                 []map[string]interface{} `json:"nodes"`
 		ExpectedCanonicalForm string                   `json:"expectedCanonicalForm"`
 		ExpectedHash          string                   `json:"expectedHash"`
+		ExpectHashError       string                   `json:"expectHashError"`
 		ExpectedSerialize     []map[string]interface{} `json:"expectedSerialize"`
 	} `json:"cases"`
 }
@@ -73,22 +75,36 @@ func runVectorFile(t *testing.T, path string) {
 		var pkg PackageContext
 		decodeNumberAware(t, c.Pkg, &pkg)
 
-		form, err := CanonicalForm(c.Nodes, schema, pkg)
-		if err != nil {
-			t.Errorf("[%s] canonical form error: %v", c.ID, err)
-			continue
-		}
-		if form != c.ExpectedCanonicalForm {
-			t.Errorf("[%s] form mismatch\n  expected: %s\n  actual:   %s", c.ID, c.ExpectedCanonicalForm, form)
-		}
+		if c.ExpectHashError != "" {
+			// Serializing still carries what hashing refuses (runtime#37).
+			suffix := "[" + c.ExpectHashError + "]"
+			_, formErr := CanonicalForm(c.Nodes, schema, pkg)
+			_, hashErr := ContentHash(c.Nodes, schema, pkg)
+			for what, refused := range map[string]error{"canonical form": formErr, "hash": hashErr} {
+				if refused == nil {
+					t.Errorf("[%s] expected the %s to refuse with %s, it did not", c.ID, what, suffix)
+				} else if !strings.HasSuffix(refused.Error(), suffix) {
+					t.Errorf("[%s] %s expected %s, got: %v", c.ID, what, suffix, refused)
+				}
+			}
+		} else {
+			form, err := CanonicalForm(c.Nodes, schema, pkg)
+			if err != nil {
+				t.Errorf("[%s] canonical form error: %v", c.ID, err)
+				continue
+			}
+			if form != c.ExpectedCanonicalForm {
+				t.Errorf("[%s] form mismatch\n  expected: %s\n  actual:   %s", c.ID, c.ExpectedCanonicalForm, form)
+			}
 
-		hash, err := ContentHash(c.Nodes, schema, pkg)
-		if err != nil {
-			t.Errorf("[%s] content hash error: %v", c.ID, err)
-			continue
-		}
-		if hash != c.ExpectedHash {
-			t.Errorf("[%s] hash mismatch expected %s got %s", c.ID, c.ExpectedHash, hash)
+			hash, err := ContentHash(c.Nodes, schema, pkg)
+			if err != nil {
+				t.Errorf("[%s] content hash error: %v", c.ID, err)
+				continue
+			}
+			if hash != c.ExpectedHash {
+				t.Errorf("[%s] hash mismatch expected %s got %s", c.ID, c.ExpectedHash, hash)
+			}
 		}
 
 		if len(c.Nodes) != len(c.ExpectedSerialize) {

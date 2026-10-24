@@ -84,7 +84,7 @@ hash, serialization)` golden vectors.
 | TypeScript | npm | `@kanonak-protocol/canonical` | `@kanonak-protocol/codec` | `@kanonak-protocol/expression` | `@kanonak-protocol/wire` |
 | C# | NuGet | `Kanonak.Canonical` | `Kanonak.Codec` | `Kanonak.Expression` | `Kanonak.Wire` |
 | Java | Maven Central | `org.kanonak:kanonak-canonical` | `org.kanonak:kanonak-codec` | `org.kanonak:kanonak-expression` | `org.kanonak:kanonak-wire` |
-| Go | proxy | `github.com/kanonak-protocol/runtime/kanonak-canonical/go` | `.../kanonak-codec/go` | `.../kanonak-expression/go` | `.../kanonak-wire/go` |
+| Go | proxy | `github.com/kanonak-protocol/runtime/kanonak-canonical/go` | `.../kanonak-codec/go/v2` | `.../kanonak-expression/go` | `.../kanonak-wire/go` |
 | Swift | this repo, root `v*` tag | `KanonakCanonical` | `KanonakCodec` | `KanonakExpression` | `KanonakWire` |
 | Wasm component | GHCR (OCI) | — | `ghcr.io/kanonak-protocol/codec` | — | — |
 
@@ -93,7 +93,7 @@ the ecosystem's registry mechanism, so a consumer depends on the repo URL and
 picks the product(s) they need:
 
 ```swift
-.package(url: "https://github.com/kanonak-protocol/runtime", from: "1.0.0"),
+.package(url: "https://github.com/kanonak-protocol/runtime", from: "2.0.0"),
 ```
 
 Tags `v0.2.0`–`v0.4.0` predate the root `Package.swift` and cannot resolve, so
@@ -105,7 +105,7 @@ The `kanonak-codec` Wasm component ships as a wkg-format OCI artifact, tagged
 with the codec version:
 
 ```sh
-wkg oci pull ghcr.io/kanonak-protocol/codec:1.0.0 -o codec.wasm
+wkg oci pull ghcr.io/kanonak-protocol/codec:2.0.0 -o codec.wasm
 ```
 
 ## Releasing

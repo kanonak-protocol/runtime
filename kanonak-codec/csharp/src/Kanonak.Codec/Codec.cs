@@ -468,11 +468,7 @@ namespace Kanonak.Codec
                 if (EnvelopeKeys.Contains(key) || raw == null) continue;
 
                 if (!cls.Props.TryGetValue(key, out var prop))
-                {
-                    // Not in the type-model — an open-world assertion. Preserved as a raw token.
-                    statements.Add(new Statement(key, new RawScalar(Lexical(raw))));
-                    continue;
-                }
+                    throw UndeclaredStatement(cls, "\"" + key + "\"");
 
                 if (IsList(raw, out var items))
                 {
@@ -489,18 +485,31 @@ namespace Kanonak.Codec
                 }
             }
 
-            // Open-world extras outside the type-model, keyed by their own predicate URI.
+            // Open-world extras ride through Serialize and Deserialize, but this codec
+            // can't type them, so it refuses to hash them rather than hash them as text.
             if (source.TryGetValue("$extra", out var extraObj) && extraObj is IReadOnlyDictionary<string, object> extra)
             {
                 foreach (var kv in extra)
                 {
                     if (kv.Value == null) continue;
-                    statements.Add(new Statement(kv.Key, new RawScalar(Lexical(kv.Value))));
+                    throw UndeclaredStatement(cls, "$extra statement " + kv.Key);
                 }
             }
 
             return statements;
         }
+
+        /// <summary>
+        /// A codec holds one package's schema, so it can't know the range of a
+        /// predicate another package declares on its classes (open-world augmentation).
+        /// Hashing such a statement as untyped text would give a hash that differs from
+        /// <c>kanonak hash</c>'s without a word, so hashing refuses it, naming it
+        /// (<c>[hash-undeclared-statement]</c>). Serializing and deserializing carry it.
+        /// </summary>
+        private static ArgumentException UndeclaredStatement(CodecClass cls, string what) =>
+            new ArgumentException(
+                $"Cannot hash {cls.TypeUri}'s {what}: this codec's schema doesn't declare it, so it can't type its value. "
+                + "Hash it with the SDK, over the graph [hash-undeclared-statement]");
 
         private static CanonicalValue Value(CodecProp prop, object raw, CodecSchema schema)
         {

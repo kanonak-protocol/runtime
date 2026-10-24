@@ -463,6 +463,70 @@
       ],
       "why": "no such class",
       "expectError": "unknown-type"
+    },
+    {
+      "id": "empty-extra-hashes",
+      "schema": "five-one",
+      "nodes": [
+        {
+          "$type": "example.com/vocab@5.1.0/Application",
+          "$id": "data.example/apps@1.0.0/a1",
+          "name": "Editor",
+          "$extra": {}
+        }
+      ],
+      "why": "an empty $extra declares nothing, so the hash is exact-hashes' own",
+      "expectedHash": "sha256:48893cca62836a868de55269ff2ab59e4ba59bd72fd1de572c7747b669a3f440"
+    },
+    {
+      "id": "undeclared-extra-cannot-hash",
+      "schema": "five-one",
+      "nodes": [
+        {
+          "$type": "example.com/vocab@5.1.0/Application",
+          "$id": "data.example/apps@1.0.0/a1",
+          "name": "Editor",
+          "$extra": {
+            "sec.example.com/policy@1.0.0/classification": "PII"
+          }
+        }
+      ],
+      "why": "another package's predicate, carried in $extra: this codec's schema can't type it (runtime#37)",
+      "expectError": "hash-undeclared-statement"
+    },
+    {
+      "id": "undeclared-key-cannot-hash",
+      "schema": "five-one",
+      "nodes": [
+        {
+          "$type": "example.com/vocab@5.1.0/Application",
+          "$id": "data.example/apps@1.0.0/a1",
+          "name": "Editor",
+          "colour": "red"
+        }
+      ],
+      "why": "a key the class doesn't declare, on a node built without deserialize",
+      "expectError": "hash-undeclared-statement"
+    },
+    {
+      "id": "undeclared-embedded-key-cannot-hash",
+      "schema": "five-one",
+      "nodes": [
+        {
+          "$type": "example.com/vocab@5.1.0/Application",
+          "$id": "data.example/apps@1.0.0/a2",
+          "name": "Suite",
+          "components": [
+            {
+              "$type": "example.com/vocab@5.1.0/TerminalApplication",
+              "name": "Shell",
+              "sec.example.com/policy@1.0.0/classification": "PII"
+            }
+          ]
+        }
+      ],
+      "why": "deserialize doesn't recurse, so an embedded value keeps an undeclared key inline; hashing refuses it the same way",
+      "expectError": "hash-undeclared-statement"
     }
   ]
 }

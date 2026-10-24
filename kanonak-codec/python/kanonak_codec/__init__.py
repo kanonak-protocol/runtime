@@ -431,8 +431,7 @@ def _field_statements(source: Dict[str, Any], cls: Dict[str, Any], schema: Dict[
             continue
         prop = cls["props"].get(key)
         if prop is None:
-            statements.append(Statement(key, RawScalar(_lexical(raw))))
-            continue
+            raise _undeclared_statement(cls, f'"{key}"')
         if isinstance(raw, list):
             # An empty list contributes NO statement — absent and empty are
             # identical at the canonical layer (the wire serialize still
@@ -443,13 +442,27 @@ def _field_statements(source: Dict[str, Any], cls: Dict[str, Any], schema: Dict[
         else:
             statements.append(Statement(prop["predicate"], _value(prop, raw, schema)))
 
+    # Open-world extras ride through serialize and deserialize, but this codec
+    # can't type them, so it refuses to hash them rather than hash them as text.
     extra = source.get("$extra")
     if extra:
         for predicate, raw in extra.items():
             if raw is None:
                 continue
-            statements.append(Statement(predicate, RawScalar(_lexical(raw))))
+            raise _undeclared_statement(cls, f"$extra statement {predicate}")
     return statements
+
+
+def _undeclared_statement(cls: Dict[str, Any], what: str) -> ValueError:
+    """A codec holds one package's schema, so it can't know the range of a
+    predicate another package declares on its classes (open-world augmentation).
+    Hashing such a statement as untyped text would give a hash that differs from
+    ``kanonak hash``'s without a word, so hashing refuses it, naming it
+    (``[hash-undeclared-statement]``). Serializing and deserializing carry it."""
+    return ValueError(
+        f"Cannot hash {cls['typeUri']}'s {what}: this codec's schema doesn't declare it, so it can't type its value. "
+        "Hash it with the SDK, over the graph [hash-undeclared-statement]"
+    )
 
 
 def _statements(node: Dict[str, Any], schema: Dict[str, Any]) -> List[Statement]:

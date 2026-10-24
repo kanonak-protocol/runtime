@@ -557,8 +557,7 @@ private func fieldStatements(_ source: [String: Any], _ cls: CodecClass, _ schem
     for (key, raw) in source {
         if envelopeKeys.contains(key) || raw is NSNull { continue }
         guard let prop = cls.props[key] else {
-            out.append(Statement(predicate: key, value: .raw(try lexical(raw))))
-            continue
+            throw undeclaredStatement(cls, "\"\(key)\"")
         }
         if let list = raw as? [Any] {
             // An empty list contributes NO statement — absent and empty are
@@ -572,13 +571,26 @@ private func fieldStatements(_ source: [String: Any], _ cls: CodecClass, _ schem
         }
     }
 
+    // Open-world extras ride through serialize and deserialize, but this codec
+    // can't type them, so it refuses to hash them rather than hash them as text.
     if let extra = source["$extra"] as? [String: Any] {
         for (predicate, raw) in extra {
             if raw is NSNull { continue }
-            out.append(Statement(predicate: predicate, value: .raw(try lexical(raw))))
+            throw undeclaredStatement(cls, "$extra statement \(predicate)")
         }
     }
     return out
+}
+
+/// A codec holds one package's schema, so it can't know the range of a
+/// predicate another package declares on its classes (open-world augmentation).
+/// Hashing such a statement as untyped text would give a hash that differs from
+/// `kanonak hash`'s without a word, so hashing refuses it, naming it
+/// (`[hash-undeclared-statement]`). Serializing and deserializing carry it.
+private func undeclaredStatement(_ cls: CodecClass, _ what: String) -> CodecError {
+    CodecError(
+        "codec: cannot hash \(cls.typeUri)'s \(what): this codec's schema doesn't declare it, so it can't type its "
+        + "value. Hash it with the SDK, over the graph [hash-undeclared-statement]")
 }
 
 /// The canonical statements for one subject node: the rdf:type triple(s), then

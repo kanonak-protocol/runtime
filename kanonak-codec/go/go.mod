@@ -1,4 +1,4 @@
-module github.com/kanonak-protocol/runtime/kanonak-codec/go
+module github.com/kanonak-protocol/runtime/kanonak-codec/go/v2
 
 go 1.25.0
 
