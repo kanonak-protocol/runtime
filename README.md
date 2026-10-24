@@ -93,7 +93,7 @@ the ecosystem's registry mechanism, so a consumer depends on the repo URL and
 picks the product(s) they need:
 
 ```swift
-.package(url: "https://github.com/kanonak-protocol/runtime", from: "1.0.0"),
+.package(url: "https://github.com/kanonak-protocol/runtime", from: "2.0.0"),
 ```
 
 Tags `v0.2.0`–`v0.4.0` predate the root `Package.swift` and cannot resolve, so
@@ -105,7 +105,7 @@ The `kanonak-codec` Wasm component ships as a wkg-format OCI artifact, tagged
 with the codec version:
 
 ```sh
-wkg oci pull ghcr.io/kanonak-protocol/codec:1.0.0 -o codec.wasm
+wkg oci pull ghcr.io/kanonak-protocol/codec:2.0.0 -o codec.wasm
 ```
 
 ## Releasing
