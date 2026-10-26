@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>org.kanonak</groupId>
+    <artifactId>kanonak-codec-jackson</artifactId>
+    <version>2.1.0</version>
+    <packaging>jar</packaging>
+
+    <name>kanonak-codec-jackson</name>
+    <description>Jackson binding of the Kanonak codec's $-envelope: KanonakModule names KanonakNode's $id, $type, $types, $name, $contentHash and $version, so a generated class read or written by Jackson keeps its identity. In an artifact of its own, so kanonak-codec stays JDK-only.</description>
+
+    <url>https://kanonak.org</url>
+    <licenses>
+        <license>
+            <name>Apache-2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+        </license>
+    </licenses>
+    <scm>
+        <connection>scm:git:https://github.com/kanonak-protocol/runtime.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/kanonak-protocol/runtime.git</developerConnection>
+        <url>https://github.com/kanonak-protocol/runtime</url>
+    </scm>
+    <developers>
+        <developer>
+            <name>Kanonak Maintainers</name>
+            <organization>Kanonak</organization>
+            <organizationUrl>https://kanonak.org</organizationUrl>
+        </developer>
+    </developers>
+    <issueManagement>
+        <system>GitHub Issues</system>
+        <url>https://github.com/kanonak-protocol/runtime/issues</url>
+    </issueManagement>
+
+    <properties>
+        <maven.compiler.release>17</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!-- 2.0.0 is already on Maven Central when this artifact is deployed beside a newer codec, and has
+             every accessor the module names. -->
+        <dependency>
+            <groupId>org.kanonak</groupId>
+            <artifactId>kanonak-codec</artifactId>
+            <version>2.0.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.22.4</version>
+        </dependency>
+    </dependencies>
+
+    <!--
+      Conformance (the envelope, both ways, over every node of the shared codec
+      vectors): compile the canonical and codec sources, this module and its
+      driver against the three Jackson jars, then run it from this folder.
+
+      javac -cp "$JACKSON" -d out \
+        ../../kanonak-canonical/java/src/main/java/org/kanonak/canonical/*.java \
+        ../java/src/main/java/org/kanonak/codec/*.java \
+        src/main/java/org/kanonak/codec/jackson/*.java conformance/JacksonConformance.java
+      cp -r src/main/resources/. out/
+      java -cp "out:$JACKSON" JacksonConformance
+    -->
+
+    <profiles>
+        <!-- mvn -P release deploy  (signs + builds sources/javadoc + publishes to Sonatype Central) -->
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>3.3.1</version>
+                        <executions>
+                            <execution><id>attach-sources</id><goals><goal>jar-no-fork</goal></goals></execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.11.2</version>
+                        <configuration><doclint>none</doclint><failOnError>false</failOnError></configuration>
+                        <executions>
+                            <execution><id>attach-javadocs</id><goals><goal>jar</goal></goals></execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.7</version>
+                        <executions>
+                            <execution><id>sign-artifacts</id><phase>verify</phase><goals><goal>sign</goal></goals></execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.7.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>true</autoPublish>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

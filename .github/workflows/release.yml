@@ -268,6 +268,25 @@ jobs:
           java -cp out Conformance
           # the typed surface (KanonakNode/Ref<T>/TypedNodes) against the same golden vectors
           java -cp out TypedConformance
+          # the Jackson module (runtime#56): released with codec, at its version, and checked over every codec
+          # vector node against the Jackson jars its pom names, each pinned by digest
+          cd ../java-jackson
+          pomVersion() { grep -m1 '<version>' "$1" | sed -E 's/.*<version>(.*)<\/version>.*/\1/'; }
+          if [ "$(pomVersion pom.xml)" != "$(pomVersion ../java/pom.xml)" ]; then
+            echo "::error::kanonak-codec-jackson is $(pomVersion pom.xml) but kanonak-codec is $(pomVersion ../java/pom.xml): it releases with codec, at its version (runtime#56)"; exit 1
+          fi
+          jars="$RUNNER_TEMP/jackson"; mkdir -p "$jars"
+          fetch() {  # fetch <path under com/fasterxml/jackson/core> <sha256>
+            curl -sfL -o "$jars/${1##*/}" "https://repo1.maven.org/maven2/com/fasterxml/jackson/core/$1"
+            echo "$2  $jars/${1##*/}" | sha256sum -c --quiet -
+          }
+          fetch jackson-core/2.22.4/jackson-core-2.22.4.jar 2d30c375cddea9657a1e1ef97547a2694b663b355facb4de53a097782b312d1a
+          fetch jackson-databind/2.22.4/jackson-databind-2.22.4.jar d4cbf8947087f305869826801913abdc50735a1fab2074a1993e7bc67ca974a3
+          fetch jackson-annotations/2.22/jackson-annotations-2.22.jar 21ddb598807d3a51a876704eb979d9296e1c6a6f47ab1826ff88c6d6a127a2d0
+          jackson="$jars/jackson-core-2.22.4.jar:$jars/jackson-databind-2.22.4.jar:$jars/jackson-annotations-2.22.jar"
+          javac -cp "$jackson" -d out ../../kanonak-canonical/java/src/main/java/org/kanonak/canonical/*.java ../java/src/main/java/org/kanonak/codec/*.java src/main/java/org/kanonak/codec/jackson/*.java conformance/JacksonConformance.java
+          cp -r src/main/resources/. out/
+          java -cp "out:$jackson" JacksonConformance
           cd ../../kanonak-expression/java
           javac -d out src/main/java/org/kanonak/expression/*.java conformance/Conformance.java
           java -cp out Conformance ../vectors
@@ -336,6 +355,41 @@ jobs:
               echo "::error::API BREAK kanonak-$m (Java) against $base, but the declared version allows only '$allowed' (runtime#29). Restore compatibility, or release a new major."; fail=1
             fi
           done
+          # kanonak-codec-jackson (runtime#56) releases with codec, at its version, and is gated against the
+          # last version Maven Central serves of it. Before its first release there is none.
+          jm=kanonak-codec-jackson
+          jackson="$RUNNER_TEMP/jackson/jackson-core-2.22.4.jar:$RUNNER_TEMP/jackson/jackson-databind-2.22.4.jar:$RUNNER_TEMP/jackson/jackson-annotations-2.22.jar"
+          code=$(curl -s -o "$tools/$jm-metadata.xml" -w '%{http_code}' -L "$central/$jm/maven-metadata.xml" || true)
+          if [ "$code" = 404 ]; then
+            echo "SKIP      java          $jm: not on Maven Central yet, so no release to break"
+          elif [ "$code" != 200 ]; then
+            echo "::error::could not ask Maven Central for $jm (HTTP ${code:-none}); refusing to assume. Re-run when it is reachable."; fail=1
+          else
+            served=$(sed -nE 's:.*<release>([^<]+)</release>.*:\1:p' "$tools/$jm-metadata.xml")
+            allowed=$(python3 .github/scripts/release_plan.py allowed-since codec "$served")
+            if [ -z "$served" ]; then
+              echo "::error::$jm's maven-metadata.xml names no release to gate against; refusing to assume one."; fail=1
+            elif [ "$allowed" = breaking ]; then
+              echo "SKIP      java          $jm: a new major line since $served"
+            else
+              # The old jar against the codec it was released with; the new against the candidate codec.
+              oldCodec=$(curl -sfL "$central/$jm/$served/$jm-$served.pom" | tr -d '\n ' | sed -E 's/.*<artifactId>kanonak-codec<\/artifactId><version>([^<]+)<.*/\1/')
+              curl -sfL -o "$tools/old-$jm.jar" "$central/$jm/$served/$jm-$served.jar"
+              curl -sfL -o "$tools/old-codec-for-$jm.jar" "$central/kanonak-codec/$oldCodec/kanonak-codec-$oldCodec.jar"
+              rm -rf "$tools/classes-codec-for-$jm" "$tools/classes-$jm"
+              javac --release 17 -cp "$tools/new-canonical.jar" -d "$tools/classes-codec-for-$jm" kanonak-codec/java/src/main/java/org/kanonak/codec/*.java
+              jar cf "$tools/new-codec-for-$jm.jar" -C "$tools/classes-codec-for-$jm" .
+              javac --release 17 -cp "$tools/new-codec-for-$jm.jar:$jackson" -d "$tools/classes-$jm" kanonak-codec/java-jackson/src/main/java/org/kanonak/codec/jackson/*.java
+              jar cf "$tools/new-$jm.jar" -C "$tools/classes-$jm" . -C kanonak-codec/java-jackson/src/main/resources .
+              if java -jar "$tools/japicmp.jar" --old "$tools/old-$jm.jar" --new "$tools/new-$jm.jar" \
+                   --old-classpath "$tools/old-codec-for-$jm.jar:$jackson" --new-classpath "$tools/new-codec-for-$jm.jar:$jackson" \
+                   --only-incompatible --error-on-binary-incompatibility --error-on-source-incompatibility; then
+                echo "OK        java          $jm: no API break against $served"
+              else
+                echo "::error::API BREAK $jm (Java) against $served, but codec's declared version allows only '$allowed' (runtime#29). Restore compatibility, or release a new major."; fail=1
+              fi
+            fi
+          fi
           exit $fail
 
   # The Swift ports (KanonakCanonical + KanonakCodec, behind the root
@@ -1022,6 +1076,7 @@ jobs:
           }
           deploy kanonak-canonical/java/pom.xml  kanonak-canonical
           deploy kanonak-codec/java/pom.xml      kanonak-codec
+          deploy kanonak-codec/java-jackson/pom.xml kanonak-codec-jackson
           deploy kanonak-expression/java/pom.xml kanonak-expression
           deploy kanonak-wire/java/pom.xml       kanonak-wire
 
@@ -1311,6 +1366,18 @@ jobs:
               echo "OK       MavenCentral  org.kanonak:kanonak-$m $jv_ver"
             else
               lagging "$PUBLISH_JAVA" "Maven org.kanonak:kanonak-$m $jv_ver" publish-java "repo1 mirrors the Central Portal minutes-to-hours behind, and publish-java did not fail, so the Portal accepted it. Re-run later to confirm"
+            fi
+            if [ "$m" = codec ]; then
+              # kanonak-codec-jackson releases with codec, at its version (runtime#56).
+              jk_ver=$(grep -m1 '<version>' kanonak-codec/java-jackson/pom.xml | sed -E 's/.*<version>(.*)<\/version>.*/\1/')
+              if [ "$jk_ver" != "$jv_ver" ]; then
+                echo "::error::VERSION SKEW org.kanonak:kanonak-codec-jackson $jk_ver, but kanonak-codec is $jv_ver. It releases with codec, at its version (runtime#56); align the poms and re-run."; fail=1
+              fi
+              if retry 3 20 curl -sf -o /dev/null "https://repo1.maven.org/maven2/org/kanonak/kanonak-codec-jackson/$jk_ver/kanonak-codec-jackson-$jk_ver.pom"; then
+                echo "OK       MavenCentral  org.kanonak:kanonak-codec-jackson $jk_ver"
+              else
+                lagging "$PUBLISH_JAVA" "Maven org.kanonak:kanonak-codec-jackson $jk_ver" publish-java "repo1 mirrors the Central Portal minutes-to-hours behind, and publish-java did not fail, so the Portal accepted it. Re-run later to confirm"
+              fi
             fi
 
             if git ls-remote --tags origin "refs/tags/kanonak-$m/go/v$go_ver" | grep -q .; then

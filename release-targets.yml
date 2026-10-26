@@ -30,7 +30,7 @@ meta:
   # and re-run the workflow; existing tags are never touched or moved.
   go_module_versions:
     canonical: "1.0.1"
-    codec: "2.0.0"
+    codec: "2.1.0"
     expression: "1.1.0"
     wire: "1.0.0"
   # Swift package version — the ROOT `v<ver>` tag (SwiftPM resolves ONLY root
@@ -51,7 +51,8 @@ meta:
   # 0.8.1 adds the total displayName accessor (canonical 0.2.1; #17 reopening).
   # 1.1.0 adds evaluates / matches / validateMatchesPattern to KanonakExpression
   # (expression 1.1.0; typescript#125).
-  swift_package_version: "2.0.0"
+  # 2.1.0: codec 2.1.0, which adds the Java codec's Jackson module (runtime#56).
+  swift_package_version: "2.1.0"
   # GitHub Actions OIDC (no stored token) is preferred where supported. A workflow
   # using OIDC needs:  permissions: { id-token: write, contents: read, attestations: write }
   # All PUBLISH jobs run in the `production` GitHub environment (required by NuGet trusted
@@ -172,6 +173,7 @@ targets:
     publishes:
       canonical: "org.kanonak:kanonak-canonical"
       codec: "org.kanonak:kanonak-codec"
+      codec-jackson: "org.kanonak:kanonak-codec-jackson"   # released with codec, at its version (runtime#56)
       expression: "org.kanonak:kanonak-expression"
       wire: "org.kanonak:kanonak-wire"
     account_namespace: "Sonatype Central account; verify the org.kanonak namespace"
