@@ -52,6 +52,44 @@ func TestCoordinateParseVectors(t *testing.T) {
 	}
 }
 
+func TestPackageCoordinateParseVectors(t *testing.T) {
+	doc := readVectors(t, "coordinate-vectors.json")
+	for _, raw := range doc["packageParseVectors"].([]interface{}) {
+		v := raw.(map[string]interface{})
+		id := v["id"].(string)
+		input := v["input"].(string)
+		expectError := false
+		if e, ok := v["expectError"].(bool); ok {
+			expectError = e
+		}
+		got, err := ParsePackageCoordinate(input)
+		if expectError {
+			if err == nil {
+				t.Errorf("[%s] expected error, got %+v", id, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("[%s] unexpected error: %v", id, err)
+			continue
+		}
+		e := v["expected"].(map[string]interface{})
+		ev := e["version"].(map[string]interface{})
+		want := PackageCoordinate{
+			Publisher: e["publisher"].(string),
+			Package:   e["package"].(string),
+			Version: CoordinateVersion{
+				Major: int(ev["major"].(float64)),
+				Minor: int(ev["minor"].(float64)),
+				Patch: int(ev["patch"].(float64)),
+			},
+		}
+		if got != want {
+			t.Errorf("[%s] expected %+v, got %+v", id, want, got)
+		}
+	}
+}
+
 func TestCoordinateLenientKeyVectors(t *testing.T) {
 	doc := readVectors(t, "coordinate-vectors.json")
 	for _, raw := range doc["lenientKeyVectors"].([]interface{}) {

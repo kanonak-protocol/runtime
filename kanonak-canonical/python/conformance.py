@@ -27,6 +27,7 @@ from kanonak_canonical import (
     lenient_versionless_key,
     local_name,
     parse_coordinate,
+    parse_package_coordinate,
     versionless_key,
 )
 
@@ -131,6 +132,31 @@ def run_coordinate(path):
             ok = (got.publisher == e["publisher"] and got.package == e["package"]
                   and got.name == e["name"] and got.version == want_version
                   and versionless_key(inp) == want_key and local_name(inp) == e["name"])
+            if ok:
+                pas += 1
+            else:
+                fail += 1
+                print(f"  FAIL [{vid}] expected {e}, got {got}")
+        except Exception as ex:  # noqa: BLE001
+            fail += 1
+            print(f"  FAIL [{vid}] threw: {ex}")
+    for v in doc["packageParseVectors"]:
+        total += 1
+        vid, inp = v["id"], v["input"]
+        if v.get("expectError", False):
+            try:
+                got = parse_package_coordinate(inp)
+                fail += 1
+                print(f"  FAIL [{vid}] expected error, got {got}")
+            except Exception:  # noqa: BLE001
+                pas += 1
+            continue
+        e = v["expected"]
+        try:
+            got = parse_package_coordinate(inp)
+            ev = e["version"]
+            ok = (got.publisher == e["publisher"] and got.package == e["package"]
+                  and got.version == CoordinateVersion(ev["major"], ev["minor"], ev["patch"]))
             if ok:
                 pas += 1
             else:

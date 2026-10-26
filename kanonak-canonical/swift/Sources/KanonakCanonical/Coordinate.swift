@@ -1,10 +1,13 @@
-// Kanonak coordinate parsing — `publisher/package[@version]/name` (issue #17).
+// Kanonak coordinate parsing — `publisher/package[@version]/name` (issue #17),
+// and a package's own coordinate, `publisher/package@version` (runtime#53).
 // Two operations, two strictness levels, both pinned by
 // `vectors/coordinate-vectors.json`:
 //
 // - `parseCoordinate` (and the `versionlessKey` / `localName` conveniences) is
 //   STRICT: it throws on anything that is not a well-formed coordinate rather
 //   than returning a plausible-looking tail.
+// - `parsePackageCoordinate` is the same STRICT grammar for a package at a
+//   version, as a lock names one: no `/name`, and the version required.
 // - `lenientVersionlessKey` is the total, non-throwing structural variant that
 //   carrier routing uses: it reduces a datatype URI to its versionless key
 //   WITHOUT validating the version content, or returns nil when the input does
@@ -45,10 +48,32 @@ public struct Coordinate: Equatable {
     }
 }
 
+public struct PackageCoordinate: Equatable {
+    public let publisher: String
+    public let `package`: String
+    public let version: CoordinateVersion
+    public init(publisher: String, package: String, version: CoordinateVersion) {
+        self.publisher = publisher
+        self.package = package
+        self.version = version
+    }
+}
+
 /// Exactly `0` or a digit run with no leading zero — one version part.
 private func isVersionPart(_ s: Substring) -> Bool {
     guard !s.isEmpty, s.allSatisfy({ ("0"..."9").contains($0) }) else { return false }
     return s.count == 1 || s.first != "0"
+}
+
+/// `major.minor.patch`, each part an `isVersionPart`, or nil.
+private func parseVersion(_ text: Substring) -> CoordinateVersion? {
+    let parts = text.split(separator: ".", omittingEmptySubsequences: false)
+    guard parts.count == 3, parts.allSatisfy(isVersionPart) else { return nil }
+    return CoordinateVersion(major: Int(parts[0])!, minor: Int(parts[1])!, patch: Int(parts[2])!)
+}
+
+private func versionReason(_ text: Substring) -> String {
+    "version '\(text)' is not exactly major.minor.patch (digits, no leading zeros)"
 }
 
 private func invalid(_ uri: String, _ reason: String) -> CanonicalError {
@@ -91,16 +116,55 @@ public func parseCoordinate(_ uri: String) throws -> Coordinate {
     if pkg.isEmpty { throw invalid(uri, "empty package name before @") }
     if versionPart.contains("@") { throw invalid(uri, "more than one '@'") }
 
-    let parts = versionPart.split(separator: ".", omittingEmptySubsequences: false)
-    guard parts.count == 3, parts.allSatisfy(isVersionPart) else {
-        throw invalid(
-            uri, "version '\(versionPart)' is not exactly major.minor.patch (digits, no leading zeros)")
+    guard let version = parseVersion(versionPart) else {
+        throw invalid(uri, versionReason(versionPart))
+    }
+    return Coordinate(publisher: publisher, package: pkg, name: name, version: version)
+}
+
+private func invalidPackage(_ coordinate: String, _ reason: String) -> CanonicalError {
+    CanonicalError(
+        "parsePackageCoordinate: '\(coordinate)' is not a valid Kanonak package coordinate (\(reason)); "
+        + "expected publisher/package@major.minor.patch")
+}
+
+/// Parse a package's coordinate `publisher/package@version` into its parts.
+/// Throws on malformed input, on a resource's coordinate (which has a
+/// `/name`), and on a versionless one.
+public func parsePackageCoordinate(_ coordinate: String) throws -> PackageCoordinate {
+    if coordinate.isEmpty { throw invalidPackage(coordinate, "empty string") }
+    if coordinate.unicodeScalars.contains(where: { CharacterSet.whitespacesAndNewlines.contains($0) }) {
+        throw invalidPackage(coordinate, "whitespace is not allowed")
+    }
+    if coordinate.contains("#") {
+        throw invalidPackage(coordinate, "'#' is reserved for embedded resources")
     }
 
-    return Coordinate(
-        publisher: publisher, package: pkg, name: name,
-        version: CoordinateVersion(
-            major: Int(parts[0])!, minor: Int(parts[1])!, patch: Int(parts[2])!))
+    let segments = coordinate.split(separator: "/", omittingEmptySubsequences: false)
+    guard segments.count == 2 else {
+        throw invalidPackage(coordinate, "expected exactly 2 '/'-separated segments, got \(segments.count)")
+    }
+    let publisher = String(segments[0])
+    let middle = String(segments[1])
+    if publisher.isEmpty || middle.isEmpty {
+        throw invalidPackage(coordinate, "empty segment")
+    }
+    if publisher.contains("@") {
+        throw invalidPackage(coordinate, "'@' is only valid after the package name")
+    }
+
+    guard let at = middle.firstIndex(of: "@") else {
+        throw invalidPackage(coordinate, "no version: a package coordinate states one")
+    }
+    let pkg = String(middle[..<at])
+    let versionPart = middle[middle.index(after: at)...]
+    if pkg.isEmpty { throw invalidPackage(coordinate, "empty package name before @") }
+    if versionPart.contains("@") { throw invalidPackage(coordinate, "more than one '@'") }
+
+    guard let version = parseVersion(versionPart) else {
+        throw invalidPackage(coordinate, versionReason(versionPart))
+    }
+    return PackageCoordinate(publisher: publisher, package: pkg, version: version)
 }
 
 /// The versionless canonical key `publisher/package/name` of a coordinate.

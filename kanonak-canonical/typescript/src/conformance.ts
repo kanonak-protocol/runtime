@@ -8,6 +8,7 @@ import { canonicalForm, canonicalHash } from './index.js';
 import { canonicalScalarLexical, type Carrier } from './Datatypes.js';
 import {
   parseCoordinate,
+  parsePackageCoordinate,
   versionlessKey,
   localName,
   displayName,
@@ -95,6 +96,28 @@ for (const v of co.parseVectors) {
     fails++; console.error(`coordinate ${v.id}: threw ${(e as Error).message}`);
   }
 }
+for (const v of co.packageParseVectors) {
+  if (v.expectError) {
+    try {
+      const got = parsePackageCoordinate(v.input);
+      fails++; console.error(`package coordinate ${v.id}: expected an error, got ${JSON.stringify(got)}`);
+    } catch { cpass++; }
+    continue;
+  }
+  try {
+    const got = parsePackageCoordinate(v.input);
+    const e = v.expected;
+    const ok = got.publisher === e.publisher
+      && got.package_ === e.package
+      && got.version.major === e.version.major
+      && got.version.minor === e.version.minor
+      && got.version.patch === e.version.patch;
+    if (ok) cpass++;
+    else { fails++; console.error(`package coordinate ${v.id}: expected ${JSON.stringify(e)} got ${JSON.stringify(got)}`); }
+  } catch (e) {
+    fails++; console.error(`package coordinate ${v.id}: threw ${(e as Error).message}`);
+  }
+}
 for (const v of co.lenientKeyVectors) {
   const got = lenientVersionlessKey(v.input) ?? null;
   if (got === v.expected) cpass++;
@@ -115,7 +138,7 @@ for (const v of co.readableVectors) {
   if (got === v.readable) cpass++;
   else { fails++; console.error(`coordinate ${v.id}: isReadableBy expected ${v.readable} got ${got}`); }
 }
-console.log(`coordinate-vectors: ${cpass}/${co.parseVectors.length + co.lenientKeyVectors.length + co.displayNameVectors.length + co.readableVectors.length} pass`);
+console.log(`coordinate-vectors: ${cpass}/${co.parseVectors.length + co.packageParseVectors.length + co.lenientKeyVectors.length + co.displayNameVectors.length + co.readableVectors.length} pass`);
 
 if (fails > 0) { console.error(`\n${fails} FAILURES`); process.exit(1); }
 console.log('\nALL VECTORS PASS');

@@ -9,6 +9,7 @@ import java.util.Map;
 import org.kanonak.canonical.Carrier;
 import org.kanonak.canonical.Coordinate;
 import org.kanonak.canonical.Datatypes;
+import org.kanonak.canonical.PackageCoordinate;
 import org.kanonak.canonical.CanonicalForm;
 import org.kanonak.canonical.CanonicalForm.Package;
 import org.kanonak.canonical.CanonicalForm.Statement;
@@ -115,6 +116,29 @@ public final class Conformance {
                     && versionOk
                     && Coordinate.versionlessKey(input).equals(expectedKey)
                     && Coordinate.localName(input).equals(e.get("name"));
+                if (ok) pass++;
+                else { fail++; System.out.println("  FAIL [" + id + "] expected " + e + ", got " + got); }
+            } catch (RuntimeException ex) {
+                if (expectError) pass++;
+                else { fail++; System.out.println("  FAIL [" + id + "] threw: " + ex.getMessage()); }
+            }
+        }
+        for (Object o : (List<Object>) doc.get("packageParseVectors")) {
+            Map<String, Object> v = (Map<String, Object>) o;
+            total++;
+            String id = (String) v.get("id");
+            String input = (String) v.get("input");
+            boolean expectError = Boolean.TRUE.equals(v.get("expectError"));
+            try {
+                PackageCoordinate got = PackageCoordinate.parse(input);
+                if (expectError) { fail++; System.out.println("  FAIL [" + id + "] expected error, got " + got); continue; }
+                Map<String, Object> e = (Map<String, Object>) v.get("expected");
+                Map<String, Object> ev = (Map<String, Object>) e.get("version");
+                boolean ok = got.publisher().equals(e.get("publisher"))
+                    && got.packageName().equals(e.get("package"))
+                    && got.version().major() == ((Double) ev.get("major")).intValue()
+                    && got.version().minor() == ((Double) ev.get("minor")).intValue()
+                    && got.version().patch() == ((Double) ev.get("patch")).intValue();
                 if (ok) pass++;
                 else { fail++; System.out.println("  FAIL [" + id + "] expected " + e + ", got " + got); }
             } catch (RuntimeException ex) {

@@ -12,13 +12,14 @@ export { canonicalForm, canonicalHash, CANONICAL_FORM_VERSION } from './Canonica
 export { Carrier, carrierOf } from './Datatypes.js';
 export {
   parseCoordinate,
+  parsePackageCoordinate,
   versionlessKey,
   localName,
   displayName,
   lenientVersionlessKey,
   isReadableBy,
 } from './Coordinate.js';
-export type { Coordinate, CoordinateVersion } from './Coordinate.js';
+export type { Coordinate, CoordinateVersion, PackageCoordinate } from './Coordinate.js';
 export type {
   CanonicalInput,
   CanonicalInputSubject,
