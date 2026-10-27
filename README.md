@@ -83,7 +83,7 @@ hash, serialization)` golden vectors.
 | Rust | crates.io | `kanonak-canonical` | `kanonak-codec` | `kanonak-expression` | `kanonak-wire` |
 | TypeScript | npm | `@kanonak-protocol/canonical` | `@kanonak-protocol/codec` | `@kanonak-protocol/expression` | `@kanonak-protocol/wire` |
 | C# | NuGet | `Kanonak.Canonical` | `Kanonak.Codec` | `Kanonak.Expression` | `Kanonak.Wire` |
-| Java | Maven Central | `org.kanonak:kanonak-canonical` | `org.kanonak:kanonak-codec` | `org.kanonak:kanonak-expression` | `org.kanonak:kanonak-wire` |
+| Java | Maven Central | `org.kanonak:kanonak-canonical` | `org.kanonak:kanonak-codec`, and `org.kanonak:kanonak-codec-jackson` at its version | `org.kanonak:kanonak-expression` | `org.kanonak:kanonak-wire` |
 | Go | proxy | `github.com/kanonak-protocol/runtime/kanonak-canonical/go` | `.../kanonak-codec/go/v2` | `.../kanonak-expression/go` | `.../kanonak-wire/go` |
 | Swift | this repo, root `v*` tag | `KanonakCanonical` | `KanonakCodec` | `KanonakExpression` | `KanonakWire` |
 | Wasm component | GHCR (OCI) | — | `ghcr.io/kanonak-protocol/codec` | — | — |

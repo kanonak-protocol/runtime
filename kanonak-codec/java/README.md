@@ -91,6 +91,14 @@ TypedNodes.toNode(typed, schema);  // typed instance -> node (the Map contract)
 JSON library) and splits it back through `Codec.deserialize`, so the typed
 path and the dictionary path are one contract, not two.
 
+### Reading and writing with Jackson (2.1.0)
+
+`KanonakNode` binds no envelope key, so the codec stays JDK-only. A generated
+class read or written by Jackson takes its envelope from
+[`org.kanonak:kanonak-codec-jackson`](../java-jackson), released with this
+artifact at its version: `KanonakModule` names `$id`, `$type`, `$types`,
+`$name`, `$contentHash` and `$version`, and leaves `extra` out (runtime#56).
+
 ## Conformance
 
 JDK-only — mirrors the `kanonak-canonical` port: compile the canonical sources,
