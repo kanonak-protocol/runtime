@@ -4,8 +4,9 @@ import java.util.regex.Pattern;
 
 /**
  * Kanonak coordinate parsing — {@code publisher/package[@version]/name}
- * (issue #17). Two operations, two strictness levels, both pinned by
- * {@code vectors/coordinate-vectors.json}:
+ * (issue #17). A package's own coordinate, {@code publisher/package@version},
+ * is {@link PackageCoordinate}'s (runtime#53). Two operations, two strictness
+ * levels, both pinned by {@code vectors/coordinate-vectors.json}:
  *
  * <ul>
  * <li>{@link #parse} (and the {@link #versionlessKey} / {@link #localName}
@@ -35,7 +36,19 @@ public record Coordinate(String publisher, String packageName, String name, Vers
     /** Exactly {@code 0} or a digit run with no leading zero — one version part. */
     private static final Pattern VERSION_PART = Pattern.compile("0|[1-9][0-9]*");
 
-    private static final Pattern WHITESPACE = Pattern.compile("\\s");
+    static final Pattern WHITESPACE = Pattern.compile("\\s");
+
+    /** {@code major.minor.patch}, each part a {@link #VERSION_PART}, or {@code null}. */
+    static Version parseVersion(String text) {
+        String[] parts = text.split("\\.", -1);
+        if (parts.length != 3) return null;
+        for (String part : parts) if (!VERSION_PART.matcher(part).matches()) return null;
+        return new Version(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]), Integer.parseInt(parts[2]));
+    }
+
+    static String versionReason(String text) {
+        return "version '" + text + "' is not exactly major.minor.patch (digits, no leading zeros)";
+    }
 
     private static IllegalArgumentException invalid(String uri, String reason) {
         return new IllegalArgumentException(
@@ -69,14 +82,9 @@ public record Coordinate(String publisher, String packageName, String name, Vers
         if (packageName.isEmpty()) throw invalid(uri, "empty package name before @");
         if (versionPart.indexOf('@') >= 0) throw invalid(uri, "more than one '@'");
 
-        String[] parts = versionPart.split("\\.", -1);
-        boolean ok = parts.length == 3;
-        for (int i = 0; ok && i < 3; i++) ok = VERSION_PART.matcher(parts[i]).matches();
-        if (!ok)
-            throw invalid(uri, "version '" + versionPart + "' is not exactly major.minor.patch (digits, no leading zeros)");
-
-        return new Coordinate(publisher, packageName, name,
-            new Version(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]), Integer.parseInt(parts[2])));
+        Version version = parseVersion(versionPart);
+        if (version == null) throw invalid(uri, versionReason(versionPart));
+        return new Coordinate(publisher, packageName, name, version);
     }
 
     /**

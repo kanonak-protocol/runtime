@@ -1,6 +1,6 @@
 {
   "canonicalFormVersion": "1",
-  "description": "Golden conformance vectors for Kanonak coordinate parsing (issue #17). Two operations, two sections. parseVectors: the STRICT parser — parseCoordinate(input) -> {publisher, package, name, version} where version is {major, minor, patch} for the versioned form and null for the versionless form, OR expectError for inputs that must fail loud (a strict parser throws rather than returning a plausible-looking tail). Grammar: exactly three '/'-separated non-empty segments; the middle segment is package[@version]; the version, when present, is exactly major.minor.patch — decimal digits, no leading zeros (a lone 0 is valid), no signs, no operators; at most one '@', and only in the middle segment; '#' is reserved for embedded resources and rejected everywhere; whitespace is rejected everywhere (no trimming). For every valid vector a port must also assert versionlessKey(input) == publisher + '/' + package + '/' + name and localName(input) == name. lenientKeyVectors: the NON-THROWING structural variant that carrier routing (carrierOf) uses — lenientVersionlessKey(input) -> the versionless key when the input has exactly three non-empty segments (the middle segment's version content is NOT validated; everything from the first '@' on is discarded, and the part before it must be non-empty), or null otherwise. The lenient variant exists so carrierOf stays total and byte-identical under canonicalFormVersion \"1\": an unparseable or out-of-set datatype URI routes to no carrier and the raw token is preserved, never guessed. The vectors named divergence-* pin the two inputs on which shipped ports actually disagreed (Rust panicked where TypeScript silently produced a garbage key). displayNameVectors: the TOTAL display accessor (issue #17 reopening) — displayName(input) -> the strict parse's local name when the input is a valid coordinate, and the INPUT RETURNED VERBATIM when it is not (never a best-effort tail, never a throw; a renderer displaying a coordinate it did not construct must not fail, and a full URI where a short name was expected is an honest signal of upstream malformation). Every parseVector appears here too, so the strict and display accessors cannot drift on the happy path, and the display fallback is pinned on exactly the inputs the strict parser rejects — including the divergence-* pair, pinned on all three operations. Note display uses the STRICT grammar: an input the lenient carrier key would route (e.g. an unvalidated version) still displays verbatim, because only a full parse earns a shortened name. Expected values are authoritative — they define the grammar. readableVectors (runtime#28): isReadableBy(written, reader) -> readable — whether data whose terms were written at `written` can be read by a reader whose schema is at `reader`: same major; from 1.0.0 reader minor >= written minor (patch not compared); below 1.0.0 same minor and reader patch >= written patch.",
+  "description": "Golden conformance vectors for Kanonak coordinate parsing (issue #17). parseVectors: the STRICT parser — parseCoordinate(input) -> {publisher, package, name, version} where version is {major, minor, patch} for the versioned form and null for the versionless form, OR expectError for inputs that must fail loud (a strict parser throws rather than returning a plausible-looking tail). Grammar: exactly three '/'-separated non-empty segments; the middle segment is package[@version]; the version, when present, is exactly major.minor.patch — decimal digits, no leading zeros (a lone 0 is valid), no signs, no operators; at most one '@', and only in the middle segment; '#' is reserved for embedded resources and rejected everywhere; whitespace is rejected everywhere (no trimming). For every valid vector a port must also assert versionlessKey(input) == publisher + '/' + package + '/' + name and localName(input) == name. lenientKeyVectors: the NON-THROWING structural variant that carrier routing (carrierOf) uses — lenientVersionlessKey(input) -> the versionless key when the input has exactly three non-empty segments (the middle segment's version content is NOT validated; everything from the first '@' on is discarded, and the part before it must be non-empty), or null otherwise. The lenient variant exists so carrierOf stays total and byte-identical under canonicalFormVersion \"1\": an unparseable or out-of-set datatype URI routes to no carrier and the raw token is preserved, never guessed. The vectors named divergence-* pin the two inputs on which shipped ports actually disagreed (Rust panicked where TypeScript silently produced a garbage key). displayNameVectors: the TOTAL display accessor (issue #17 reopening) — displayName(input) -> the strict parse's local name when the input is a valid coordinate, and the INPUT RETURNED VERBATIM when it is not (never a best-effort tail, never a throw; a renderer displaying a coordinate it did not construct must not fail, and a full URI where a short name was expected is an honest signal of upstream malformation). Every parseVector appears here too, so the strict and display accessors cannot drift on the happy path, and the display fallback is pinned on exactly the inputs the strict parser rejects — including the divergence-* pair, pinned on all three operations. Note display uses the STRICT grammar: an input the lenient carrier key would route (e.g. an unvalidated version) still displays verbatim, because only a full parse earns a shortened name. Expected values are authoritative — they define the grammar. readableVectors (runtime#28): isReadableBy(written, reader) -> readable — whether data whose terms were written at `written` can be read by a reader whose schema is at `reader`: same major; from 1.0.0 reader minor >= written minor (patch not compared); below 1.0.0 same minor and reader patch >= written patch. packageParseVectors (runtime#53): the STRICT parser of a package's coordinate, as a lock names a package at a version — parsePackageCoordinate(input) -> {publisher, package, version}, where version is {major, minor, patch}, OR expectError for inputs that must fail loud. Grammar: exactly two '/'-separated non-empty segments, publisher and package@version; the version is REQUIRED, and read exactly as parseVectors read it (decimal digits, no leading zeros, no signs, no operators, exactly three parts); at most one '@', and only after the package; '#' and whitespace are rejected everywhere, as parseVectors reject them. A resource's coordinate, with its /name, is not a package coordinate, and neither is a versionless publisher/package.",
   "parseVectors": [
     {
       "id": "versioned-canonical",
@@ -219,6 +219,188 @@
     {
       "id": "fragment-only",
       "input": "example.org/pkg/Name#",
+      "expectError": true
+    }
+  ],
+  "packageParseVectors": [
+    {
+      "id": "versioned-canonical",
+      "input": "kanonak.org/core-rdf@1.2.0",
+      "expected": {
+        "publisher": "kanonak.org",
+        "package": "core-rdf",
+        "version": {
+          "major": 1,
+          "minor": 2,
+          "patch": 0
+        }
+      }
+    },
+    {
+      "id": "multi-digit-version",
+      "input": "example.org/pkg@10.20.30",
+      "expected": {
+        "publisher": "example.org",
+        "package": "pkg",
+        "version": {
+          "major": 10,
+          "minor": 20,
+          "patch": 30
+        }
+      }
+    },
+    {
+      "id": "zero-version",
+      "input": "example.org/pkg@0.0.0",
+      "expected": {
+        "publisher": "example.org",
+        "package": "pkg",
+        "version": {
+          "major": 0,
+          "minor": 0,
+          "patch": 0
+        }
+      }
+    },
+    {
+      "id": "publisher-with-port",
+      "input": "localhost:8080/pkg@1.2.3",
+      "expected": {
+        "publisher": "localhost:8080",
+        "package": "pkg",
+        "version": {
+          "major": 1,
+          "minor": 2,
+          "patch": 3
+        }
+      }
+    },
+    {
+      "id": "dotted-package",
+      "input": "example.org/my.pkg@1.0.0",
+      "expected": {
+        "publisher": "example.org",
+        "package": "my.pkg",
+        "version": {
+          "major": 1,
+          "minor": 0,
+          "patch": 0
+        }
+      }
+    },
+    {
+      "id": "resource-coordinate",
+      "input": "kanonak.org/core-rdf@1.2.0/Class",
+      "expectError": true
+    },
+    {
+      "id": "versionless",
+      "input": "kanonak.org/core-rdf",
+      "expectError": true
+    },
+    {
+      "id": "missing-publisher",
+      "input": "core-rdf@1.2.0",
+      "expectError": true
+    },
+    {
+      "id": "empty-string",
+      "input": "",
+      "expectError": true
+    },
+    {
+      "id": "whitespace-only",
+      "input": "   ",
+      "expectError": true
+    },
+    {
+      "id": "surrounding-whitespace",
+      "input": " example.org/pkg@1.0.0 ",
+      "expectError": true
+    },
+    {
+      "id": "internal-whitespace",
+      "input": "example.org/pk g@1.0.0",
+      "expectError": true
+    },
+    {
+      "id": "trailing-slash",
+      "input": "example.org/pkg@1.0.0/",
+      "expectError": true
+    },
+    {
+      "id": "leading-slash",
+      "input": "/example.org/pkg@1.0.0",
+      "expectError": true
+    },
+    {
+      "id": "empty-publisher",
+      "input": "/pkg@1.0.0",
+      "expectError": true
+    },
+    {
+      "id": "empty-package-segment",
+      "input": "example.org/",
+      "expectError": true
+    },
+    {
+      "id": "at-with-no-version",
+      "input": "example.org/pkg@",
+      "expectError": true
+    },
+    {
+      "id": "at-with-no-package",
+      "input": "example.org/@1.0.0",
+      "expectError": true
+    },
+    {
+      "id": "one-part-version",
+      "input": "example.org/pkg@1",
+      "expectError": true
+    },
+    {
+      "id": "two-part-version",
+      "input": "example.org/pkg@1.2",
+      "expectError": true
+    },
+    {
+      "id": "four-part-version",
+      "input": "example.org/pkg@1.2.3.4",
+      "expectError": true
+    },
+    {
+      "id": "non-numeric-version",
+      "input": "example.org/pkg@1.x.3",
+      "expectError": true
+    },
+    {
+      "id": "leading-zero-version",
+      "input": "example.org/pkg@01.0.0",
+      "expectError": true
+    },
+    {
+      "id": "signed-version",
+      "input": "example.org/pkg@+1.0.0",
+      "expectError": true
+    },
+    {
+      "id": "operator-version",
+      "input": "example.org/pkg@^1.0.0",
+      "expectError": true
+    },
+    {
+      "id": "double-at",
+      "input": "example.org/pkg@1.0.0@2.0.0",
+      "expectError": true
+    },
+    {
+      "id": "at-in-publisher",
+      "input": "ex@mple.org/pkg@1.0.0",
+      "expectError": true
+    },
+    {
+      "id": "fragment",
+      "input": "example.org/pkg@1.0.0#embedded",
       "expectError": true
     }
   ],

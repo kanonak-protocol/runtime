@@ -36,8 +36,10 @@ ordering, or wire layout requires a NEW version, never an edit in place.
   `parseCoordinate` grammar (`publisher/package[@major.minor.patch]/name`, throw
   on malformed — never a plausible tail), the total lenient versionless key
   that carrier routing uses, the total `displayName` accessor (valid →
-  local name; anything else → the input verbatim, never a throw), and
-  `readableVectors` for the one version relation, `isReadableBy` (runtime#28).
+  local name; anything else → the input verbatim, never a throw), the strict
+  `parsePackageCoordinate` grammar for a package at a version
+  (`publisher/package@major.minor.patch`, runtime#53), and `readableVectors`
+  for the one version relation, `isReadableBy` (runtime#28).
 
 ## Ports
 
@@ -84,7 +86,10 @@ the codec consume it (it is no longer bundled inside the SDK).
    coordinate to a human there is the total **`displayName`** accessor: a
    valid coordinate displays as its local name, anything else is returned
    verbatim (never a throw, never a best-effort tail — a renderer must not
-   fail on a string it did not construct).
+   fail on a string it did not construct). A package's own coordinate, as a
+   lock names a package at a version, has its own strict parse,
+   **`parsePackageCoordinate`** over `publisher/package@major.minor.patch`
+   (runtime#53): the same grammar with no `/name`, and the version required.
 
 5. **One version relation** (runtime#28) — `isReadableBy(written, reader)`:
    whether data whose terms were written at one version of a package can be

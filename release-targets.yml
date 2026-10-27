@@ -29,7 +29,7 @@ meta:
   # tag IMMUTABLY on first fetch: to release a new Go version, bump the member HERE
   # and re-run the workflow; existing tags are never touched or moved.
   go_module_versions:
-    canonical: "1.0.1"
+    canonical: "1.1.0"
     codec: "2.1.0"
     expression: "1.1.0"
     wire: "1.0.0"
@@ -51,7 +51,9 @@ meta:
   # 0.8.1 adds the total displayName accessor (canonical 0.2.1; #17 reopening).
   # 1.1.0 adds evaluates / matches / validateMatchesPattern to KanonakExpression
   # (expression 1.1.0; typescript#125).
-  # 2.1.0: codec 2.1.0, which adds the Java codec's Jackson module (runtime#56).
+  # 2.1.0 adds parsePackageCoordinate to KanonakCanonical (canonical 1.1.0;
+  # runtime#53), and codec 2.1.0, whose Java codec gains its Jackson module
+  # (runtime#56).
   swift_package_version: "2.1.0"
   # GitHub Actions OIDC (no stored token) is preferred where supported. A workflow
   # using OIDC needs:  permissions: { id-token: write, contents: read, attestations: write }
