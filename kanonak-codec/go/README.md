@@ -30,13 +30,28 @@ pkg    := codec.PackageContext{Publisher: "...", PackageName: "...", Version: ".
 form, err := codec.CanonicalForm(nodes, schema, pkg) // {"subjects":[...]} JSON
 hash, err := codec.ContentHash(nodes, schema, pkg)   // "sha256:..."
 
-wire, err := codec.Serialize(node)            // typed node -> normalized JSON
-node, err := codec.Deserialize(wire, schema)  // normalized JSON -> typed node
+wire, err := codec.SerializeExact(node, schema)   // typed node -> normalized JSON
+node, err := codec.DeserializeExact(wire, schema) // normalized JSON -> typed node
+wire, err = codec.Serialize(node)                 // deprecated: SerializeExact
+node, err = codec.Deserialize(wire, schema)       // deprecated: DeserializeExact
 
 ok, err := codec.TypeMatches(node, classURI, schema) // generated type guard
 ok, err = typed.KanonakNode.TypeMatches(classURI, schema) // same, on a typed instance
 m, found := codec.LookupEnumMember(schema, ref)      // {"$ref": ...} -> enum member
 ```
+
+`SerializeExact` and `DeserializeExact` carry integer and decimal values in
+their JSON forms (kanonak-protocol 4.11.0's `numbers-in-json`, runtime#54),
+through lists and embedded values. `DeserializeExact` gives `integer` and its
+four sign-restricted forms as a `*big.Int`, `long` as an `int64`,
+`unsignedLong` as a `uint64`, `decimal` as a `string` of its canonical digits,
+and `int`, `short`, `byte`, `unsignedInt`, `unsignedShort` and `unsignedByte`
+as an `int64`, from a `json.Number` or a `float64` alike. `SerializeExact`
+writes a wide integer and a decimal as a string of their canonical digits, and
+a narrow integer as an `int64`. A JSON number past ±(2^53 − 1) for a wide
+integer, a number for a decimal, a string for a narrow integer, or a value
+outside its datatype's range is refused with an error ending in
+`[json-number-form]`, gated by `codec-vectors-json-numbers.json`.
 
 A reference value (`{"$ref": uri}`) must address a named resource
 (`publisher/package[@version]/name`): a `$ref` carrying a URI fragment (`#`), at

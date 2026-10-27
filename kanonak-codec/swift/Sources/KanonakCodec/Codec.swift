@@ -472,7 +472,7 @@ private func assertNamedReference(_ uri: String, where context: String) throws {
 
 /// The raw lexical token of a scalar — the input the canonical form
 /// normalizes. Bool -> "true"/"false", String -> as-is, JSONNumber -> its
-/// original token; Int/Int64/Double supported for programmatic nodes.
+/// original token; Int/Int64/UInt64/Double supported for programmatic nodes.
 /// Anything else fails loudly.
 func lexical(_ value: Any) throws -> String {
     switch value {
@@ -481,6 +481,7 @@ func lexical(_ value: Any) throws -> String {
     case let n as JSONNumber: return n.token
     case let n as Int: return String(n)
     case let n as Int64: return String(n)
+    case let n as UInt64: return String(n)
     case let d as Double: return ecmaScriptDoubleToken(d)
     default:
         throw CodecError("codec: unsupported scalar lexical \(type(of: value)) (\(value))")
@@ -656,7 +657,12 @@ public func contentHash(_ nodes: [[String: Any]], schema: CodecSchema, pkg: Pack
 /// collision. Null values are dropped. An invalid $types envelope (at any
 /// depth) is a producer bug and fails at emit time, as does a fragment
 /// reference (runtime#6).
+@available(*, deprecated, message: "Use serializeExact(_:schema:), which writes integer and decimal values in their JSON forms (runtime#54).")
 public func serialize(_ node: [String: Any]) throws -> [String: Any] {
+    try serializeNode(node)
+}
+
+func serializeNode(_ node: [String: Any]) throws -> [String: Any] {
     var context = node["$id"] as? String ?? ""
     if context.isEmpty { context = node["$type"] as? String ?? "" }
     if context.isEmpty { context = "(node)" }
@@ -683,7 +689,12 @@ public func serialize(_ node: [String: Any]) throws -> [String: Any] {
 /// that can read it: the exact class, or the same class at a compatible later
 /// version (runtime#28 — see `classFor`). The node keeps the $type it was
 /// WRITTEN with; the producer's bytes are the producer's.
+@available(*, deprecated, message: "Use deserializeExact(_:schema:), which reads integer and decimal values exactly (runtime#54).")
 public func deserialize(_ jsonObj: [String: Any], schema: CodecSchema) throws -> [String: Any] {
+    try deserializeNode(jsonObj, schema: schema)
+}
+
+func deserializeNode(_ jsonObj: [String: Any], schema: CodecSchema) throws -> [String: Any] {
     guard let typeUri = jsonObj["$type"] as? String else {
         throw CodecError("codec: cannot deserialize: missing string $type")
     }
@@ -713,6 +724,247 @@ public func deserialize(_ jsonObj: [String: Any], schema: CodecSchema) throws ->
     }
     if !extra.isEmpty { node["$extra"] = extra }
     return node
+}
+
+// ---------------------------------------------------------------------------
+// The JSON forms of integer and decimal values (kanonak-protocol 4.11.0's
+// numbers-in-json, runtime#54). A JSON number can't carry every integer or
+// decimal exactly in every language, so a wide integer and a decimal travel as
+// a string of their digits, and a reader refuses a number that may already
+// have been rounded.
+// ---------------------------------------------------------------------------
+
+/// What a wide integer reads as here: its canonical digits, or the fixed-width
+/// type that holds every value of `long` or `unsignedLong`.
+private enum WideHolder {
+    case digits, int64, uint64
+
+    func holding(_ digits: String) -> Any {
+        switch self {
+        case .digits: return digits
+        case .int64: return Int64(digits)!
+        case .uint64: return UInt64(digits)!
+        }
+    }
+}
+
+/// How JSON carries a datatype's values: a wide integer as a string, read from
+/// a string or a whole number within ±(2^53 − 1); a decimal as a string only; a
+/// narrow integer as a number only. Each inside its datatype's range, bounds
+/// given as canonical integer lexical forms.
+private enum JSONNumberForm {
+    case wide(min: String?, max: String?, holder: WideHolder)
+    case decimal
+    case narrow(min: Int64, max: Int64)
+}
+
+private let xsd = "kanonak.org/core-xsd"
+
+private let jsonNumberForms: [String: JSONNumberForm] = [
+    "\(xsd)/integer": .wide(min: nil, max: nil, holder: .digits),
+    "\(xsd)/nonNegativeInteger": .wide(min: "0", max: nil, holder: .digits),
+    "\(xsd)/positiveInteger": .wide(min: "1", max: nil, holder: .digits),
+    "\(xsd)/nonPositiveInteger": .wide(min: nil, max: "0", holder: .digits),
+    "\(xsd)/negativeInteger": .wide(min: nil, max: "-1", holder: .digits),
+    "\(xsd)/long": .wide(min: String(Int64.min), max: String(Int64.max), holder: .int64),
+    "\(xsd)/unsignedLong": .wide(min: "0", max: String(UInt64.max), holder: .uint64),
+    "\(xsd)/decimal": .decimal,
+    "\(xsd)/int": .narrow(min: Int64(Int32.min), max: Int64(Int32.max)),
+    "\(xsd)/short": .narrow(min: Int64(Int16.min), max: Int64(Int16.max)),
+    "\(xsd)/byte": .narrow(min: Int64(Int8.min), max: Int64(Int8.max)),
+    "\(xsd)/unsignedInt": .narrow(min: 0, max: Int64(UInt32.max)),
+    "\(xsd)/unsignedShort": .narrow(min: 0, max: Int64(UInt16.max)),
+    "\(xsd)/unsignedByte": .narrow(min: 0, max: Int64(UInt8.max)),
+]
+
+private let maxSafeWhole: Double = 9007199254740991
+
+private typealias NumberConversion = (CodecProp, JSONNumberForm, Any) throws -> Any
+
+private func jsonNumberError(_ prop: CodecProp, _ why: String) -> CodecError {
+    CodecError("codec: \(prop.predicate): \(why) [json-number-form]")
+}
+
+private func describeJSON(_ value: Any) -> String {
+    if let s = value as? String { return "the string \"\(s)\"" }
+    return "\(type(of: value)) \(value)"
+}
+
+/// Two canonical integer lexical forms compared by value: no leading zeros, so
+/// a longer magnitude is the larger one.
+private func compareCanonicalIntegers(_ a: String, _ b: String) -> Int {
+    let aNegative = a.hasPrefix("-"), bNegative = b.hasPrefix("-")
+    if aNegative != bNegative { return aNegative ? -1 : 1 }
+    let am = aNegative ? String(a.dropFirst()) : a
+    let bm = bNegative ? String(b.dropFirst()) : b
+    let magnitude = am.count != bm.count ? (am.count < bm.count ? -1 : 1) : (am == bm ? 0 : (am < bm ? -1 : 1))
+    return aNegative ? -magnitude : magnitude
+}
+
+private func inWideRange(_ prop: CodecProp, _ digits: String, _ min: String?, _ max: String?) throws -> String {
+    if let min = min, compareCanonicalIntegers(digits, min) < 0 {
+        throw jsonNumberError(prop, "\(digits) is outside \(prop.datatype ?? "its datatype")'s range")
+    }
+    if let max = max, compareCanonicalIntegers(digits, max) > 0 {
+        throw jsonNumberError(prop, "\(digits) is outside \(prop.datatype ?? "its datatype")'s range")
+    }
+    return digits
+}
+
+private func inNarrowRange(_ prop: CodecProp, _ n: Int64, _ min: Int64, _ max: Int64) throws -> Int64 {
+    guard n >= min && n <= max else {
+        throw jsonNumberError(prop, "\(n) is outside \(prop.datatype ?? "its datatype")'s range")
+    }
+    return n
+}
+
+private func integerOfLexical(_ prop: CodecProp, _ lexical: String) throws -> String {
+    do { return try canonicalInteger(lexical) } catch {
+        throw jsonNumberError(prop, "\"\(lexical)\" is not an integer lexical form")
+    }
+}
+
+private func decimalOfLexical(_ prop: CodecProp, _ lexical: String) throws -> String {
+    do { return try canonicalDecimal(lexical) } catch {
+        throw jsonNumberError(prop, "\"\(lexical)\" is not a decimal lexical form")
+    }
+}
+
+/// A JSON number's value when it is a whole number, read as JSON readers read
+/// it, through a double. Within ±(2^53 − 1) that is exact.
+private func wholeNumber(_ n: JSONNumber) -> Double? {
+    guard let d = Double(n.token), d.isFinite, d == d.rounded() else { return nil }
+    return d
+}
+
+private func digitsOf<T: BinaryInteger>(_ n: T) -> String { String(n) }
+
+/// A value as JSON carries it, to its type here: an unbounded wide integer its
+/// canonical digits, `long` an Int64, `unsignedLong` a UInt64, a decimal its
+/// canonical digits, a narrow integer an Int64.
+private func readJSONNumber(_ prop: CodecProp, _ form: JSONNumberForm, _ value: Any) throws -> Any {
+    switch form {
+    case .decimal:
+        guard let s = value as? String else {
+            throw jsonNumberError(prop, "a decimal is read from a JSON string only, so it can't have been rounded; got \(describeJSON(value))")
+        }
+        return try decimalOfLexical(prop, s)
+    case .wide(let min, let max, let holder):
+        if let s = value as? String {
+            return holder.holding(try inWideRange(prop, try integerOfLexical(prop, s), min, max))
+        }
+        if let n = value as? JSONNumber, let d = wholeNumber(n), abs(d) <= maxSafeWhole {
+            return holder.holding(try inWideRange(prop, String(Int64(d)), min, max))
+        }
+        throw jsonNumberError(prop, "a wide integer is read from a string, or from a whole JSON number within ±(2^53 − 1); got \(describeJSON(value))")
+    case .narrow(let min, let max):
+        guard let n = value as? JSONNumber, let d = wholeNumber(n), abs(d) <= maxSafeWhole else {
+            throw jsonNumberError(prop, "a narrow integer is read from a whole JSON number only; got \(describeJSON(value))")
+        }
+        return try inNarrowRange(prop, Int64(d), min, max)
+    }
+}
+
+/// A value of its type here, to its JSON form: a wide integer and a decimal as
+/// a string of canonical digits, a narrow integer as a number.
+private func writeJSONNumber(_ prop: CodecProp, _ form: JSONNumberForm, _ value: Any) throws -> Any {
+    switch form {
+    case .decimal:
+        guard let s = value as? String else {
+            throw jsonNumberError(prop, "pass a decimal as a string of its digits, which holds it exactly; got \(describeJSON(value))")
+        }
+        return try decimalOfLexical(prop, s)
+    case .wide(let min, let max, _):
+        let digits: String
+        if let s = value as? String {
+            digits = try integerOfLexical(prop, s)
+        } else if let n = value as? any BinaryInteger {
+            digits = digitsOf(n)
+        } else if let n = value as? JSONNumber, let d = wholeNumber(n), abs(d) <= maxSafeWhole {
+            digits = String(Int64(d))
+        } else {
+            throw jsonNumberError(prop, "pass a wide integer as an integer, a string, or a whole number within ±(2^53 − 1); got \(describeJSON(value))")
+        }
+        return try inWideRange(prop, digits, min, max)
+    case .narrow(let min, let max):
+        let n: Int64
+        if let i = value as? any BinaryInteger, let fits = Int64(exactly: i) {
+            n = fits
+        } else if let j = value as? JSONNumber, let d = wholeNumber(j), abs(d) <= maxSafeWhole {
+            n = Int64(d)
+        } else {
+            throw jsonNumberError(prop, "pass a narrow integer as a whole number; got \(describeJSON(value))")
+        }
+        return JSONNumber(String(try inNarrowRange(prop, n, min, max)))
+    }
+}
+
+private func jsonNumberForm(_ prop: CodecProp) -> JSONNumberForm? {
+    guard prop.kind == "datatype", let datatype = prop.datatype,
+          let key = lenientVersionlessKey(datatype) else { return nil }
+    return jsonNumberForms[key]
+}
+
+private func classOrThrow(_ schema: CodecSchema, _ typeUri: String, _ what: String) throws -> CodecClass {
+    switch classFor(schema, typeUri) {
+    case .success(let cls): return cls
+    case .failure(let lookup): throw CodecError("codec: cannot convert \(what): \(lookup.message)")
+    }
+}
+
+/// Each modeled field's value, through lists and embedded values, with its
+/// integers and decimals converted.
+private func convertFields(_ fields: [String: Any], _ cls: CodecClass, _ schema: CodecSchema,
+                           _ convert: NumberConversion) throws -> [String: Any] {
+    var out = fields
+    for (name, prop) in cls.props {
+        guard let value = out[name], !(value is NSNull) else { continue }
+        out[name] = try convertValue(prop, value, schema, convert)
+    }
+    return out
+}
+
+private func convertValue(_ prop: CodecProp, _ value: Any, _ schema: CodecSchema,
+                          _ convert: NumberConversion) throws -> Any {
+    if let items = value as? [Any] {
+        return try items.map { try convertValue(prop, $0, schema, convert) }
+    }
+    if prop.kind == "datatype" {
+        guard let form = jsonNumberForm(prop) else { return value }
+        return try convert(prop, form, value)
+    }
+    guard let map = value as? [String: Any], map["$ref"] == nil else { return value }
+    guard let clsUri = (map["$type"] as? String) ?? prop.range else {
+        throw CodecError("codec: cannot convert the embedded value under \(prop.predicate): it carries no $type and the property declares no range")
+    }
+    return try convertFields(map, try classOrThrow(schema, clsUri, "the embedded value under \(prop.predicate)"), schema, convert)
+}
+
+/// Render a node to its normalized-JSON wire form, as `serialize` does, writing
+/// each integer and decimal value in its JSON form (kanonak-protocol 4.11.0's
+/// numbers-in-json, runtime#54): a wide integer and a decimal as a string of
+/// their canonical digits, a narrow integer as a number. A value outside its
+/// datatype's range is refused, ending `[json-number-form]`.
+public func serializeExact(_ node: [String: Any], schema: CodecSchema) throws -> [String: Any] {
+    guard let typeUri = node["$type"] as? String else {
+        throw CodecError("codec: cannot serialize: missing string $type")
+    }
+    let cls = try classOrThrow(schema, typeUri, "node \(node["$id"] as? String ?? typeUri)")
+    return try serializeNode(try convertFields(node, cls, schema, writeJSONNumber))
+}
+
+/// Parse normalized JSON into a node, as `deserialize` does, reading each
+/// integer and decimal value exactly: an unbounded wide integer to its
+/// canonical digits, `long` to an Int64 and `unsignedLong` to a UInt64, from a
+/// string or a whole number within ±(2^53 − 1); a decimal to its canonical
+/// digits, from a string only; a narrow integer to an Int64, from a whole
+/// number only. A value JSON may already have rounded, or one outside its
+/// datatype's range, is refused, ending `[json-number-form]`.
+public func deserializeExact(_ jsonObj: [String: Any], schema: CodecSchema) throws -> [String: Any] {
+    let node = try deserializeNode(jsonObj, schema: schema)
+    let typeUri = node["$type"] as! String
+    let cls = try classOrThrow(schema, typeUri, "node \(node["$id"] as? String ?? typeUri)")
+    return try convertFields(node, cls, schema, readJSONNumber)
 }
 
 // ---------------------------------------------------------------------------

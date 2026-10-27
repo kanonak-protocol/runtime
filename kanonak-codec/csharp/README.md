@@ -17,7 +17,14 @@ for the same canonical form + content hash the `kanonak hash` CLI produces.
   `rdf:type` triples and the package-wrapper subject.
 - **`Codec.CanonicalForm(nodes, schema, pkg)`** — the canonical form itself
   (the `{subjects:[…]}` JSON), for inspection/debugging.
-- **`Codec.Serialize(node)` / `Codec.Deserialize(json, schema)`** — the
+- **`Codec.SerializeExact(node, schema)` / `Codec.DeserializeExact(json, schema)`**
+  (2.2.0) — the normalized-JSON wire form, with each integer and decimal value in
+  its JSON form (kanonak-protocol 4.11.0's `numbers-in-json`, runtime#54), through
+  lists and embedded values. `DeserializeExact` gives `integer` and its four
+  sign-restricted forms as a `BigInteger`, `long` as a `long`, `unsignedLong` as a
+  `ulong`, `decimal` as a string of its canonical digits, and `int` and narrower as
+  a `long`. A JSON number past ±(2^53 − 1) for a wide integer, a number for a decimal, a string for a narrow integer, or a value outside its datatype's range is refused, ending `[json-number-form]`, as `codec-vectors-json-numbers.json` pins in every port.
+- **`Codec.Serialize(node)` / `Codec.Deserialize(json, schema)`**, obsolete for the two above — the
   normalized-JSON wire form. Open-world assertions outside the type-model
   round-trip losslessly through `$extra` (top-level wire fields, collected under
   `$extra` on the typed node — `[JsonExtensionData]` semantics). Hashing refuses a statement the schema doesn't declare, an `$extra` entry or a key the class doesn't model, with `[hash-undeclared-statement]`: a codec holds one package's schema and can't type another package's predicate, so such a node is hashed with the SDK, over the graph. Serializing and deserializing still carry it (codec 2.0.0, runtime#37).

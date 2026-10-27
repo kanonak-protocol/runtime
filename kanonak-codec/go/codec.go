@@ -502,6 +502,9 @@ func ContentHash(nodes []map[string]interface{}, schema CodecSchema, pkg Package
 // name collision ([JsonExtensionData] semantics). nil values are dropped.
 // Fallible since 0.4.0: an invalid $types envelope (at any depth) is a producer
 // bug and fails at emit time.
+//
+// Deprecated: Use SerializeExact, which writes each integer and decimal value
+// in its JSON form (runtime#54).
 func Serialize(node map[string]interface{}) (map[string]interface{}, error) {
 	where, _ := node["$id"].(string)
 	if where == "" {
@@ -544,6 +547,9 @@ func Serialize(node map[string]interface{}) (map[string]interface{}, error) {
 // same class at a compatible later version (runtime#28 - see classFor). The
 // node keeps the $type it was WRITTEN with; the producer's bytes are the
 // producer's.
+//
+// Deprecated: Use DeserializeExact, which reads each integer and decimal value
+// exactly and refuses one JSON may already have rounded (runtime#54).
 func Deserialize(jsonObj map[string]interface{}, schema CodecSchema) (map[string]interface{}, error) {
 	typeURI, ok := jsonObj["$type"].(string)
 	if !ok {

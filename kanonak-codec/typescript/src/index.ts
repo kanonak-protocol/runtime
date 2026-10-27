@@ -19,7 +19,17 @@
  * entry — TypeScript references `@kanonak-protocol/canonical`. The only depend-
  * ency is that one lightweight canonical-form library.
  */
-import { canonicalForm, canonicalHash, carrierOf, Carrier, parseCoordinate, isReadableBy } from '@kanonak-protocol/canonical';
+import {
+  canonicalForm,
+  canonicalHash,
+  carrierOf,
+  Carrier,
+  parseCoordinate,
+  isReadableBy,
+  lenientVersionlessKey,
+  canonicalInteger,
+  canonicalDecimal,
+} from '@kanonak-protocol/canonical';
 import type { CanonicalInput, CanonicalInputStatement, CanonicalInputValue, CoordinateVersion } from '@kanonak-protocol/canonical';
 
 /** Reserved `$`-envelope keys — never emitted as ontology statements. */
@@ -743,6 +753,7 @@ export function packageContentHash(
  * as sibling fields on the wire (`[JsonExtensionData]` semantics), not under a
  * `$extra` key. A modeled field always wins a name collision with an extra.
  */
+/** @deprecated Use {@link serializeExact}, which writes integer and decimal values in their JSON forms (runtime#54). */
 export function serialize(node: CodecNode): Record<string, unknown> {
   // Producer-side $types validation, at every depth — fail closest to the bug.
   assertTypesEnvelopes(node, `serialize ${node.$id ?? node.$type ?? '(node)'}`);
@@ -770,6 +781,7 @@ export function serialize(node: CodecNode): Record<string, unknown> {
  * {@link classFor}). The node keeps the `$type` it was WRITTEN with; the
  * producer's bytes are the producer's.
  */
+/** @deprecated Use {@link deserializeExact}, which reads integer and decimal values exactly (runtime#54). */
 export function deserialize(json: Record<string, unknown>, schema: CodecSchema): CodecNode {
   const typeUri = json.$type;
   if (typeof typeUri !== 'string') throw new Error('Cannot deserialize: missing string $type');
@@ -796,4 +808,194 @@ export function deserialize(json: Record<string, unknown>, schema: CodecSchema):
   }
   if (extra) node.$extra = extra;
   return node;
+}
+
+// ---------------------------------------------------------------------------
+// The JSON forms of integer and decimal values (kanonak-protocol 4.11.0's
+// `numbers-in-json`, runtime#54). A JSON number can't carry every integer or
+// decimal exactly in every language, so a wide integer and a decimal travel as
+// a string of their digits, and a reader refuses a number that may already have
+// been rounded.
+// ---------------------------------------------------------------------------
+
+const XSD = 'kanonak.org/core-xsd';
+
+/**
+ * How JSON carries a datatype's values: a wide integer as a string, read from a string or a whole number within
+ * ±(2^53 − 1); a decimal as a string only; a narrow integer as a number only. Each inside its datatype's range.
+ */
+type JsonNumberForm =
+  | { readonly form: 'wide'; readonly min?: bigint; readonly max?: bigint }
+  | { readonly form: 'decimal' }
+  | { readonly form: 'narrow'; readonly min: bigint; readonly max: bigint };
+
+const JSON_NUMBER_FORMS: ReadonlyMap<string, JsonNumberForm> = new Map<string, JsonNumberForm>([
+  [`${XSD}/integer`, { form: 'wide' }],
+  [`${XSD}/nonNegativeInteger`, { form: 'wide', min: 0n }],
+  [`${XSD}/positiveInteger`, { form: 'wide', min: 1n }],
+  [`${XSD}/nonPositiveInteger`, { form: 'wide', max: 0n }],
+  [`${XSD}/negativeInteger`, { form: 'wide', max: -1n }],
+  [`${XSD}/long`, { form: 'wide', min: -(2n ** 63n), max: 2n ** 63n - 1n }],
+  [`${XSD}/unsignedLong`, { form: 'wide', min: 0n, max: 2n ** 64n - 1n }],
+  [`${XSD}/decimal`, { form: 'decimal' }],
+  [`${XSD}/int`, { form: 'narrow', min: -(2n ** 31n), max: 2n ** 31n - 1n }],
+  [`${XSD}/short`, { form: 'narrow', min: -(2n ** 15n), max: 2n ** 15n - 1n }],
+  [`${XSD}/byte`, { form: 'narrow', min: -(2n ** 7n), max: 2n ** 7n - 1n }],
+  [`${XSD}/unsignedInt`, { form: 'narrow', min: 0n, max: 2n ** 32n - 1n }],
+  [`${XSD}/unsignedShort`, { form: 'narrow', min: 0n, max: 2n ** 16n - 1n }],
+  [`${XSD}/unsignedByte`, { form: 'narrow', min: 0n, max: 2n ** 8n - 1n }],
+]);
+
+type NumberConversion = (prop: CodecProp, form: JsonNumberForm, value: unknown) => unknown;
+
+function jsonNumberError(prop: CodecProp, why: string): Error {
+  return new Error(`${prop.predicate}: ${why} [json-number-form]`);
+}
+
+function describeJson(value: unknown): string {
+  return typeof value === 'string' ? `the string ${JSON.stringify(value)}` : `${typeof value} ${String(value)}`;
+}
+
+function inRange(prop: CodecProp, form: JsonNumberForm, n: bigint): bigint {
+  const { min, max } = form as { min?: bigint; max?: bigint };
+  if ((min !== undefined && n < min) || (max !== undefined && n > max)) {
+    throw jsonNumberError(prop, `${n} is outside ${prop.datatype}'s range`);
+  }
+  return n;
+}
+
+function integerOfLexical(prop: CodecProp, lexical: string): bigint {
+  try {
+    return BigInt(canonicalInteger(lexical));
+  } catch {
+    throw jsonNumberError(prop, `${JSON.stringify(lexical)} is not an integer lexical form`);
+  }
+}
+
+function decimalOfLexical(prop: CodecProp, lexical: string): string {
+  try {
+    return canonicalDecimal(lexical);
+  } catch {
+    throw jsonNumberError(prop, `${JSON.stringify(lexical)} is not a decimal lexical form`);
+  }
+}
+
+/** A value as JSON carries it, to its exact type here: a wide integer a `bigint`, a decimal its canonical digits, a narrow integer a `number`. */
+const readJsonNumber: NumberConversion = (prop, form, value) => {
+  switch (form.form) {
+    case 'decimal':
+      if (typeof value !== 'string') {
+        throw jsonNumberError(prop, `a decimal is read from a JSON string only, so it can't have been rounded; got ${describeJson(value)}`);
+      }
+      return decimalOfLexical(prop, value);
+    case 'wide':
+      if (typeof value === 'string') return inRange(prop, form, integerOfLexical(prop, value));
+      if (typeof value === 'number' && Number.isSafeInteger(value)) return inRange(prop, form, BigInt(value));
+      throw jsonNumberError(
+        prop,
+        `a wide integer is read from a string, or from a whole JSON number within ±(2^53 − 1); got ${describeJson(value)}`,
+      );
+    case 'narrow':
+      if (typeof value !== 'number' || !Number.isInteger(value)) {
+        throw jsonNumberError(prop, `a narrow integer is read from a whole JSON number only; got ${describeJson(value)}`);
+      }
+      inRange(prop, form, BigInt(value));
+      return value;
+  }
+};
+
+/** A value of its exact type here, to its JSON form: a wide integer and a decimal as a string of canonical digits, a narrow integer as a number. */
+const writeJsonNumber: NumberConversion = (prop, form, value) => {
+  switch (form.form) {
+    case 'decimal':
+      if (typeof value !== 'string') {
+        throw jsonNumberError(prop, `pass a decimal as a string of its digits, which holds it exactly; got ${describeJson(value)}`);
+      }
+      return decimalOfLexical(prop, value);
+    case 'wide': {
+      const n =
+        typeof value === 'bigint' ? value
+          : typeof value === 'string' ? integerOfLexical(prop, value)
+            : typeof value === 'number' && Number.isSafeInteger(value) ? BigInt(value)
+              : undefined;
+      if (n === undefined) {
+        throw jsonNumberError(prop, `pass a wide integer as a bigint, a string, or a whole number within ±(2^53 − 1); got ${describeJson(value)}`);
+      }
+      return inRange(prop, form, n).toString();
+    }
+    case 'narrow': {
+      const n = typeof value === 'bigint' ? value : typeof value === 'number' && Number.isInteger(value) ? BigInt(value) : undefined;
+      if (n === undefined) throw jsonNumberError(prop, `pass a narrow integer as a whole number; got ${describeJson(value)}`);
+      return Number(inRange(prop, form, n));
+    }
+  }
+};
+
+function jsonNumberFormOf(prop: CodecProp): JsonNumberForm | undefined {
+  if (prop.kind !== 'datatype' || !prop.datatype) return undefined;
+  const key = lenientVersionlessKey(prop.datatype);
+  return key === undefined ? undefined : JSON_NUMBER_FORMS.get(key);
+}
+
+function classOrThrow(schema: CodecSchema, typeUri: string, what: string): CodecClass {
+  const match = classFor(schema, typeUri);
+  if (!('cls' in match)) throw new Error(`Cannot convert ${what}: ${match.error}`);
+  return match.cls;
+}
+
+/** Each modeled field's value, through lists and embedded values, with its integers and decimals converted. */
+function convertFields(
+  fields: Record<string, unknown>,
+  cls: CodecClass,
+  schema: CodecSchema,
+  convert: NumberConversion,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...fields };
+  for (const [name, prop] of Object.entries(cls.props)) {
+    const value = out[name];
+    if (value !== undefined && value !== null) out[name] = convertValue(prop, value, schema, convert);
+  }
+  return out;
+}
+
+function convertValue(prop: CodecProp, value: unknown, schema: CodecSchema, convert: NumberConversion): unknown {
+  if (Array.isArray(value)) return value.map((item) => convertValue(prop, item, schema, convert));
+  if (prop.kind === 'datatype') {
+    const form = jsonNumberFormOf(prop);
+    return form ? convert(prop, form, value) : value;
+  }
+  if (value && typeof value === 'object' && !('$ref' in value)) {
+    const map = value as Record<string, unknown>;
+    const clsUri = typeof map.$type === 'string' ? map.$type : prop.range;
+    if (!clsUri) {
+      throw new Error(`Cannot convert the embedded value under ${prop.predicate}: it carries no $type and the property declares no range.`);
+    }
+    return convertFields(map, classOrThrow(schema, clsUri, `the embedded value under ${prop.predicate}`), schema, convert);
+  }
+  return value;
+}
+
+/**
+ * Serialize a node to normalized JSON, writing each integer and decimal value in its JSON form (kanonak-protocol
+ * 4.11.0's `numbers-in-json`, runtime#54): a wide integer and a decimal as a string of their canonical digits, a
+ * narrow integer as a number. A value outside its datatype's range is refused, ending `[json-number-form]`. The
+ * result holds no `bigint`, so `JSON.stringify` writes it as it stands.
+ */
+export function serializeExact(node: CodecNode, schema: CodecSchema): Record<string, unknown> {
+  const typeUri = node.$type;
+  if (typeof typeUri !== 'string') throw new Error('Cannot serialize: missing string $type');
+  const cls = classOrThrow(schema, typeUri, `node ${node.$id ?? typeUri}`);
+  return serialize(convertFields(node as Record<string, unknown>, cls, schema, writeJsonNumber) as CodecNode);
+}
+
+/**
+ * Parse normalized JSON into a node, as {@link deserialize} does, reading each integer and decimal value exactly: a
+ * wide integer to a `bigint`, from a string or a whole number within ±(2^53 − 1); a decimal to its canonical digits,
+ * from a string only; a narrow integer to a `number`, from a whole number only. A value JSON may already have rounded,
+ * or one outside its datatype's range, is refused, ending `[json-number-form]`.
+ */
+export function deserializeExact(json: Record<string, unknown>, schema: CodecSchema): CodecNode {
+  const node = deserialize(json, schema);
+  const cls = classOrThrow(schema, node.$type!, `node ${node.$id ?? node.$type}`);
+  return convertFields(node as Record<string, unknown>, cls, schema, readJsonNumber) as CodecNode;
 }

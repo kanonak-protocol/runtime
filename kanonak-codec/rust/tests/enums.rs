@@ -14,7 +14,9 @@
 //!   `serialize` is schema-free and `deserialize` does not recurse into
 //!   embedded values, so canonicalization is the only surface that can see it.
 
-use kanonak_codec::{canonical_form, content_hash, serialize, Node};
+#[allow(deprecated)]
+use kanonak_codec::serialize;
+use kanonak_codec::{canonical_form, content_hash, Node};
 use serde_json::Value as J;
 use std::fs;
 use std::path::PathBuf;
@@ -53,6 +55,7 @@ fn is_versioned_durable_uri(uri: &str) -> bool {
 }
 
 #[test]
+#[allow(deprecated)]
 fn codec_vectors_enums() {
     let doc = read_doc("codec-vectors-enums.json");
     let schema = doc["schema"].clone();

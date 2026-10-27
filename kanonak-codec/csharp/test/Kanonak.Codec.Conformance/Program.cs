@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
+using System.Numerics;
 using System.Text.Json;
+using Kanonak.Canonical;
 using Kanonak.Codec;
 
 // Conformance runner: drives the shared codec vector files (the 0.1.0 base vectors
@@ -101,6 +104,18 @@ class Program
             Console.WriteLine($"{Path.GetFileName(compatPath)}: {compatPassed} passed, {compatFailed} failed");
             passed += compatPassed;
             failed += compatFailed;
+
+            string numbersPath = FindVectors("codec-vectors-json-numbers.json");
+            if (numbersPath == null)
+            {
+                Console.Error.WriteLine("codec-vectors-json-numbers.json not found; pass the vector files as arguments");
+                return 2;
+            }
+            int numbersPassed, numbersFailed;
+            RunJsonNumbersFile(numbersPath, out numbersPassed, out numbersFailed);
+            Console.WriteLine($"{Path.GetFileName(numbersPath)}: {numbersPassed} passed, {numbersFailed} failed");
+            passed += numbersPassed;
+            failed += numbersFailed;
         }
 
         Console.WriteLine($"\n{passed} passed, {failed} failed");
@@ -401,6 +416,156 @@ class Program
             }
             if (ok) passed++; else failed++;
         }
+    }
+
+    /// <summary>
+    /// The JSON forms of integer and decimal values (runtime#54): <see cref="Codec.DeserializeExact"/> and
+    /// <see cref="Codec.SerializeExact"/> over one field of the file's class. A read case's value must come back in
+    /// the type this port gives its datatype, and render to the expected canonical lexical form, item by item and
+    /// field by field; a write case's value is built in that type from its canonical lexical form, and its output
+    /// compared with the expected JSON. A refusal must end in <c>[json-number-form]</c>.
+    /// </summary>
+    static void RunJsonNumbersFile(string vectorsPath, out int passed, out int failed)
+    {
+        passed = 0;
+        failed = 0;
+        using var doc = JsonDocument.Parse(File.ReadAllText(vectorsPath));
+        JsonElement root = doc.RootElement;
+        CodecSchema schema = DecodeSchema(root.GetProperty("schema"));
+        string classUri = root.GetProperty("class").GetString();
+        CodecClass cls = schema.Classes[classUri];
+
+        foreach (var c in root.GetProperty("readCases").EnumerateArray())
+        {
+            string id = "read " + c.GetProperty("id").GetString();
+            string field = c.GetProperty("field").GetString();
+            string text = "{\"$type\": " + JsonSerializer.Serialize(classUri) + ", " + JsonSerializer.Serialize(field) + ": " +
+                c.GetProperty("json").GetString() + "}";
+            IReadOnlyDictionary<string, object> json;
+            using (var input = JsonDocument.Parse(text)) json = (IReadOnlyDictionary<string, object>)DecodeJson(input.RootElement);
+
+            bool ok;
+            if (c.TryGetProperty("expectError", out var expErr) && expErr.GetBoolean())
+            {
+                ok = RejectsWithKind(() => Codec.DeserializeExact(json, schema), "json-number-form", id);
+            }
+            else
+            {
+                object exp = DecodeJson(c.GetProperty("expected"));
+                object got;
+                try { got = LexicalOf(Codec.DeserializeExact(json, schema)[field], cls.Props[field], schema); }
+                catch (Exception err) { got = "threw: " + err.Message; }
+                ok = DeepEquals(got, exp);
+                if (!ok) Console.WriteLine($"FAIL [{id}]\n  got: {Show(got)}\n  exp: {Show(exp)}");
+            }
+            if (ok) passed++; else failed++;
+        }
+
+        foreach (var c in root.GetProperty("writeCases").EnumerateArray())
+        {
+            string id = "write " + c.GetProperty("id").GetString();
+            string field = c.GetProperty("field").GetString();
+            var node = new Dictionary<string, object>
+            {
+                ["$type"] = classUri,
+                [field] = PortValue(c.GetProperty("value"), cls.Props[field], schema),
+            };
+
+            bool ok;
+            if (c.TryGetProperty("expectError", out var expErr) && expErr.GetBoolean())
+            {
+                ok = RejectsWithKind(() => Codec.SerializeExact(node, schema), "json-number-form", id);
+            }
+            else
+            {
+                object exp;
+                using (var expected = JsonDocument.Parse(c.GetProperty("json").GetString())) exp = DecodeJson(expected.RootElement);
+                object got;
+                try { got = Codec.SerializeExact(node, schema)[field]; }
+                catch (Exception err) { got = "threw: " + err.Message; }
+                ok = DeepEquals(got, exp);
+                if (!ok) Console.WriteLine($"FAIL [{id}]\n  got: {Show(got)}\n  exp: {Show(exp)}");
+            }
+            if (ok) passed++; else failed++;
+        }
+    }
+
+    const string Xsd = "kanonak.org/core-xsd/";
+
+    /// <summary>The type this port gives a value of the prop's datatype, read or written.</summary>
+    static Type PortType(CodecProp prop)
+    {
+        switch (Coordinate.LenientVersionlessKey(prop.Datatype))
+        {
+            case Xsd + "decimal":
+                return typeof(string);
+            case Xsd + "long":
+            case Xsd + "int":
+            case Xsd + "short":
+            case Xsd + "byte":
+            case Xsd + "unsignedInt":
+            case Xsd + "unsignedShort":
+            case Xsd + "unsignedByte":
+                return typeof(long);
+            case Xsd + "unsignedLong":
+                return typeof(ulong);
+            default:
+                return typeof(BigInteger);
+        }
+    }
+
+    /// <summary>
+    /// A read value rendered as its canonical lexical form, item by item and field by field; a scalar of any type
+    /// but <see cref="PortType"/> renders as a mismatch that names both.
+    /// </summary>
+    static object LexicalOf(object value, CodecProp prop, CodecSchema schema)
+    {
+        if (value is IReadOnlyDictionary<string, object> map)
+        {
+            CodecClass embedded = schema.Classes[prop.Range];
+            var fields = new Dictionary<string, object>();
+            foreach (var kv in map) fields[kv.Key] = LexicalOf(kv.Value, embedded.Props[kv.Key], schema);
+            return fields;
+        }
+        if (value is System.Collections.IList list)
+        {
+            var items = new List<object>();
+            foreach (var item in list) items.Add(LexicalOf(item, prop, schema));
+            return items;
+        }
+        Type expected = PortType(prop);
+        if (value?.GetType() != expected) return $"a {value?.GetType().Name ?? "null"}, not a {expected.Name}";
+        return Convert.ToString(value, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// A write case's value in <see cref="PortType"/>, from its canonical lexical form. A value past a
+    /// <see cref="long"/> or a <see cref="ulong"/> is a <see cref="BigInteger"/>, which <see cref="Codec.SerializeExact"/>
+    /// takes for any wide integer, so its range check is what refuses it.
+    /// </summary>
+    static object PortValue(JsonElement value, CodecProp prop, CodecSchema schema)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            CodecClass embedded = schema.Classes[prop.Range];
+            var fields = new Dictionary<string, object>();
+            foreach (var p in value.EnumerateObject()) fields[p.Name] = PortValue(p.Value, embedded.Props[p.Name], schema);
+            return fields;
+        }
+        if (value.ValueKind == JsonValueKind.Array)
+        {
+            var items = new List<object>();
+            foreach (var item in value.EnumerateArray()) items.Add(PortValue(item, prop, schema));
+            return items;
+        }
+        string lexical = value.GetString();
+        Type type = PortType(prop);
+        if (type == typeof(string)) return lexical;
+        if (type == typeof(long) && long.TryParse(lexical, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long l))
+            return l;
+        if (type == typeof(ulong) && ulong.TryParse(lexical, NumberStyles.None, CultureInfo.InvariantCulture, out ulong u))
+            return u;
+        return BigInteger.Parse(lexical, CultureInfo.InvariantCulture);
     }
 
     /// <summary>Whether <paramref name="run"/> throws with a message ending in <c>[kind]</c>; reports otherwise.</summary>

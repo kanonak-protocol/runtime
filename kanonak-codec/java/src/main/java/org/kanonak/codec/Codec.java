@@ -1,5 +1,7 @@
 package org.kanonak.codec;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -13,6 +15,7 @@ import org.kanonak.canonical.CanonicalForm.Subject;
 import org.kanonak.canonical.CanonicalForm.Value;
 import org.kanonak.canonical.Carrier;
 import org.kanonak.canonical.Coordinate;
+import org.kanonak.canonical.Datatypes;
 
 import org.kanonak.codec.CodecSchema.CodecClass;
 import org.kanonak.codec.CodecSchema.CodecEnum;
@@ -628,7 +631,11 @@ public final class Codec {
      * entries ride as sibling fields after the modeled ones; a modeled field wins
      * a name collision ({@code [JsonExtensionData]} semantics). {@code null}
      * values are dropped and no {@code $extra} key appears on the wire.
+     *
+     * @deprecated Use {@link #serializeExact(Map, CodecSchema)}, which writes
+     *     integer and decimal values in their JSON forms (runtime#54).
      */
+    @Deprecated
     @SuppressWarnings("unchecked")
     public static Map<String, Object> serialize(Map<String, Object> node) {
         // Producer-side $types validation, at every depth — fail closest to the bug.
@@ -662,7 +669,11 @@ public final class Codec {
      * compatible later version (runtime#28 — the same lookup {@link #typeMatches}
      * uses). The node keeps the {@code $type} it was WRITTEN with; the
      * producer's bytes are the producer's.
+     *
+     * @deprecated Use {@link #deserializeExact(Map, CodecSchema)}, which reads
+     *     integer and decimal values exactly (runtime#54).
      */
+    @Deprecated
     public static Map<String, Object> deserialize(Map<String, Object> json, CodecSchema schema) {
         Object typeUri = json.get("$type");
         if (!(typeUri instanceof String)) {
@@ -699,5 +710,304 @@ public final class Codec {
             node.put("$extra", extra);
         }
         return node;
+    }
+
+    // -- The JSON forms of integer and decimal values (runtime#54) -----------------
+
+    /**
+     * How JSON carries a datatype's values (kanonak-protocol 4.11.0's
+     * {@code numbers-in-json}): a wide integer as a string, read from a string
+     * or a whole number within ±(2^53 − 1); a decimal as a string only; a
+     * narrow integer as a number only.
+     */
+    private enum JsonForm { WIDE, DECIMAL, NARROW }
+
+    /** A datatype's JSON form, and the range of its values ({@code null} where unbounded). */
+    private record JsonNumberForm(JsonForm form, BigDecimal min, BigDecimal max) {
+        /** Whether every value fits a {@code long}, so this port holds it as a {@link Long} rather than a {@link BigInteger}. */
+        boolean fitsLong() {
+            return min != null && max != null
+                && min.compareTo(BigDecimal.valueOf(Long.MIN_VALUE)) >= 0
+                && max.compareTo(BigDecimal.valueOf(Long.MAX_VALUE)) <= 0;
+        }
+    }
+
+    private static final String XSD = "kanonak.org/core-xsd/";
+
+    private static final BigDecimal MAX_SAFE_INTEGER = BigDecimal.valueOf((1L << 53) - 1);
+
+    /** Every datatype JSON carries in a form of its own, by versionless key. Any other is left as it is. */
+    private static final Map<String, JsonNumberForm> JSON_NUMBER_FORMS = Map.ofEntries(
+        Map.entry(XSD + "integer", wide(null, null)),
+        Map.entry(XSD + "nonNegativeInteger", wide(BigDecimal.ZERO, null)),
+        Map.entry(XSD + "positiveInteger", wide(BigDecimal.ONE, null)),
+        Map.entry(XSD + "nonPositiveInteger", wide(null, BigDecimal.ZERO)),
+        Map.entry(XSD + "negativeInteger", wide(null, BigDecimal.ONE.negate())),
+        Map.entry(XSD + "long", wide(BigDecimal.valueOf(Long.MIN_VALUE), BigDecimal.valueOf(Long.MAX_VALUE))),
+        Map.entry(XSD + "unsignedLong",
+            wide(BigDecimal.ZERO, new BigDecimal(BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)))),
+        Map.entry(XSD + "decimal", new JsonNumberForm(JsonForm.DECIMAL, null, null)),
+        Map.entry(XSD + "int", narrow(Integer.MIN_VALUE, Integer.MAX_VALUE)),
+        Map.entry(XSD + "short", narrow(Short.MIN_VALUE, Short.MAX_VALUE)),
+        Map.entry(XSD + "byte", narrow(Byte.MIN_VALUE, Byte.MAX_VALUE)),
+        Map.entry(XSD + "unsignedInt", narrow(0, 0xFFFF_FFFFL)),
+        Map.entry(XSD + "unsignedShort", narrow(0, 0xFFFF)),
+        Map.entry(XSD + "unsignedByte", narrow(0, 0xFF)));
+
+    private static JsonNumberForm wide(BigDecimal min, BigDecimal max) {
+        return new JsonNumberForm(JsonForm.WIDE, min, max);
+    }
+
+    private static JsonNumberForm narrow(long min, long max) {
+        return new JsonNumberForm(JsonForm.NARROW, BigDecimal.valueOf(min), BigDecimal.valueOf(max));
+    }
+
+    /** One value's conversion between its exact type here and its JSON form. */
+    @FunctionalInterface
+    private interface NumberConversion {
+        Object apply(CodecProp prop, JsonNumberForm form, Object value);
+    }
+
+    private static IllegalArgumentException jsonNumberError(CodecProp prop, String why) {
+        return new IllegalArgumentException(prop.predicate() + ": " + why + " [json-number-form]");
+    }
+
+    private static String describe(Object value) {
+        if (value instanceof String s) {
+            return "the string \"" + s + "\"";
+        }
+        return value == null ? "null" : "the " + value.getClass().getSimpleName() + " " + value;
+    }
+
+    private static BigDecimal inRange(CodecProp prop, JsonNumberForm form, BigDecimal n) {
+        if ((form.min() != null && n.compareTo(form.min()) < 0) || (form.max() != null && n.compareTo(form.max()) > 0)) {
+            throw jsonNumberError(prop, n + " is outside " + prop.datatype() + "'s range");
+        }
+        return n;
+    }
+
+    private static BigDecimal integerOfLexical(CodecProp prop, String lexical) {
+        try {
+            return new BigDecimal(Datatypes.canonicalInteger(lexical));
+        } catch (IllegalArgumentException notAnInteger) {
+            throw jsonNumberError(prop, "\"" + lexical + "\" is not an integer lexical form");
+        }
+    }
+
+    private static String decimalOfLexical(CodecProp prop, String lexical) {
+        try {
+            return Datatypes.canonicalDecimal(lexical);
+        } catch (IllegalArgumentException notADecimal) {
+            throw jsonNumberError(prop, "\"" + lexical + "\" is not a decimal lexical form");
+        }
+    }
+
+    /** A number's exact value: a {@link JsonNumber}'s token or a {@link Number}'s, else {@code null}. */
+    private static BigDecimal numericValue(Object value) {
+        try {
+            if (value instanceof JsonNumber token) {
+                return new BigDecimal(token.token());
+            }
+            if (value instanceof BigDecimal d) {
+                return d;
+            }
+            if (value instanceof BigInteger i) {
+                return new BigDecimal(i);
+            }
+            if (value instanceof Double || value instanceof Float) {
+                return new BigDecimal(((Number) value).doubleValue());
+            }
+            if (value instanceof Number n) {
+                return new BigDecimal(n.toString());
+            }
+        } catch (NumberFormatException notFinite) {
+            return null;
+        }
+        return null;
+    }
+
+    /**
+     * A number's value when it is whole and of magnitude at most {@code bound}
+     * (any, when {@code null}), else {@code null}. Neither check expands the
+     * value, so a token like {@code 1e999999999} costs nothing.
+     */
+    private static BigDecimal wholeNumber(Object value, BigDecimal bound) {
+        BigDecimal n = numericValue(value);
+        if (n == null || (n.signum() != 0 && n.stripTrailingZeros().scale() > 0)) {
+            return null;
+        }
+        return bound == null || n.abs().compareTo(bound) <= 0 ? n : null;
+    }
+
+    /** A whole value inside its datatype's range, as this port holds it: a {@link Long} where every value fits one, else a {@link BigInteger}. */
+    private static Object exactInteger(JsonNumberForm form, BigDecimal n) {
+        if (form.fitsLong()) {
+            return n.longValueExact();
+        }
+        return n.toBigIntegerExact();
+    }
+
+    /**
+     * A value as JSON carries it, to its exact type here: a wide integer to a
+     * {@link Long} or a {@link BigInteger}, a decimal to a {@link BigDecimal}
+     * of its canonical lexical form, a narrow integer to a {@link Long}.
+     */
+    private static Object readJsonNumber(CodecProp prop, JsonNumberForm form, Object value) {
+        return switch (form.form()) {
+            case DECIMAL -> {
+                if (!(value instanceof String s)) {
+                    throw jsonNumberError(prop,
+                        "a decimal is read from a JSON string only, so it can't have been rounded; got " + describe(value));
+                }
+                yield new BigDecimal(decimalOfLexical(prop, s));
+            }
+            case WIDE -> {
+                BigDecimal n = value instanceof String s ? integerOfLexical(prop, s) : wholeNumber(value, MAX_SAFE_INTEGER);
+                if (n == null) {
+                    throw jsonNumberError(prop, "a wide integer is read from a string, or from a whole JSON number within "
+                        + "±(2^53 − 1); got " + describe(value));
+                }
+                yield exactInteger(form, inRange(prop, form, n));
+            }
+            case NARROW -> {
+                BigDecimal n = wholeNumber(value, null);
+                if (n == null) {
+                    throw jsonNumberError(prop, "a narrow integer is read from a whole JSON number only; got " + describe(value));
+                }
+                yield exactInteger(form, inRange(prop, form, n));
+            }
+        };
+    }
+
+    /**
+     * A value of its exact type here, to its JSON form: a wide integer and a
+     * decimal to the {@link String} of their canonical lexical form, a narrow
+     * integer to a {@link Long}.
+     */
+    private static Object writeJsonNumber(CodecProp prop, JsonNumberForm form, Object value) {
+        return switch (form.form()) {
+            case DECIMAL -> {
+                if (value instanceof BigDecimal d) {
+                    yield decimalOfLexical(prop, d.toPlainString());
+                }
+                if (value instanceof String s) {
+                    yield decimalOfLexical(prop, s);
+                }
+                throw jsonNumberError(prop,
+                    "pass a decimal as a BigDecimal or a string of its digits, which hold it exactly; got " + describe(value));
+            }
+            case WIDE -> {
+                BigDecimal n = value instanceof String s ? integerOfLexical(prop, s)
+                    : value instanceof Double ? wholeNumber(value, MAX_SAFE_INTEGER)
+                    : value instanceof BigInteger || value instanceof Long || value instanceof Integer
+                        || value instanceof Short || value instanceof Byte ? numericValue(value)
+                    : null;
+                if (n == null) {
+                    throw jsonNumberError(prop, "pass a wide integer as a BigInteger, Long, Integer, Short, Byte, string, "
+                        + "or whole Double within ±(2^53 − 1); got " + describe(value));
+                }
+                yield inRange(prop, form, n).toBigIntegerExact().toString();
+            }
+            case NARROW -> {
+                BigDecimal n = value instanceof Number ? wholeNumber(value, null) : null;
+                if (n == null) {
+                    throw jsonNumberError(prop, "pass a narrow integer as a whole Number; got " + describe(value));
+                }
+                yield exactInteger(form, inRange(prop, form, n));
+            }
+        };
+    }
+
+    private static JsonNumberForm jsonNumberFormOf(CodecProp prop) {
+        if (prop.datatype() == null) {
+            return null;
+        }
+        String key = Coordinate.lenientVersionlessKey(prop.datatype());
+        return key == null ? null : JSON_NUMBER_FORMS.get(key);
+    }
+
+    private static CodecClass classOrThrow(CodecSchema schema, String typeUri, String what) {
+        ClassMatch match = classFor(schema, typeUri);
+        if (match.cls() == null) {
+            throw new IllegalArgumentException("Cannot convert " + what + ": " + match.error());
+        }
+        return match.cls();
+    }
+
+    /** Each modeled field's value, through lists and embedded values, with its integers and decimals converted. */
+    private static Map<String, Object> convertFields(
+            Map<String, Object> fields, CodecClass cls, CodecSchema schema, NumberConversion convert) {
+        Map<String, Object> out = new LinkedHashMap<>(fields);
+        for (Map.Entry<String, CodecProp> e : cls.props().entrySet()) {
+            Object value = out.get(e.getKey());
+            if (value != null) {
+                out.put(e.getKey(), convertValue(e.getValue(), value, schema, convert));
+            }
+        }
+        return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Object convertValue(CodecProp prop, Object value, CodecSchema schema, NumberConversion convert) {
+        if (value instanceof List<?> list) {
+            List<Object> out = new ArrayList<>(list.size());
+            for (Object item : list) {
+                out.add(convertValue(prop, item, schema, convert));
+            }
+            return out;
+        }
+        if ("datatype".equals(prop.kind())) {
+            JsonNumberForm form = jsonNumberFormOf(prop);
+            return form == null ? value : convert.apply(prop, form, value);
+        }
+        if (value instanceof Map<?, ?> m && !m.containsKey("$ref")) {
+            Map<String, Object> map = (Map<String, Object>) m;
+            String clsUri = map.get("$type") instanceof String t ? t : prop.range();
+            if (clsUri == null) {
+                throw new IllegalArgumentException("Cannot convert the embedded value under " + prop.predicate()
+                    + ": it carries no $type and the property declares no range.");
+            }
+            CodecClass cls = classOrThrow(schema, clsUri, "the embedded value under " + prop.predicate());
+            return convertFields(map, cls, schema, convert);
+        }
+        return value;
+    }
+
+    /**
+     * Serialize a node to normalized JSON, as {@link #serialize} does, writing
+     * each integer and decimal value in its JSON form (kanonak-protocol
+     * 4.11.0's {@code numbers-in-json}, runtime#54). A wide integer, given as
+     * a {@link BigInteger}, {@link Long}, {@link Integer}, {@link Short},
+     * {@link Byte}, lexical {@link String} or whole {@link Double} within
+     * ±(2^53 − 1), and a decimal, given as a {@link BigDecimal} or lexical
+     * {@link String}, are written as the string of their canonical lexical
+     * form; a narrow integer, given as a whole {@link Number}, as a
+     * {@link Long}. Any other value, or one outside its datatype's range, is
+     * refused with a message ending {@code [json-number-form]}.
+     */
+    public static Map<String, Object> serializeExact(Map<String, Object> node, CodecSchema schema) {
+        if (!(node.get("$type") instanceof String typeUri)) {
+            throw new IllegalArgumentException("Cannot serialize: missing string $type");
+        }
+        String what = "node " + (node.get("$id") instanceof String id ? id : typeUri);
+        return serialize(convertFields(node, classOrThrow(schema, typeUri, what), schema, Codec::writeJsonNumber));
+    }
+
+    /**
+     * Parse normalized JSON into a node, as {@link #deserialize} does, reading
+     * each integer and decimal value exactly (kanonak-protocol 4.11.0's
+     * {@code numbers-in-json}, runtime#54): a wide integer from a string or a
+     * whole number within ±(2^53 − 1), to a {@link Long} for {@code xsd:long}
+     * and a {@link BigInteger} for the others; a decimal from a string only,
+     * to a {@link BigDecimal}; a narrow integer from a whole number only, to a
+     * {@link Long}. A number JSON may already have rounded, or a value outside
+     * its datatype's range, is refused with a message ending
+     * {@code [json-number-form]}.
+     */
+    public static Map<String, Object> deserializeExact(Map<String, Object> json, CodecSchema schema) {
+        Map<String, Object> node = deserialize(json, schema);
+        String typeUri = (String) node.get("$type");
+        String what = "node " + (node.get("$id") instanceof String id ? id : typeUri);
+        return convertFields(node, classOrThrow(schema, typeUri, what), schema, Codec::readJsonNumber);
     }
 }

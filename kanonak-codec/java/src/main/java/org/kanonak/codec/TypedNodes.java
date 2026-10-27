@@ -33,6 +33,7 @@ public final class TypedNodes {
      * collision — {@link Codec#serialize} semantics) — and the wire map splits
      * back onto the node contract via {@link Codec#deserialize}.
      */
+    @SuppressWarnings("deprecation")
     public static Map<String, Object> toNode(Object typed, CodecSchema schema) {
         Objects.requireNonNull(typed, "typed");
         return Codec.deserialize(toWireMap(typed), schema);

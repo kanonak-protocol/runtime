@@ -1,0 +1,593 @@
+{
+ "description": "The JSON forms of integer and decimal values (kanonak-codec 2.2.0, runtime#54), as kanonak-protocol 4.11.0's numbers-in-json convention gives them. Every port's serializeExact and deserializeExact, and each language's JSON binding, read and write exactly these. readCases: a node of `class` whose `field` holds the JSON text `json` reads as `expected`, the canonical lexical form of each value (a list item by item, an embedded value field by field, each by its own datatype), or, with expectError, is refused. A wide integer (integer, its four sign-restricted forms, long, unsignedLong) reads from a string holding a lexical form of its datatype, or from a JSON number whose value is a whole number within ±(2^53 − 1); decimal from a string only; int and narrower from a whole JSON number only; every value inside its datatype's range. writeCases: the value whose canonical lexical form is `value` writes as the JSON text `json`, compared as parsed JSON, or, with expectError, is refused for lying outside its datatype's range. The expected values are the convention's, stated case by case in gen-json-numbers-vectors/gen.ts.",
+ "canonicalFormVersion": "1",
+ "datatypes": {
+  "integer": "kanonak.org/core-xsd@1.3.0/integer",
+  "nonNegativeInteger": "kanonak.org/core-xsd@1.3.0/nonNegativeInteger",
+  "positiveInteger": "kanonak.org/core-xsd@1.3.0/positiveInteger",
+  "nonPositiveInteger": "kanonak.org/core-xsd@1.3.0/nonPositiveInteger",
+  "negativeInteger": "kanonak.org/core-xsd@1.3.0/negativeInteger",
+  "long": "kanonak.org/core-xsd@1.3.0/long",
+  "unsignedLong": "kanonak.org/core-xsd@1.3.0/unsignedLong",
+  "decimal": "kanonak.org/core-xsd@1.3.0/decimal",
+  "int": "kanonak.org/core-xsd@1.3.0/int",
+  "short": "kanonak.org/core-xsd@1.3.0/short",
+  "byte": "kanonak.org/core-xsd@1.3.0/byte",
+  "unsignedInt": "kanonak.org/core-xsd@1.3.0/unsignedInt",
+  "unsignedShort": "kanonak.org/core-xsd@1.3.0/unsignedShort",
+  "unsignedByte": "kanonak.org/core-xsd@1.3.0/unsignedByte"
+ },
+ "class": "probe.example.com/schema@1.0.0/Numbers",
+ "schema": {
+  "typePredicate": "kanonak.org/core-rdf@1.2.0/type",
+  "labelPredicate": "kanonak.org/core-rdf@1.2.0/label",
+  "packageTypeUri": "kanonak.org/core-kanonak@2.4.0/Package",
+  "classes": {
+   "probe.example.com/schema@1.0.0/Numbers": {
+    "typeUri": "probe.example.com/schema@1.0.0/Numbers",
+    "props": {
+     "integer": {
+      "predicate": "probe.example.com/schema@1.0.0/integer",
+      "kind": "datatype",
+      "datatype": "kanonak.org/core-xsd@1.3.0/integer"
+     },
+     "nonNegativeInteger": {
+      "predicate": "probe.example.com/schema@1.0.0/nonNegativeInteger",
+      "kind": "datatype",
+      "datatype": "kanonak.org/core-xsd@1.3.0/nonNegativeInteger"
+     },
+     "positiveInteger": {
+      "predicate": "probe.example.com/schema@1.0.0/positiveInteger",
+      "kind": "datatype",
+      "datatype": "kanonak.org/core-xsd@1.3.0/positiveInteger"
+     },
+     "nonPositiveInteger": {
+      "predicate": "probe.example.com/schema@1.0.0/nonPositiveInteger",
+      "kind": "datatype",
+      "datatype": "kanonak.org/core-xsd@1.3.0/nonPositiveInteger"
+     },
+     "negativeInteger": {
+      "predicate": "probe.example.com/schema@1.0.0/negativeInteger",
+      "kind": "datatype",
+      "datatype": "kanonak.org/core-xsd@1.3.0/negativeInteger"
+     },
+     "long": {
+      "predicate": "probe.example.com/schema@1.0.0/long",
+      "kind": "datatype",
+      "datatype": "kanonak.org/core-xsd@1.3.0/long"
+     },
+     "unsignedLong": {
+      "predicate": "probe.example.com/schema@1.0.0/unsignedLong",
+      "kind": "datatype",
+      "datatype": "kanonak.org/core-xsd@1.3.0/unsignedLong"
+     },
+     "decimal": {
+      "predicate": "probe.example.com/schema@1.0.0/decimal",
+      "kind": "datatype",
+      "datatype": "kanonak.org/core-xsd@1.3.0/decimal"
+     },
+     "int": {
+      "predicate": "probe.example.com/schema@1.0.0/int",
+      "kind": "datatype",
+      "datatype": "kanonak.org/core-xsd@1.3.0/int"
+     },
+     "short": {
+      "predicate": "probe.example.com/schema@1.0.0/short",
+      "kind": "datatype",
+      "datatype": "kanonak.org/core-xsd@1.3.0/short"
+     },
+     "byte": {
+      "predicate": "probe.example.com/schema@1.0.0/byte",
+      "kind": "datatype",
+      "datatype": "kanonak.org/core-xsd@1.3.0/byte"
+     },
+     "unsignedInt": {
+      "predicate": "probe.example.com/schema@1.0.0/unsignedInt",
+      "kind": "datatype",
+      "datatype": "kanonak.org/core-xsd@1.3.0/unsignedInt"
+     },
+     "unsignedShort": {
+      "predicate": "probe.example.com/schema@1.0.0/unsignedShort",
+      "kind": "datatype",
+      "datatype": "kanonak.org/core-xsd@1.3.0/unsignedShort"
+     },
+     "unsignedByte": {
+      "predicate": "probe.example.com/schema@1.0.0/unsignedByte",
+      "kind": "datatype",
+      "datatype": "kanonak.org/core-xsd@1.3.0/unsignedByte"
+     },
+     "counts": {
+      "predicate": "probe.example.com/schema@1.0.0/counts",
+      "kind": "datatype",
+      "datatype": "kanonak.org/core-xsd@1.3.0/integer"
+     },
+     "amount": {
+      "predicate": "probe.example.com/schema@1.0.0/amount",
+      "kind": "object",
+      "range": "probe.example.com/schema@1.0.0/Amount"
+     }
+    }
+   },
+   "probe.example.com/schema@1.0.0/Amount": {
+    "typeUri": "probe.example.com/schema@1.0.0/Amount",
+    "props": {
+     "value": {
+      "predicate": "probe.example.com/schema@1.0.0/value",
+      "kind": "datatype",
+      "datatype": "kanonak.org/core-xsd@1.3.0/decimal"
+     }
+    }
+   }
+  }
+ },
+ "readCases": [
+  {
+   "id": "integer-string-past-2^53",
+   "field": "integer",
+   "json": "\"9007199254740993\"",
+   "expected": "9007199254740993"
+  },
+  {
+   "id": "integer-string-thirty-digits",
+   "field": "integer",
+   "json": "\"-123456789012345678901234567890\"",
+   "expected": "-123456789012345678901234567890"
+  },
+  {
+   "id": "integer-string-not-canonical",
+   "field": "integer",
+   "json": "\"+007\"",
+   "expected": "7"
+  },
+  {
+   "id": "integer-number",
+   "field": "integer",
+   "json": "42",
+   "expected": "42"
+  },
+  {
+   "id": "integer-number-max-safe",
+   "field": "integer",
+   "json": "9007199254740991",
+   "expected": "9007199254740991"
+  },
+  {
+   "id": "integer-number-min-safe",
+   "field": "integer",
+   "json": "-9007199254740991",
+   "expected": "-9007199254740991"
+  },
+  {
+   "id": "integer-number-whole-with-fraction-token",
+   "field": "integer",
+   "json": "2.0",
+   "expected": "2"
+  },
+  {
+   "id": "integer-number-exponent",
+   "field": "integer",
+   "json": "1e3",
+   "expected": "1000"
+  },
+  {
+   "id": "integer-number-2^53",
+   "field": "integer",
+   "json": "9007199254740992",
+   "expectError": true
+  },
+  {
+   "id": "integer-number-past-2^53",
+   "field": "integer",
+   "json": "9007199254740993",
+   "expectError": true
+  },
+  {
+   "id": "integer-number-minus-2^53",
+   "field": "integer",
+   "json": "-9007199254740992",
+   "expectError": true
+  },
+  {
+   "id": "integer-number-fraction",
+   "field": "integer",
+   "json": "1.5",
+   "expectError": true
+  },
+  {
+   "id": "integer-string-not-a-lexical",
+   "field": "integer",
+   "json": "\"12x\"",
+   "expectError": true
+  },
+  {
+   "id": "integer-string-fraction",
+   "field": "integer",
+   "json": "\"1.5\"",
+   "expectError": true
+  },
+  {
+   "id": "integer-string-empty",
+   "field": "integer",
+   "json": "\"\"",
+   "expectError": true
+  },
+  {
+   "id": "integer-boolean",
+   "field": "integer",
+   "json": "true",
+   "expectError": true
+  },
+  {
+   "id": "nonNegativeInteger-zero",
+   "field": "nonNegativeInteger",
+   "json": "\"0\"",
+   "expected": "0"
+  },
+  {
+   "id": "nonNegativeInteger-negative",
+   "field": "nonNegativeInteger",
+   "json": "\"-1\"",
+   "expectError": true
+  },
+  {
+   "id": "positiveInteger-one",
+   "field": "positiveInteger",
+   "json": "1",
+   "expected": "1"
+  },
+  {
+   "id": "positiveInteger-zero",
+   "field": "positiveInteger",
+   "json": "\"0\"",
+   "expectError": true
+  },
+  {
+   "id": "nonPositiveInteger-zero",
+   "field": "nonPositiveInteger",
+   "json": "\"0\"",
+   "expected": "0"
+  },
+  {
+   "id": "nonPositiveInteger-one",
+   "field": "nonPositiveInteger",
+   "json": "\"1\"",
+   "expectError": true
+  },
+  {
+   "id": "negativeInteger-minus-one",
+   "field": "negativeInteger",
+   "json": "\"-1\"",
+   "expected": "-1"
+  },
+  {
+   "id": "negativeInteger-zero",
+   "field": "negativeInteger",
+   "json": "0",
+   "expectError": true
+  },
+  {
+   "id": "long-max",
+   "field": "long",
+   "json": "\"9223372036854775807\"",
+   "expected": "9223372036854775807"
+  },
+  {
+   "id": "long-min",
+   "field": "long",
+   "json": "\"-9223372036854775808\"",
+   "expected": "-9223372036854775808"
+  },
+  {
+   "id": "long-number",
+   "field": "long",
+   "json": "5",
+   "expected": "5"
+  },
+  {
+   "id": "long-past-max",
+   "field": "long",
+   "json": "\"9223372036854775808\"",
+   "expectError": true
+  },
+  {
+   "id": "long-past-min",
+   "field": "long",
+   "json": "\"-9223372036854775809\"",
+   "expectError": true
+  },
+  {
+   "id": "unsignedLong-max",
+   "field": "unsignedLong",
+   "json": "\"18446744073709551615\"",
+   "expected": "18446744073709551615"
+  },
+  {
+   "id": "unsignedLong-number",
+   "field": "unsignedLong",
+   "json": "7",
+   "expected": "7"
+  },
+  {
+   "id": "unsignedLong-past-max",
+   "field": "unsignedLong",
+   "json": "\"18446744073709551616\"",
+   "expectError": true
+  },
+  {
+   "id": "unsignedLong-negative",
+   "field": "unsignedLong",
+   "json": "\"-1\"",
+   "expectError": true
+  },
+  {
+   "id": "decimal-string",
+   "field": "decimal",
+   "json": "\"-7.001\"",
+   "expected": "-7.001"
+  },
+  {
+   "id": "decimal-string-trailing-zero",
+   "field": "decimal",
+   "json": "\"1.50\"",
+   "expected": "1.5"
+  },
+  {
+   "id": "decimal-string-thirty-digits",
+   "field": "decimal",
+   "json": "\"12345678901234567890.1234567890\"",
+   "expected": "12345678901234567890.123456789"
+  },
+  {
+   "id": "decimal-string-whole",
+   "field": "decimal",
+   "json": "\"5\"",
+   "expected": "5"
+  },
+  {
+   "id": "decimal-number",
+   "field": "decimal",
+   "json": "1.5",
+   "expectError": true
+  },
+  {
+   "id": "decimal-number-whole",
+   "field": "decimal",
+   "json": "2",
+   "expectError": true
+  },
+  {
+   "id": "decimal-string-exponent",
+   "field": "decimal",
+   "json": "\"1e3\"",
+   "expectError": true
+  },
+  {
+   "id": "decimal-string-not-a-lexical",
+   "field": "decimal",
+   "json": "\"abc\"",
+   "expectError": true
+  },
+  {
+   "id": "int-max",
+   "field": "int",
+   "json": "2147483647",
+   "expected": "2147483647"
+  },
+  {
+   "id": "int-min",
+   "field": "int",
+   "json": "-2147483648",
+   "expected": "-2147483648"
+  },
+  {
+   "id": "int-past-max",
+   "field": "int",
+   "json": "2147483648",
+   "expectError": true
+  },
+  {
+   "id": "int-string",
+   "field": "int",
+   "json": "\"5\"",
+   "expectError": true
+  },
+  {
+   "id": "int-fraction",
+   "field": "int",
+   "json": "1.5",
+   "expectError": true
+  },
+  {
+   "id": "short-min",
+   "field": "short",
+   "json": "-32768",
+   "expected": "-32768"
+  },
+  {
+   "id": "short-past-max",
+   "field": "short",
+   "json": "32768",
+   "expectError": true
+  },
+  {
+   "id": "byte-max",
+   "field": "byte",
+   "json": "127",
+   "expected": "127"
+  },
+  {
+   "id": "byte-past-max",
+   "field": "byte",
+   "json": "128",
+   "expectError": true
+  },
+  {
+   "id": "unsignedInt-max",
+   "field": "unsignedInt",
+   "json": "4294967295",
+   "expected": "4294967295"
+  },
+  {
+   "id": "unsignedInt-negative",
+   "field": "unsignedInt",
+   "json": "-1",
+   "expectError": true
+  },
+  {
+   "id": "unsignedShort-past-max",
+   "field": "unsignedShort",
+   "json": "65536",
+   "expectError": true
+  },
+  {
+   "id": "unsignedByte-max",
+   "field": "unsignedByte",
+   "json": "255",
+   "expected": "255"
+  },
+  {
+   "id": "unsignedByte-past-max",
+   "field": "unsignedByte",
+   "json": "256",
+   "expectError": true
+  },
+  {
+   "id": "list-of-integer",
+   "field": "counts",
+   "json": "[\"9007199254740993\", 5]",
+   "expected": [
+    "9007199254740993",
+    "5"
+   ]
+  },
+  {
+   "id": "list-of-integer-with-unsafe-number",
+   "field": "counts",
+   "json": "[1, 9007199254740993]",
+   "expectError": true
+  },
+  {
+   "id": "embedded-decimal",
+   "field": "amount",
+   "json": "{\"value\": \"1.50\"}",
+   "expected": {
+    "value": "1.5"
+   }
+  },
+  {
+   "id": "embedded-decimal-number",
+   "field": "amount",
+   "json": "{\"value\": 1.5}",
+   "expectError": true
+  }
+ ],
+ "writeCases": [
+  {
+   "id": "integer-past-2^53",
+   "field": "integer",
+   "value": "9007199254740993",
+   "json": "\"9007199254740993\""
+  },
+  {
+   "id": "integer-small",
+   "field": "integer",
+   "value": "42",
+   "json": "\"42\""
+  },
+  {
+   "id": "integer-thirty-digits",
+   "field": "integer",
+   "value": "-123456789012345678901234567890",
+   "json": "\"-123456789012345678901234567890\""
+  },
+  {
+   "id": "nonNegativeInteger-negative",
+   "field": "nonNegativeInteger",
+   "value": "-1",
+   "expectError": true
+  },
+  {
+   "id": "positiveInteger-zero",
+   "field": "positiveInteger",
+   "value": "0",
+   "expectError": true
+  },
+  {
+   "id": "long-min",
+   "field": "long",
+   "value": "-9223372036854775808",
+   "json": "\"-9223372036854775808\""
+  },
+  {
+   "id": "long-past-max",
+   "field": "long",
+   "value": "9223372036854775808",
+   "expectError": true
+  },
+  {
+   "id": "unsignedLong-max",
+   "field": "unsignedLong",
+   "value": "18446744073709551615",
+   "json": "\"18446744073709551615\""
+  },
+  {
+   "id": "unsignedLong-negative",
+   "field": "unsignedLong",
+   "value": "-1",
+   "expectError": true
+  },
+  {
+   "id": "decimal",
+   "field": "decimal",
+   "value": "-7.001",
+   "json": "\"-7.001\""
+  },
+  {
+   "id": "decimal-thirty-digits",
+   "field": "decimal",
+   "value": "12345678901234567890.123456789",
+   "json": "\"12345678901234567890.123456789\""
+  },
+  {
+   "id": "int",
+   "field": "int",
+   "value": "42",
+   "json": "42"
+  },
+  {
+   "id": "int-past-max",
+   "field": "int",
+   "value": "2147483648",
+   "expectError": true
+  },
+  {
+   "id": "byte-min",
+   "field": "byte",
+   "value": "-128",
+   "json": "-128"
+  },
+  {
+   "id": "unsignedShort-past-max",
+   "field": "unsignedShort",
+   "value": "65536",
+   "expectError": true
+  },
+  {
+   "id": "list-of-integer",
+   "field": "counts",
+   "value": [
+    "1",
+    "9007199254740993"
+   ],
+   "json": "[\"1\", \"9007199254740993\"]"
+  },
+  {
+   "id": "embedded-decimal",
+   "field": "amount",
+   "value": {
+    "value": "1.5"
+   },
+   "json": "{\"value\": \"1.5\"}"
+  }
+ ]
+}

@@ -5,7 +5,9 @@
 //! through [`to_node`] — native serde, no reflection, one contract with the
 //! dictionary path.
 
-use crate::{deserialize, CodecError, Node};
+#[allow(deprecated)]
+use crate::deserialize;
+use crate::{CodecError, Node};
 use serde::de::DeserializeOwned;
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize};
@@ -212,6 +214,7 @@ impl<'de, T: DeserializeOwned> Deserialize<'de> for Ref<T> {
 /// (envelope-as-data + [`Ref<T>`] values), and the wire form maps onto the
 /// node contract through the SAME split [`deserialize`] defines — one
 /// contract, not two.
+#[allow(deprecated)]
 pub fn to_node<T: Serialize>(typed: &T, schema: &Json) -> Result<Node, CodecError> {
     let wire = serde_json::to_value(typed)
         .map_err(|e| CodecError::Malformed(format!("typed value failed to serialize: {}", e)))?;

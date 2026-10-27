@@ -20,8 +20,10 @@ A node is a `Map<String, Object>`: the `$`-envelope (`$type`, `$id`, optional
 Codec.buildPackage(nodes, schema, pkg);   // -> CanonicalForm.Package
 Codec.canonicalForm(nodes, schema, pkg);  // the {subjects:[...]} JSON
 Codec.contentHash(nodes, schema, pkg);    // "sha256:..." — matches `kanonak hash`
-Codec.serialize(node);                    // node -> normalized-JSON wire Map
-Codec.deserialize(json, schema);          // normalized-JSON Map -> node
+Codec.serializeExact(node, schema);       // node -> normalized-JSON wire Map, numbers in their JSON forms
+Codec.deserializeExact(json, schema);     // normalized-JSON Map -> node, numbers exact
+Codec.serialize(node);                    // deprecated: serializeExact
+Codec.deserialize(json, schema);          // deprecated: deserializeExact
 Codec.typeMatches(node, classUri, schema); // a generated type guard (also takes a KanonakNode)
 Codec.enumMember(schema, ref);            // -> EnumMemberMatch(enumType, uri, member), or null
 ```
@@ -29,6 +31,13 @@ Codec.enumMember(schema, ref);            // -> EnumMemberMatch(enumType, uri, m
 `Codec.buildPackage` synthesizes the `rdf:type` triple for each node and the
 package-wrapper subject (`<publisher>/<packageName>@<version>/<packageName>`,
 with the optional package label and the `Package` type triple).
+
+`serializeExact` and `deserializeExact` (2.2.0) carry each integer and decimal
+value in its JSON form (kanonak-protocol 4.11.0's `numbers-in-json`,
+runtime#54), through lists and embedded values. `deserializeExact` gives
+`integer` and its four sign-restricted forms as a `BigInteger`, `long` as a
+`Long`, `unsignedLong` as a `BigInteger`, `decimal` as a `BigDecimal`, and `int`
+and narrower as a `Long`. A JSON number past ±(2^53 − 1) for a wide integer, a number for a decimal, a string for a narrow integer, or a value outside its datatype's range is refused, ending `[json-number-form]`, as `codec-vectors-json-numbers.json` pins in every port.
 
 `serialize` projects the modeled fields (dropping nulls) and spreads `$extra`
 entries as sibling fields **after** them (a modeled field wins a name collision;

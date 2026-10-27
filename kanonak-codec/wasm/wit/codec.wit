@@ -1,4 +1,4 @@
-package kanonak:codec@2.1.0;
+package kanonak:codec@2.2.0;
 
 /// The Kanonak codec runtime over a thin JSON-string ABI — the same four
 /// functions every native port exposes, so a Wasm host or component shares the

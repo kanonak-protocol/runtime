@@ -19,7 +19,15 @@ TypeScript references **`@kanonak-protocol/canonical`** — its only dependency.
   and the package-wrapper subject.
 - **`packageCanonicalForm(nodes, schema, pkg)`** — the canonical form itself
   (the `{subjects:[…]}` JSON), for inspection/debugging.
-- **`serialize(node)` / `deserialize(json, schema)`** — the normalized-JSON wire
+- **`serializeExact(node, schema)` / `deserializeExact(json, schema)`** (2.2.0) —
+  the normalized-JSON wire form, with each integer and decimal value in its JSON
+  form (kanonak-protocol 4.11.0's `numbers-in-json`, runtime#54), through lists
+  and embedded values. `deserializeExact` gives a wide integer (`integer`, its
+  four sign-restricted forms, `long`, `unsignedLong`) as a `bigint`, a `decimal`
+  as a string of its canonical digits, and `int` and narrower as a `number`;
+  `serializeExact` writes a wide integer and a decimal as a string of their
+  canonical digits, and a narrow integer as a number. A JSON number past ±(2^53 − 1) for a wide integer, a number for a decimal, a string for a narrow integer, or a value outside its datatype's range is refused, ending `[json-number-form]`, as `codec-vectors-json-numbers.json` pins in every port.
+- **`serialize(node)` / `deserialize(json, schema)`**, deprecated for the two above — the normalized-JSON wire
   form. Open-world assertions outside the type-model round-trip losslessly
   through `$extra` (top-level wire fields, collected under `$extra` on the typed
   node — `[JsonExtensionData]` semantics).

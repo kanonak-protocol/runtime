@@ -8,6 +8,8 @@
 import { readFileSync } from 'node:fs';
 import {
   deserialize,
+  deserializeExact,
+  serializeExact,
   typeMatches,
   enumMember,
   embed,
@@ -474,6 +476,60 @@ console.log(`typed surface: ${typedPass}/${typedTotal} pass`);
   if (safe === packageContentHash([account({ seats: '42' })], schema, pkg)) pass++;
   else { totalFails++; console.error('unsafe-number safe integer: a number and its string hash differently'); }
   console.log(`unsafe numbers (TypeScript only): ${pass}/4 pass`);
+}
+
+// The JSON forms of integer and decimal values (runtime#54): serializeExact and deserializeExact against the shared vectors.
+{
+  const relative = 'codec-vectors-json-numbers.json';
+  const d: any = JSON.parse(readFileSync(new URL(`../../vectors/${relative}`, import.meta.url), 'utf8'));
+  const schema: CodecSchema = d.schema;
+  const decimalFields = new Set(['decimal']);
+  const narrowFields = new Set(['int', 'short', 'byte', 'unsignedInt', 'unsignedShort', 'unsignedByte']);
+  // This port's exact type for a value, from its canonical lexical form: a bigint, a decimal's digits, or a number.
+  const exact = (field: string, lexical: unknown): unknown => {
+    if (Array.isArray(lexical)) return lexical.map((item) => exact(field, item));
+    const text = lexical as string;
+    return decimalFields.has(field) ? text : narrowFields.has(field) ? Number(text) : BigInt(text);
+  };
+  // A value read back as its canonical lexical form, item by item and field by field.
+  const lexicalOf = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(lexicalOf);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, lexicalOf(v)]));
+    }
+    return String(value);
+  };
+  let pass = 0;
+  for (const c of d.readCases) {
+    const json = JSON.parse(`{"$type": ${JSON.stringify(d.class)}, ${JSON.stringify(c.field)}: ${c.json}}`);
+    let got: unknown;
+    try {
+      got = lexicalOf((deserializeExact(json, schema) as Record<string, unknown>)[c.field]);
+    } catch (e) {
+      if (c.expectError && (e as Error).message.endsWith('[json-number-form]')) pass++;
+      else { totalFails++; console.error(`${relative} read ${c.id}: threw ${(e as Error).message}`); }
+      continue;
+    }
+    if (c.expectError) { totalFails++; console.error(`${relative} read ${c.id}: expected a refusal, got ${JSON.stringify(got)}`); continue; }
+    if (JSON.stringify(got) === JSON.stringify(c.expected)) pass++;
+    else { totalFails++; console.error(`${relative} read ${c.id}: expected ${JSON.stringify(c.expected)}, got ${JSON.stringify(got)}`); }
+  }
+  for (const c of d.writeCases) {
+    // An embedded Amount's one field is a decimal, which this port holds as its digits.
+    const value = c.field === 'amount' ? { value: c.value.value } : exact(c.field, c.value);
+    let got: unknown;
+    try {
+      got = serializeExact({ $type: d.class, [c.field]: value } as CodecNode, schema)[c.field];
+    } catch (e) {
+      if (c.expectError && (e as Error).message.endsWith('[json-number-form]')) pass++;
+      else { totalFails++; console.error(`${relative} write ${c.id}: threw ${(e as Error).message}`); }
+      continue;
+    }
+    if (c.expectError) { totalFails++; console.error(`${relative} write ${c.id}: expected a refusal, got ${JSON.stringify(got)}`); continue; }
+    if (JSON.stringify(got) === JSON.stringify(JSON.parse(c.json))) pass++;
+    else { totalFails++; console.error(`${relative} write ${c.id}: expected ${c.json}, got ${JSON.stringify(got)}`); }
+  }
+  console.log(`${relative}: ${pass}/${d.readCases.length + d.writeCases.length} pass`);
 }
 
 if (totalFails > 0) { console.error(`\n${totalFails} FAILURES`); process.exit(1); }

@@ -552,3 +552,79 @@ final class TypedSurfaceTests: XCTestCase {
         XCTAssertEqual(decodedEmb.value?.kanonakNode.name, "cust")
     }
 }
+
+/// The JSON forms of integer and decimal values (runtime#54): serializeExact
+/// and deserializeExact against the shared vectors.
+final class JSONNumberVectorTests: XCTestCase {
+    private static let narrowFields: Set<String> = ["int", "short", "byte", "unsignedInt", "unsignedShort", "unsignedByte"]
+
+    /// A value read back as its canonical lexical form, item by item and field by field.
+    private func lexicalOf(_ value: Any) -> Any {
+        switch value {
+        case let items as [Any]: return items.map(lexicalOf)
+        case let map as [String: Any]: return map.mapValues(lexicalOf)
+        case let n as Int64: return String(n)
+        case let n as UInt64: return String(n)
+        case let n as JSONNumber: return n.token
+        default: return value
+        }
+    }
+
+    /// This port's type for a value, from its canonical lexical form, or the
+    /// lexical form itself where the value doesn't fit the type.
+    private func exactValue(_ field: String, _ lexical: Any) -> Any {
+        if let items = lexical as? [Any] { return items.map { exactValue(field, $0) } }
+        if let map = lexical as? [String: Any] { return map }
+        let text = lexical as! String
+        if field == "long" { return Int64(text) ?? text }
+        if field == "unsignedLong" { return UInt64(text) ?? text }
+        if Self.narrowFields.contains(field) { return Int64(text) ?? text }
+        return text
+    }
+
+    private func expectRefusal(_ id: String, _ body: () throws -> Any) {
+        XCTAssertThrowsError(try body(), "[\(id)] expected a refusal") { error in
+            XCTAssertTrue("\(error)".hasSuffix("[json-number-form]"), "[\(id)] refused for another reason: \(error)")
+        }
+    }
+
+    func testJSONNumberVectors() throws {
+        let data = try Data(contentsOf: vectorsURL("codec-vectors-json-numbers.json"))
+        guard let doc = try parseJSON(data) as? [String: Any],
+              let schemaDict = doc["schema"] as? [String: Any],
+              let cls = doc["class"] as? String,
+              let reads = doc["readCases"] as? [[String: Any]],
+              let writes = doc["writeCases"] as? [[String: Any]] else {
+            throw CodecError("vectors codec-vectors-json-numbers.json: unexpected shape")
+        }
+        let schema = try CodecSchema.fromJSON(try writeJSON(schemaDict))
+        XCTAssertFalse(reads.isEmpty)
+        XCTAssertFalse(writes.isEmpty)
+
+        for c in reads {
+            let id = c["id"] as! String
+            let field = c["field"] as! String
+            let text = "{\"$type\": \(try writeJSON(cls)), \(try writeJSON(field)): \(c["json"] as! String)}"
+            let node = try parseJSON(text) as! [String: Any]
+            if c["expectError"] as? Bool == true {
+                expectRefusal(id) { try deserializeExact(node, schema: schema) }
+                continue
+            }
+            let got = try deserializeExact(node, schema: schema)
+            XCTAssertTrue(jsonEqual(lexicalOf(got[field]!), c["expected"]!), "[\(id)] got \(got[field]!)")
+        }
+
+        for c in writes {
+            let id = c["id"] as! String
+            let field = c["field"] as! String
+            let node: [String: Any] = ["$type": cls, field: exactValue(field, c["value"]!)]
+            if c["expectError"] as? Bool == true {
+                expectRefusal(id) { try serializeExact(node, schema: schema) }
+                continue
+            }
+            let got = try serializeExact(node, schema: schema)
+            let expected = try parseJSON(c["json"] as! String)
+            XCTAssertTrue(jsonEqual(got[field]!, expected), "[\(id)] got \(got[field]!)")
+        }
+    }
+}

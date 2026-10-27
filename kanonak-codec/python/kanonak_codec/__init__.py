@@ -29,13 +29,22 @@ written one (``is_readable_by`` from ``kanonak-canonical``). Hashing stays
 exact-version only. Every rejection message ends in a bracketed kind:
 ``[unknown-type]``, ``[newer-version]``, ``[other-major]``,
 ``[other-minor-line]``, ``[hash-needs-exact-version]``.
+
+``serialize_exact`` and ``deserialize_exact`` (runtime#54) write and read each
+integer and decimal value in its JSON form, as kanonak-protocol 4.11.0's
+``numbers-in-json`` gives it, refusing what JSON may already have rounded
+(``[json-number-form]``). They replace ``serialize`` and ``deserialize``, which
+are deprecated.
 """
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from decimal import Decimal
+from enum import Enum
+from typing import Any, Callable, Dict, List, Optional
 
 from kanonak_canonical import (
     Coordinate,
@@ -48,10 +57,13 @@ from kanonak_canonical import (
     Statement,
     Subject,
     TypedScalar,
+    canonical_decimal,
     canonical_form as _canonical_form,
     canonical_hash as _canonical_hash,
+    canonical_integer,
     carrier_of,
     is_readable_by,
+    lenient_versionless_key,
     parse_coordinate,
 )
 
@@ -63,10 +75,12 @@ __all__ = [
     "canonical_form",
     "content_hash",
     "deserialize",
+    "deserialize_exact",
     "embed",
     "enum_member",
     "ref",
     "serialize",
+    "serialize_exact",
     "to_node",
     "type_matches",
 ]
@@ -513,9 +527,22 @@ def content_hash(nodes: List[Dict[str, Any]], schema: Dict[str, Any], pkg: Dict[
 
 
 def serialize(node: Dict[str, Any]) -> Dict[str, Any]:
-    """Serialize a typed node to its normalized-JSON wire form. ``$extra`` entries
+    """Deprecated: use ``serialize_exact``, which writes integer and decimal
+    values in their JSON forms (runtime#54).
+
+    Serialize a typed node to its normalized-JSON wire form. ``$extra`` entries
     ride as sibling fields after the modeled ones; a modeled field wins a name
     collision (``[JsonExtensionData]`` semantics)."""
+    warnings.warn(
+        "serialize is deprecated: use serialize_exact, which writes integer and "
+        "decimal values in their JSON forms (runtime#54)",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _serialize(node)
+
+
+def _serialize(node: Dict[str, Any]) -> Dict[str, Any]:
     # Producer-side $types validation, at every depth — fail closest to the bug.
     _assert_types_envelopes(node, f"serialize {node.get('$id') or node.get('$type') or '(node)'}")
     _assert_reference_values(node, f"serialize {node.get('$id') or node.get('$type') or '(node)'}")
@@ -533,7 +560,10 @@ def serialize(node: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def deserialize(json_obj: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
-    """Parse normalized JSON into a typed node. ``$``-envelope keys and fields
+    """Deprecated: use ``deserialize_exact``, which reads integer and decimal
+    values exactly (runtime#54).
+
+    Parse normalized JSON into a typed node. ``$``-envelope keys and fields
     modeled on the node's ``$type`` stay top-level; every other key is collected
     into ``$extra`` so a strongly-typed consumer round-trips it losslessly.
 
@@ -541,6 +571,16 @@ def deserialize(json_obj: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, A
     the same class at a compatible later version (runtime#28 — see
     ``_class_for``). The node keeps the ``$type`` it was WRITTEN with; the
     producer's bytes are the producer's."""
+    warnings.warn(
+        "deserialize is deprecated: use deserialize_exact, which reads integer "
+        "and decimal values exactly (runtime#54)",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _deserialize(json_obj, schema)
+
+
+def _deserialize(json_obj: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
     type_uri = json_obj.get("$type")
     if not isinstance(type_uri, str):
         raise ValueError("Cannot deserialize: missing string $type")
@@ -591,7 +631,7 @@ def to_node(typed: Any, schema: Dict[str, Any]) -> Dict[str, Any]:
     wire form (envelope-as-data + ``ref``/``embed`` values), and the wire form
     maps onto the node contract through the SAME split ``deserialize`` defines
     — the typed path and the dictionary path are one contract, not two."""
-    return deserialize(_wire_dict(typed), schema)
+    return _deserialize(_wire_dict(typed), schema)
 
 
 def ref(target: Any) -> Dict[str, Any]:
@@ -626,3 +666,240 @@ def embed(value: Any, name: Optional[str] = None) -> Dict[str, Any]:
     if name is not None:
         wire["$name"] = name
     return wire
+
+
+# ---------------------------------------------------------------------------
+# The JSON forms of integer and decimal values (kanonak-protocol 4.11.0's
+# ``numbers-in-json``, runtime#54). A JSON number can't carry every integer or
+# decimal exactly in every language, so a wide integer and a decimal travel as
+# a string of their digits, and a reader refuses a number that may already have
+# been rounded.
+# ---------------------------------------------------------------------------
+
+_XSD = "kanonak.org/core-xsd"
+
+# Past it a double can't tell a whole number from its neighbour: 2^53 + 1 reads as 2^53.
+_MAX_SAFE_INTEGER = 2**53 - 1
+
+
+class _Form(Enum):
+    WIDE = "wide"
+    DECIMAL = "decimal"
+    NARROW = "narrow"
+
+
+@dataclass(frozen=True)
+class _JsonNumberForm:
+    """How JSON carries a datatype's values: a wide integer as a string, read
+    from a string or a whole number within ±(2^53 − 1); a decimal as a string
+    only; a narrow integer as a number only. Each inside its datatype's range."""
+
+    form: _Form
+    minimum: Optional[int] = None
+    maximum: Optional[int] = None
+
+
+_JSON_NUMBER_FORMS: Dict[str, _JsonNumberForm] = {
+    f"{_XSD}/integer": _JsonNumberForm(_Form.WIDE),
+    f"{_XSD}/nonNegativeInteger": _JsonNumberForm(_Form.WIDE, minimum=0),
+    f"{_XSD}/positiveInteger": _JsonNumberForm(_Form.WIDE, minimum=1),
+    f"{_XSD}/nonPositiveInteger": _JsonNumberForm(_Form.WIDE, maximum=0),
+    f"{_XSD}/negativeInteger": _JsonNumberForm(_Form.WIDE, maximum=-1),
+    f"{_XSD}/long": _JsonNumberForm(_Form.WIDE, -(2**63), 2**63 - 1),
+    f"{_XSD}/unsignedLong": _JsonNumberForm(_Form.WIDE, 0, 2**64 - 1),
+    f"{_XSD}/decimal": _JsonNumberForm(_Form.DECIMAL),
+    f"{_XSD}/int": _JsonNumberForm(_Form.NARROW, -(2**31), 2**31 - 1),
+    f"{_XSD}/short": _JsonNumberForm(_Form.NARROW, -(2**15), 2**15 - 1),
+    f"{_XSD}/byte": _JsonNumberForm(_Form.NARROW, -(2**7), 2**7 - 1),
+    f"{_XSD}/unsignedInt": _JsonNumberForm(_Form.NARROW, 0, 2**32 - 1),
+    f"{_XSD}/unsignedShort": _JsonNumberForm(_Form.NARROW, 0, 2**16 - 1),
+    f"{_XSD}/unsignedByte": _JsonNumberForm(_Form.NARROW, 0, 2**8 - 1),
+}
+
+_NumberConversion = Callable[[Dict[str, Any], _JsonNumberForm, Any], Any]
+
+
+def _json_number_error(prop: Dict[str, Any], why: str) -> ValueError:
+    return ValueError(f"{prop['predicate']}: {why} [json-number-form]")
+
+
+def _describe_json(value: Any) -> str:
+    if isinstance(value, str):
+        return f"the string {value!r}"
+    return f"{type(value).__name__} {value!r}"
+
+
+def _in_range(prop: Dict[str, Any], form: _JsonNumberForm, n: int) -> int:
+    if (form.minimum is not None and n < form.minimum) or (form.maximum is not None and n > form.maximum):
+        raise _json_number_error(prop, f"{n} is outside {prop['datatype']}'s range")
+    return n
+
+
+def _integer_of_lexical(prop: Dict[str, Any], lexical: str) -> int:
+    try:
+        canonical = canonical_integer(lexical)
+    except ValueError:
+        raise _json_number_error(prop, f"{lexical!r} is not an integer lexical form") from None
+    return int(canonical)
+
+
+def _decimal_of_lexical(prop: Dict[str, Any], lexical: str) -> str:
+    try:
+        return canonical_decimal(lexical)
+    except ValueError:
+        raise _json_number_error(prop, f"{lexical!r} is not a decimal lexical form") from None
+
+
+def _whole_number(value: Any) -> Optional[int]:
+    """An ``int``, or a ``float`` holding a whole number, as an ``int``; None for
+    anything else. A ``bool`` is an ``int`` in Python, and never a number here."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
+
+
+def _safe_integer(value: Any) -> Optional[int]:
+    """A whole number within ±(2^53 − 1), which no JSON reader can have rounded;
+    None for anything else, however exactly Python's own reader held it."""
+    n = _whole_number(value)
+    return n if n is not None and abs(n) <= _MAX_SAFE_INTEGER else None
+
+
+def _read_json_number(prop: Dict[str, Any], form: _JsonNumberForm, value: Any) -> Any:
+    """A value as JSON carries it, to its exact type here: an integer an ``int``,
+    a decimal a ``Decimal`` of its canonical digits."""
+    if form.form is _Form.DECIMAL:
+        if not isinstance(value, str):
+            raise _json_number_error(
+                prop,
+                "a decimal is read from a JSON string only, so it can't have been rounded; "
+                f"got {_describe_json(value)}",
+            )
+        return Decimal(_decimal_of_lexical(prop, value))
+    if form.form is _Form.WIDE:
+        n = _integer_of_lexical(prop, value) if isinstance(value, str) else _safe_integer(value)
+        if n is None:
+            raise _json_number_error(
+                prop,
+                "a wide integer is read from a string, or from a whole JSON number within "
+                f"±(2^53 − 1); got {_describe_json(value)}",
+            )
+        return _in_range(prop, form, n)
+    n = _whole_number(value)
+    if n is None:
+        raise _json_number_error(
+            prop, f"a narrow integer is read from a whole JSON number only; got {_describe_json(value)}"
+        )
+    return _in_range(prop, form, n)
+
+
+def _write_json_number(prop: Dict[str, Any], form: _JsonNumberForm, value: Any) -> Any:
+    """A value of its exact type here, to its JSON form: a wide integer and a
+    decimal as a string of canonical digits, a narrow integer as an ``int``."""
+    if form.form is _Form.DECIMAL:
+        if isinstance(value, Decimal):
+            return _decimal_of_lexical(prop, format(value, "f"))
+        if isinstance(value, str):
+            return _decimal_of_lexical(prop, value)
+        raise _json_number_error(
+            prop,
+            "pass a decimal as a decimal.Decimal or a string of its digits, which hold it exactly; "
+            f"got {_describe_json(value)}",
+        )
+    if form.form is _Form.WIDE:
+        if isinstance(value, str):
+            n = _integer_of_lexical(prop, value)
+        elif isinstance(value, float):
+            n = _safe_integer(value)
+        else:
+            n = _whole_number(value)
+        if n is None:
+            raise _json_number_error(
+                prop,
+                "pass a wide integer as an int, a string, or a whole float within ±(2^53 − 1); "
+                f"got {_describe_json(value)}",
+            )
+        return str(_in_range(prop, form, n))
+    n = _whole_number(value)
+    if n is None:
+        raise _json_number_error(prop, f"pass a narrow integer as a whole number; got {_describe_json(value)}")
+    return _in_range(prop, form, n)
+
+
+def _json_number_form_of(prop: Dict[str, Any]) -> Optional[_JsonNumberForm]:
+    datatype = prop.get("datatype")
+    if not isinstance(datatype, str):
+        return None
+    key = lenient_versionless_key(datatype)
+    return None if key is None else _JSON_NUMBER_FORMS.get(key)
+
+
+def _class_or_raise(schema: Dict[str, Any], type_uri: Any, what: str) -> Dict[str, Any]:
+    try:
+        return _class_for(schema, type_uri)
+    except _Unreadable as err:
+        raise ValueError(f"Cannot convert {what}: {err}") from None
+
+
+def _convert_fields(
+    fields: Dict[str, Any], cls: Dict[str, Any], schema: Dict[str, Any], convert: _NumberConversion
+) -> Dict[str, Any]:
+    """Each modeled field's value, through lists and embedded values, with its
+    integers and decimals converted. ``$extra``, the envelope and references
+    are left as they are."""
+    out = dict(fields)
+    for name, prop in cls["props"].items():
+        value = out.get(name)
+        if value is not None:
+            out[name] = _convert_value(prop, value, schema, convert)
+    return out
+
+
+def _convert_value(prop: Dict[str, Any], value: Any, schema: Dict[str, Any], convert: _NumberConversion) -> Any:
+    if isinstance(value, list):
+        return [_convert_value(prop, item, schema, convert) for item in value]
+    if prop["kind"] == "object":
+        if not isinstance(value, dict) or "$ref" in value:
+            return value
+        cls_uri = value["$type"] if isinstance(value.get("$type"), str) else prop.get("range")
+        if cls_uri is None:
+            raise ValueError(
+                f"Cannot convert the embedded value under {prop['predicate']}: it carries "
+                "no $type and the property declares no range."
+            )
+        cls = _class_or_raise(schema, cls_uri, f"the embedded value under {prop['predicate']}")
+        return _convert_fields(value, cls, schema, convert)
+    form = _json_number_form_of(prop)
+    return value if form is None else convert(prop, form, value)
+
+
+def serialize_exact(node: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Serialize a typed node to its normalized-JSON wire form, as ``serialize``
+    does, writing each integer and decimal value in its JSON form
+    (``numbers-in-json``, runtime#54): a wide integer (an ``int``, a lexical
+    ``str``, or a whole ``float`` within ±(2^53 − 1)) and a decimal (a
+    ``Decimal`` or a lexical ``str``) as a string of canonical digits, a narrow
+    integer as an ``int``. Anything else, or a value outside its datatype's
+    range, is refused with a ``ValueError`` ending ``[json-number-form]``."""
+    type_uri = node.get("$type")
+    if not isinstance(type_uri, str):
+        raise ValueError("Cannot serialize: missing string $type")
+    cls = _class_or_raise(schema, type_uri, f"node {node.get('$id') or type_uri}")
+    return _serialize(_convert_fields(node, cls, schema, _write_json_number))
+
+
+def deserialize_exact(json_obj: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse normalized JSON into a typed node, as ``deserialize`` does, reading
+    each integer and decimal value exactly (``numbers-in-json``, runtime#54): a
+    wide integer to an ``int``, from a string or a whole number within
+    ±(2^53 − 1); a decimal to a ``Decimal``, from a string only; a narrow integer
+    to an ``int``, from a whole number only. A value JSON may already have
+    rounded, or one outside its datatype's range, is refused with a
+    ``ValueError`` ending ``[json-number-form]``."""
+    node = _deserialize(json_obj, schema)
+    cls = _class_or_raise(schema, node["$type"], f"node {node.get('$id') or node['$type']}")
+    return _convert_fields(node, cls, schema, _read_json_number)

@@ -31,7 +31,7 @@ namespace Kanonak.Codec
                 var json = (Dictionary<string, object>)FromElement(doc.RootElement);
                 // The wire form carries open-world extras as sibling fields;
                 // Deserialize splits them back under $extra per the node contract.
-                return Codec.Deserialize(json, schema);
+                return Codec.DeserializeWire(json, schema);
             }
         }
 

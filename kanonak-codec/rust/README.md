@@ -15,15 +15,15 @@ local-name fields. A generated typed model serializes to one.
 
 ```rust
 use kanonak_codec::{
-    build_package, canonical_form, content_hash, deserialize, enum_member, serialize,
+    build_package, canonical_form, content_hash, deserialize_exact, enum_member, serialize_exact,
     type_matches, Node,
 };
 
 // nodes: &[Node], schema/pkg: &serde_json::Value
 let hash = content_hash(&nodes, &schema, &pkg)?;   // "sha256:..."
 let form = canonical_form(&nodes, &schema, &pkg)?; // {"subjects":[...]}
-let wire = serialize(&node)?;                       // normalized-JSON Node
-let node = deserialize(&wire, &schema)?;            // typed Node (unmodeled -> $extra)
+let wire = serialize_exact(&node, &schema)?;        // normalized-JSON Node, numbers in their JSON forms
+let node = deserialize_exact(&wire, &schema)?;      // typed Node (unmodeled -> $extra)
 let is_app = type_matches(&node, "example.com/vocab@5.1.0/Application", &schema)?; // bool
 let member = enum_member(&schema, "example.com/vocab@5.0.0/north");                // Option<EnumMemberMatch>
 ```
@@ -31,6 +31,11 @@ let member = enum_member(&schema, "example.com/vocab@5.0.0/north");             
 - `build_package` — the canonical input model (subject per node + synthesized
   package-wrapper subject). The seam every other entrypoint shares.
 - `content_hash` / `canonical_form` — delegate to `kanonak-canonical`.
+- `serialize_exact` / `deserialize_exact` (2.2.0) — `serialize` and `deserialize`, with each integer
+  and decimal value in its JSON form (kanonak-protocol 4.11.0's `numbers-in-json`, runtime#54), through
+  lists and embedded values. In the node, `integer`, its four sign-restricted forms and `decimal` are a
+  string of their canonical digits, since a `serde_json::Value` holds no integer past 64 bits; `long`,
+  `unsignedLong` and `int` and narrower are numbers. A JSON number past ±(2^53 − 1) for a wide integer, a number for a decimal, a string for a narrow integer, or a value outside its datatype's range is refused, ending `[json-number-form]`, as `codec-vectors-json-numbers.json` pins in every port. The two below are deprecated for them.
 - `serialize` — modeled fields (nulls dropped) then `$extra` spread as siblings
   (modeled wins a collision; no `$extra` key on the wire).
 - `deserialize` — `$`-keys and `$type`-modeled fields stay top-level; everything

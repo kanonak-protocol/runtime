@@ -7,9 +7,11 @@
  * The per-carrier lexical functions and the `canonicalScalarLexical` dispatch
  * are INTERNAL implementation detail (the spec + golden vectors are the contract
  * a re-implementer follows); they stay exported from `./Datatypes.js` for tests.
+ * The integer and decimal ones are public, as every other port's are, since a
+ * codec reading a value from JSON checks its lexical form with them (runtime#54).
  */
 export { canonicalForm, canonicalHash, CANONICAL_FORM_VERSION } from './CanonicalForm.js';
-export { Carrier, carrierOf } from './Datatypes.js';
+export { Carrier, carrierOf, canonicalInteger, canonicalDecimal } from './Datatypes.js';
 export {
   parseCoordinate,
   parsePackageCoordinate,

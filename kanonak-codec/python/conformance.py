@@ -7,6 +7,8 @@ import json
 import re
 import os
 import sys
+import warnings
+from decimal import Decimal
 
 # Resolve the sibling canonical port + the shared vectors without installing.
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -16,10 +18,12 @@ from kanonak_codec import (  # noqa: E402
     canonical_form,
     content_hash,
     deserialize,
+    deserialize_exact,
     embed,
     enum_member,
     ref,
     serialize,
+    serialize_exact,
     to_node,
     type_matches,
 )
@@ -33,6 +37,7 @@ TYPES_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-types.js
 REFERENCES_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-references.json")
 ENUMS_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-enums.json")
 COMPAT_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-compat.json")
+JSON_NUMBERS_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-json-numbers.json")
 
 
 def _expect_form_and_hash(case, cid, nodes, schema, pkg, passed, failed):
@@ -323,6 +328,121 @@ def run_compat_file(vectors: str) -> "tuple[int, int]":
     return passed, failed
 
 
+def run_json_numbers_file(vectors: str) -> "tuple[int, int]":
+    """The JSON forms of integer and decimal values (runtime#54): serialize_exact
+    and deserialize_exact against the shared vectors. A value read must be this
+    port's exact type for its datatype, a ``Decimal`` for a decimal and an
+    ``int`` for every integer, holding the expected canonical lexical form; a
+    value written must be the expected JSON, an ``int`` or a ``str``."""
+    with io.open(vectors, encoding="utf-8") as fh:
+        data = json.load(fh)
+    schema = data["schema"]
+    props = schema["classes"][data["class"]]["props"]
+    decimal_uri = data["datatypes"]["decimal"]
+    passed = 0
+    failed = 0
+
+    def props_of(prop):
+        return schema["classes"][prop["range"]]["props"]
+
+    def exact(prop, lexical):
+        if isinstance(lexical, list):
+            return [exact(prop, item) for item in lexical]
+        if prop["kind"] == "object":
+            return {k: exact(props_of(prop)[k], v) for k, v in lexical.items()}
+        return Decimal(lexical) if prop["datatype"] == decimal_uri else int(lexical)
+
+    def lexical_of(prop, value):
+        if isinstance(value, list):
+            return [lexical_of(prop, item) for item in value]
+        if prop["kind"] == "object" and isinstance(value, dict):
+            return {k: lexical_of(props_of(prop)[k], v) for k, v in value.items()}
+        want = Decimal if prop.get("datatype") == decimal_uri else int
+        if type(value) is not want:
+            return "<{} {!r}>".format(type(value).__name__, value)
+        return format(value, "f") if want is Decimal else str(value)
+
+    def as_json(value):
+        return json.dumps(value, sort_keys=True, default=lambda v: "<{} {!r}>".format(type(v).__name__, v))
+
+    def refused(err, cid):
+        if str(err).endswith("[json-number-form]"):
+            return True
+        print("FAIL [{}] expected [json-number-form], got: {}".format(cid, err))
+        return False
+
+    for case in data["readCases"]:
+        cid = "read " + case["id"]
+        field = case["field"]
+        obj = json.loads('{{"$type": {}, {}: {}}}'.format(json.dumps(data["class"]), json.dumps(field), case["json"]))
+        try:
+            got = lexical_of(props[field], deserialize_exact(obj, schema)[field])
+        except ValueError as err:
+            ok = bool(case.get("expectError")) and refused(err, cid)
+            if not case.get("expectError"):
+                print("FAIL [{}] threw {}".format(cid, err))
+        else:
+            ok = not case.get("expectError") and got == case["expected"]
+            if not ok:
+                print("FAIL [{}] expected {}, got {}".format(cid, "a refusal" if case.get("expectError") else case["expected"], got))
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+
+    for case in data["writeCases"]:
+        cid = "write " + case["id"]
+        field = case["field"]
+        node = {"$type": data["class"], field: exact(props[field], case["value"])}
+        try:
+            got = serialize_exact(node, schema)[field]
+        except ValueError as err:
+            ok = bool(case.get("expectError")) and refused(err, cid)
+            if not case.get("expectError"):
+                print("FAIL [{}] threw {}".format(cid, err))
+        else:
+            ok = not case.get("expectError") and as_json(got) == as_json(json.loads(case["json"]))
+            if not ok:
+                print("FAIL [{}] expected {}, got {}".format(cid, "a refusal" if case.get("expectError") else case["json"], as_json(got)))
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+
+    print("{}: {} passed, {} failed".format(os.path.basename(vectors), passed, failed))
+    return passed, failed
+
+
+def run_deprecations() -> "tuple[int, int]":
+    """serialize and deserialize warn that they're deprecated (runtime#54), and
+    nothing that replaces them, or builds on them, does."""
+    with io.open(JSON_NUMBERS_VECTOR_FILE, encoding="utf-8") as fh:
+        data = json.load(fh)
+    schema = data["schema"]
+    node = {"$type": data["class"], "int": 1}
+    checks = [
+        ("serialize", True, lambda: serialize(node)),
+        ("deserialize", True, lambda: deserialize(node, schema)),
+        ("serialize_exact", False, lambda: serialize_exact(node, schema)),
+        ("deserialize_exact", False, lambda: deserialize_exact(node, schema)),
+        ("to_node", False, lambda: to_node(node, schema)),
+    ]
+    passed = 0
+    failed = 0
+    for name, deprecated, run in checks:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            run()
+        where = [w.filename for w in caught if issubclass(w.category, DeprecationWarning)]
+        if where == ([__file__] if deprecated else []):
+            passed += 1
+        else:
+            failed += 1
+            print("FAIL [deprecation] {}: expected {}, got DeprecationWarnings at {}".format(
+                name, "one at its caller" if deprecated else "none", where))
+    return passed, failed
+
+
 def run_types_typed() -> "tuple[int, int]":
     """Typed-surface $types cases (0.4.0, runtime#10): the multi-typed set rides
     the wire dict as $types only (no unprefixed accessor) and reproduces the
@@ -481,32 +601,46 @@ def run_typed() -> "tuple[int, int]":
 def main() -> int:
     passed = 0
     failed = 0
-    for vectors in VECTOR_FILES:
-        p, f = run_file(vectors)
+    # These vectors drive serialize and deserialize, deprecated since runtime#54
+    # and still kept to them.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        for vectors in VECTOR_FILES:
+            p, f = run_file(vectors)
+            passed += p
+            failed += f
+
+        p, f = run_types_file(TYPES_VECTOR_FILE)
         passed += p
         failed += f
 
-    p, f = run_types_file(TYPES_VECTOR_FILE)
-    passed += p
-    failed += f
+        p, f = run_types_file(REFERENCES_VECTOR_FILE)
+        passed += p
+        failed += f
 
-    p, f = run_types_file(REFERENCES_VECTOR_FILE)
-    passed += p
-    failed += f
+        p, f = run_enums_file(ENUMS_VECTOR_FILE)
+        passed += p
+        failed += f
 
-    p, f = run_enums_file(ENUMS_VECTOR_FILE)
-    passed += p
-    failed += f
+        p, f = run_compat_file(COMPAT_VECTOR_FILE)
+        passed += p
+        failed += f
 
-    p, f = run_compat_file(COMPAT_VECTOR_FILE)
-    passed += p
-    failed += f
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        p, f = run_typed()
+        passed += p
+        failed += f
 
-    p, f = run_typed()
-    passed += p
-    failed += f
+        p, f = run_types_typed()
+        passed += p
+        failed += f
 
-    p, f = run_types_typed()
+        p, f = run_json_numbers_file(JSON_NUMBERS_VECTOR_FILE)
+        passed += p
+        failed += f
+
+    p, f = run_deprecations()
     passed += p
     failed += f
 
