@@ -14,14 +14,14 @@ namespace Kanonak.Canonical
     /// </summary>
     public static class Datatypes
     {
-        private static readonly Regex IntegerRe = new Regex(@"^[+-]?\d+$", RegexOptions.Compiled);
-        private static readonly Regex DecimalRe = new Regex(@"^([+-]?)(\d*)(?:\.(\d*))?$", RegexOptions.Compiled);
-        private static readonly Regex IeeeRe = new Regex(@"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$", RegexOptions.Compiled);
+        private static readonly Regex IntegerRe = new Regex(@"^[+-]?[0-9]+$", RegexOptions.Compiled);
+        private static readonly Regex DecimalRe = new Regex(@"^([+-]?)([0-9]*)(?:\.([0-9]*))?$", RegexOptions.Compiled);
+        private static readonly Regex IeeeRe = new Regex(@"^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$", RegexOptions.Compiled);
         private static readonly Regex HexRe = new Regex(@"^([0-9A-Fa-f]{2})*$", RegexOptions.Compiled);
         private static readonly Regex Base64Re = new Regex(@"^[A-Za-z0-9+/]*={0,2}$", RegexOptions.Compiled);
-        private static readonly Regex DateTimeRe = new Regex(@"^(-?\d{4,})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$", RegexOptions.Compiled);
-        private static readonly Regex DateRe = new Regex(@"^(-?\d{4,})-(\d{2})-(\d{2})(Z|[+-]\d{2}:\d{2})?$", RegexOptions.Compiled);
-        private static readonly Regex TimeRe = new Regex(@"^(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$", RegexOptions.Compiled);
+        private static readonly Regex DateTimeRe = new Regex(@"^(-?[0-9]{4,})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})?$", RegexOptions.Compiled);
+        private static readonly Regex DateRe = new Regex(@"^(-?[0-9]{4,})-([0-9]{2})-([0-9]{2})(Z|[+-][0-9]{2}:[0-9]{2})?$", RegexOptions.Compiled);
+        private static readonly Regex TimeRe = new Regex(@"^([0-9]{2}):([0-9]{2}):([0-9]{2})(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})?$", RegexOptions.Compiled);
 
         // -- Integer carrier — arbitrary precision (BigInteger). ----------------
 

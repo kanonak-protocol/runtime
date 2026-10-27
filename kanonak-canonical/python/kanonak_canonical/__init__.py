@@ -312,14 +312,14 @@ def carrier_of(datatype_uri: str) -> Optional[Carrier]:
 # Per-carrier canonical lexical forms
 # ===========================================================================
 
-_INTEGER = re.compile(r"^[+-]?\d+$")
-_DECIMAL = re.compile(r"^([+-]?)(\d*)(?:\.(\d*))?$")
-_IEEE = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
+_INTEGER = re.compile(r"^[+-]?[0-9]+$")
+_DECIMAL = re.compile(r"^([+-]?)([0-9]*)(?:\.([0-9]*))?$")
+_IEEE = re.compile(r"^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$")
 _HEX = re.compile(r"^([0-9A-Fa-f]{2})*$")
 _BASE64 = re.compile(r"^[A-Za-z0-9+/]*={0,2}$")
-_DATE_TIME = re.compile(r"^(-?\d{4,})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$")
-_DATE = re.compile(r"^(-?\d{4,})-(\d{2})-(\d{2})(Z|[+-]\d{2}:\d{2})?$")
-_TIME = re.compile(r"^(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$")
+_DATE_TIME = re.compile(r"^(-?[0-9]{4,})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})?$")
+_DATE = re.compile(r"^(-?[0-9]{4,})-([0-9]{2})-([0-9]{2})(Z|[+-][0-9]{2}:[0-9]{2})?$")
+_TIME = re.compile(r"^([0-9]{2}):([0-9]{2}):([0-9]{2})(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})?$")
 
 
 def canonical_integer(raw: str) -> str:

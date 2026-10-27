@@ -77,6 +77,15 @@
     { "id": "time-frac-trimmed", "carrier": "time", "input": "23:30:00.500Z", "expected": "23:30:00.5Z" },
     { "id": "time-frac-all-zeros-dropped", "carrier": "time", "input": "00:00:00.000", "expected": "00:00:00" },
     { "id": "time-24-to-00", "carrier": "time", "input": "24:00:00", "expected": "00:00:00" },
-    { "id": "time-plus-zero-to-z", "carrier": "time", "input": "12:00:00+00:00", "expected": "12:00:00Z" }
+    { "id": "time-plus-zero-to-z", "carrier": "time", "input": "12:00:00+00:00", "expected": "12:00:00Z" },
+    { "id": "integer-rejects-arabic-indic-digit", "carrier": "integer", "input": "٣", "expectError": true },
+    { "id": "integer-rejects-devanagari-digit", "carrier": "integer", "input": "३", "expectError": true },
+    { "id": "integer-rejects-fullwidth-digit", "carrier": "integer", "input": "３", "expectError": true },
+    { "id": "decimal-rejects-arabic-indic-digit", "carrier": "decimal", "input": "١.٥", "expectError": true },
+    { "id": "double-rejects-arabic-indic-digit", "carrier": "double", "input": "١", "expectError": true },
+    { "id": "float-rejects-arabic-indic-digit", "carrier": "float", "input": "١", "expectError": true },
+    { "id": "date-rejects-arabic-indic-digit", "carrier": "date", "input": "٢٠٢٦-10-27", "expectError": true },
+    { "id": "dateTime-rejects-arabic-indic-digit", "carrier": "dateTime", "input": "2026-10-27T0١:00:00Z", "expectError": true },
+    { "id": "time-rejects-arabic-indic-digit", "carrier": "time", "input": "1٢:00:00", "expectError": true }
   ]
 }

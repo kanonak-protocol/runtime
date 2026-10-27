@@ -29,7 +29,7 @@ meta:
   # tag IMMUTABLY on first fetch: to release a new Go version, bump the member HERE
   # and re-run the workflow; existing tags are never touched or moved.
   go_module_versions:
-    canonical: "1.1.0"
+    canonical: "1.1.1"
     codec: "2.1.0"
     expression: "1.1.0"
     wire: "1.0.0"
@@ -54,7 +54,9 @@ meta:
   # 2.1.0 adds parsePackageCoordinate to KanonakCanonical (canonical 1.1.0;
   # runtime#53), and codec 2.1.0, whose Java codec gains its Jackson module
   # (runtime#56).
-  swift_package_version: "2.1.0"
+  # 2.1.1: canonical 1.1.1, whose lexical forms take only the digits 0 to 9 in
+  # every port (runtime#58).
+  swift_package_version: "2.1.1"
   # GitHub Actions OIDC (no stored token) is preferred where supported. A workflow
   # using OIDC needs:  permissions: { id-token: write, contents: read, attestations: write }
   # All PUBLISH jobs run in the `production` GitHub environment (required by NuGet trusted
