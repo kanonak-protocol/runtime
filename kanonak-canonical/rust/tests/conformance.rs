@@ -145,6 +145,39 @@ fn coordinate_vectors() {
             }
         }
     }
+    for v in doc["packageParseVectors"].as_array().unwrap() {
+        let id = v["id"].as_str().unwrap();
+        let input = v["input"].as_str().unwrap();
+        let expect_error = v
+            .get("expectError")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
+        match parse_package_coordinate(input) {
+            Ok(got) => {
+                if expect_error {
+                    fails += 1;
+                    eprintln!("FAIL [{}] expected error, got {:?}", id, got);
+                    continue;
+                }
+                let e = &v["expected"];
+                let ok = got.publisher == e["publisher"].as_str().unwrap()
+                    && got.package == e["package"].as_str().unwrap()
+                    && got.version.major == e["version"]["major"].as_u64().unwrap()
+                    && got.version.minor == e["version"]["minor"].as_u64().unwrap()
+                    && got.version.patch == e["version"]["patch"].as_u64().unwrap();
+                if !ok {
+                    fails += 1;
+                    eprintln!("FAIL [{}] expected {} got {:?}", id, e, got);
+                }
+            }
+            Err(e) => {
+                if !expect_error {
+                    fails += 1;
+                    eprintln!("FAIL [{}] threw: {}", id, e.0);
+                }
+            }
+        }
+    }
     for v in doc["lenientKeyVectors"].as_array().unwrap() {
         let id = v["id"].as_str().unwrap();
         let input = v["input"].as_str().unwrap();

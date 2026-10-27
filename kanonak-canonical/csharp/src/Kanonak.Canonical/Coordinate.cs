@@ -23,6 +23,8 @@ namespace Kanonak.Canonical
 
     /// <summary>
     /// Kanonak coordinate parsing — <c>publisher/package[@version]/name</c> (issue #17).
+    /// A package's own coordinate, <c>publisher/package@version</c>, is
+    /// <see cref="PackageCoordinate"/>'s (runtime#53).
     ///
     /// Two operations, two strictness levels, both pinned by
     /// <c>vectors/coordinate-vectors.json</c>:
@@ -64,7 +66,24 @@ namespace Kanonak.Canonical
 
         /// <summary>Exactly <c>0</c> or a digit run with no leading zero — one version part.</summary>
         private static readonly Regex VersionPartRe = new Regex(@"^(0|[1-9]\d*)$", RegexOptions.Compiled);
-        private static readonly Regex WhitespaceRe = new Regex(@"\s", RegexOptions.Compiled);
+        internal static readonly Regex WhitespaceRe = new Regex(@"\s", RegexOptions.Compiled);
+
+        /// <summary><c>major.minor.patch</c>, each part a <see cref="VersionPartRe"/> match, or <c>null</c>.</summary>
+        internal static CoordinateVersion? ParseVersion(string text)
+        {
+            string[] parts = text.Split('.');
+            if (parts.Length != 3
+                || !VersionPartRe.IsMatch(parts[0])
+                || !VersionPartRe.IsMatch(parts[1])
+                || !VersionPartRe.IsMatch(parts[2]))
+            {
+                return null;
+            }
+            return new CoordinateVersion(int.Parse(parts[0]), int.Parse(parts[1]), int.Parse(parts[2]));
+        }
+
+        internal static string VersionReason(string text) =>
+            $"version '{text}' is not exactly major.minor.patch (digits, no leading zeros)";
 
         private static FormatException Invalid(string uri, string reason)
         {
@@ -100,18 +119,9 @@ namespace Kanonak.Canonical
             if (package.Length == 0) throw Invalid(uri, "empty package name before @");
             if (versionPart.IndexOf('@') >= 0) throw Invalid(uri, "more than one '@'");
 
-            string[] parts = versionPart.Split('.');
-            if (parts.Length != 3
-                || !VersionPartRe.IsMatch(parts[0])
-                || !VersionPartRe.IsMatch(parts[1])
-                || !VersionPartRe.IsMatch(parts[2]))
-            {
-                throw Invalid(uri,
-                    $"version '{versionPart}' is not exactly major.minor.patch (digits, no leading zeros)");
-            }
-
-            return new Coordinate(publisher, package, name,
-                new CoordinateVersion(int.Parse(parts[0]), int.Parse(parts[1]), int.Parse(parts[2])));
+            CoordinateVersion? version = ParseVersion(versionPart);
+            if (!version.HasValue) throw Invalid(uri, VersionReason(versionPart));
+            return new Coordinate(publisher, package, name, version);
         }
 
         /// <summary>
@@ -180,6 +190,63 @@ namespace Kanonak.Canonical
             string package = at < 0 ? middle : middle.Substring(0, at);
             if (package.Length == 0) return null;
             return publisher + "/" + package + "/" + name;
+        }
+    }
+
+    /// <summary>
+    /// A package's own coordinate, <c>publisher/package@version</c>, as a lock names
+    /// a package at a version (runtime#53). The same STRICT grammar as
+    /// <see cref="Coordinate.Parse"/>, with no <c>/name</c> and the version required,
+    /// pinned by <c>packageParseVectors</c> in <c>vectors/coordinate-vectors.json</c>.
+    /// </summary>
+    public readonly struct PackageCoordinate
+    {
+        public string Publisher { get; }
+        public string Package { get; }
+        public CoordinateVersion Version { get; }
+
+        public PackageCoordinate(string publisher, string package, CoordinateVersion version)
+        {
+            Publisher = publisher;
+            Package = package;
+            Version = version;
+        }
+
+        private static FormatException Invalid(string coordinate, string reason)
+        {
+            return new FormatException(
+                $"PackageCoordinate.Parse: '{coordinate}' is not a valid Kanonak package coordinate ({reason}); " +
+                "expected publisher/package@major.minor.patch");
+        }
+
+        /// <summary>
+        /// Parse a package's coordinate <c>publisher/package@version</c> into its parts.
+        /// Throws on malformed input, on a resource's coordinate (which has a
+        /// <c>/name</c>), and on a versionless one.
+        /// </summary>
+        public static PackageCoordinate Parse(string coordinate)
+        {
+            if (string.IsNullOrEmpty(coordinate)) throw Invalid(coordinate, "empty string");
+            if (Coordinate.WhitespaceRe.IsMatch(coordinate)) throw Invalid(coordinate, "whitespace is not allowed");
+            if (coordinate.IndexOf('#') >= 0) throw Invalid(coordinate, "'#' is reserved for embedded resources");
+
+            string[] segments = coordinate.Split('/');
+            if (segments.Length != 2)
+                throw Invalid(coordinate, $"expected exactly 2 '/'-separated segments, got {segments.Length}");
+            string publisher = segments[0], middle = segments[1];
+            if (publisher.Length == 0 || middle.Length == 0) throw Invalid(coordinate, "empty segment");
+            if (publisher.IndexOf('@') >= 0) throw Invalid(coordinate, "'@' is only valid after the package name");
+
+            int at = middle.IndexOf('@');
+            if (at < 0) throw Invalid(coordinate, "no version: a package coordinate states one");
+            string package = middle.Substring(0, at);
+            string versionPart = middle.Substring(at + 1);
+            if (package.Length == 0) throw Invalid(coordinate, "empty package name before @");
+            if (versionPart.IndexOf('@') >= 0) throw Invalid(coordinate, "more than one '@'");
+
+            CoordinateVersion? version = Coordinate.ParseVersion(versionPart);
+            if (!version.HasValue) throw Invalid(coordinate, Coordinate.VersionReason(versionPart));
+            return new PackageCoordinate(publisher, package, version.Value);
         }
     }
 }

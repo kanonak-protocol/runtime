@@ -103,6 +103,29 @@ final class CoordinateVectorTests: XCTestCase {
         }
     }
 
+    func testPackageParseVectors() throws {
+        let doc = try loadJSON("coordinate-vectors.json")
+        let vectors = doc["packageParseVectors"] as! [[String: Any]]
+        XCTAssertFalse(vectors.isEmpty)
+        for v in vectors {
+            let id = v["id"] as! String
+            let input = v["input"] as! String
+            let expectError = v["expectError"] as? Bool ?? false
+            if expectError {
+                XCTAssertThrowsError(try parsePackageCoordinate(input), "[\(id)] expected error")
+                continue
+            }
+            let e = v["expected"] as! [String: Any]
+            let ev = e["version"] as! [String: Any]
+            let want = PackageCoordinate(
+                publisher: e["publisher"] as! String, package: e["package"] as! String,
+                version: CoordinateVersion(major: ev["major"] as! Int,
+                                           minor: ev["minor"] as! Int,
+                                           patch: ev["patch"] as! Int))
+            XCTAssertEqual(try parsePackageCoordinate(input), want, "[\(id)]")
+        }
+    }
+
     func testLenientKeyVectors() throws {
         let doc = try loadJSON("coordinate-vectors.json")
         let vectors = doc["lenientKeyVectors"] as! [[String: Any]]

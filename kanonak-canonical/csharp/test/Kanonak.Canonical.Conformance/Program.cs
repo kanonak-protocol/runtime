@@ -140,6 +140,36 @@ class Program
                 else { fail++; Console.WriteLine($"  FAIL [{id}] threw: {ex.Message}"); }
             }
         }
+        foreach (var v in doc.RootElement.GetProperty("packageParseVectors").EnumerateArray())
+        {
+            total++;
+            string id = v.GetProperty("id").GetString();
+            string input = v.GetProperty("input").GetString();
+            bool expectError = v.TryGetProperty("expectError", out var ee) && ee.GetBoolean();
+            try
+            {
+                PackageCoordinate got = PackageCoordinate.Parse(input);
+                if (expectError)
+                {
+                    fail++; Console.WriteLine($"  FAIL [{id}] expected error, got '{got.Publisher}/{got.Package}'");
+                    continue;
+                }
+                var e = v.GetProperty("expected");
+                var ev = e.GetProperty("version");
+                bool ok = got.Publisher == e.GetProperty("publisher").GetString()
+                    && got.Package == e.GetProperty("package").GetString()
+                    && got.Version.Major == ev.GetProperty("major").GetInt32()
+                    && got.Version.Minor == ev.GetProperty("minor").GetInt32()
+                    && got.Version.Patch == ev.GetProperty("patch").GetInt32();
+                if (ok) pass++;
+                else { fail++; Console.WriteLine($"  FAIL [{id}] parsed parts mismatch for '{input}'"); }
+            }
+            catch (Exception ex)
+            {
+                if (expectError) pass++;
+                else { fail++; Console.WriteLine($"  FAIL [{id}] threw: {ex.Message}"); }
+            }
+        }
         foreach (var v in doc.RootElement.GetProperty("lenientKeyVectors").EnumerateArray())
         {
             total++;

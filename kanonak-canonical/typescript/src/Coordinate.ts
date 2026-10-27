@@ -1,5 +1,6 @@
 /**
- * Kanonak coordinate parsing — `publisher/package[@version]/name` (issue #17).
+ * Kanonak coordinate parsing — `publisher/package[@version]/name` (issue #17),
+ * and a package's own coordinate, `publisher/package@version` (runtime#53).
  *
  * Two operations, two strictness levels, both pinned by
  * `vectors/coordinate-vectors.json`:
@@ -8,6 +9,8 @@
  *   STRICT: it throws on anything that is not a well-formed coordinate rather
  *   than returning a plausible-looking tail. This is the public API a consumer
  *   (a generated SDK binding, an evaluation trace, an error message) uses.
+ * - `parsePackageCoordinate` is the same STRICT grammar for a package at a
+ *   version, as a lock names one: no `/name`, and the version required.
  * - `lenientVersionlessKey` is the total, non-throwing structural variant that
  *   carrier routing uses: it reduces a datatype URI to its versionless key
  *   WITHOUT validating the version content, or returns `undefined` when the
@@ -39,8 +42,25 @@ export interface Coordinate {
   version?: CoordinateVersion;
 }
 
+export interface PackageCoordinate {
+  publisher: string;
+  package_: string;
+  version: CoordinateVersion;
+}
+
 /** Exactly `0` or a digit run with no leading zero — one version part. */
 const VERSION_PART = /^(0|[1-9]\d*)$/;
+
+/** `major.minor.patch`, each part a VERSION_PART, or undefined. */
+function parseVersion(text: string): CoordinateVersion | undefined {
+  const parts = text.split('.');
+  if (parts.length !== 3 || !parts.every((p) => VERSION_PART.test(p))) return undefined;
+  return { major: Number(parts[0]), minor: Number(parts[1]), patch: Number(parts[2]) };
+}
+
+function versionReason(text: string): string {
+  return `version '${text}' is not exactly major.minor.patch (digits, no leading zeros)`;
+}
 
 function invalid(uri: string, reason: string): Error {
   return new Error(
@@ -83,24 +103,52 @@ export function parseCoordinate(uri: string): Coordinate {
   if (!package_) throw invalid(uri, 'empty package name before @');
   if (versionPart.includes('@')) throw invalid(uri, "more than one '@'");
 
-  const parts = versionPart.split('.');
-  if (parts.length !== 3 || !parts.every((p) => VERSION_PART.test(p))) {
-    throw invalid(
-      uri,
-      `version '${versionPart}' is not exactly major.minor.patch (digits, no leading zeros)`,
-    );
+  const version = parseVersion(versionPart);
+  if (!version) throw invalid(uri, versionReason(versionPart));
+
+  return { publisher, package_, name, version };
+}
+
+function invalidPackage(coordinate: string, reason: string): Error {
+  return new Error(
+    `parsePackageCoordinate: '${coordinate}' is not a valid Kanonak package coordinate (${reason}); ` +
+    `expected publisher/package@major.minor.patch`,
+  );
+}
+
+/**
+ * Parse a package's coordinate `publisher/package@version` into its parts.
+ * Throws on malformed input, on a resource's coordinate (which has a
+ * `/name`), and on a versionless one.
+ */
+export function parsePackageCoordinate(coordinate: string): PackageCoordinate {
+  if (coordinate.length === 0) throw invalidPackage(coordinate, 'empty string');
+  if (/\s/.test(coordinate)) throw invalidPackage(coordinate, 'whitespace is not allowed');
+  if (coordinate.includes('#')) {
+    throw invalidPackage(coordinate, "'#' is reserved for embedded resources");
   }
 
-  return {
-    publisher,
-    package_,
-    name,
-    version: {
-      major: Number(parts[0]),
-      minor: Number(parts[1]),
-      patch: Number(parts[2]),
-    },
-  };
+  const segments = coordinate.split('/');
+  if (segments.length !== 2) {
+    throw invalidPackage(coordinate, `expected exactly 2 '/'-separated segments, got ${segments.length}`);
+  }
+  const [publisher, middle] = segments;
+  if (!publisher || !middle) throw invalidPackage(coordinate, 'empty segment');
+  if (publisher.includes('@')) {
+    throw invalidPackage(coordinate, "'@' is only valid after the package name");
+  }
+
+  const at = middle.indexOf('@');
+  if (at === -1) throw invalidPackage(coordinate, 'no version: a package coordinate states one');
+  const package_ = middle.slice(0, at);
+  const versionPart = middle.slice(at + 1);
+  if (!package_) throw invalidPackage(coordinate, 'empty package name before @');
+  if (versionPart.includes('@')) throw invalidPackage(coordinate, "more than one '@'");
+
+  const version = parseVersion(versionPart);
+  if (!version) throw invalidPackage(coordinate, versionReason(versionPart));
+
+  return { publisher, package_, version };
 }
 
 /**

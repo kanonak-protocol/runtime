@@ -1,4 +1,5 @@
-//! Kanonak coordinate parsing — `publisher/package[@version]/name` (issue #17).
+//! Kanonak coordinate parsing — `publisher/package[@version]/name` (issue #17),
+//! and a package's own coordinate, `publisher/package@version` (runtime#53).
 //!
 //! Two operations, two strictness levels, both pinned by
 //! `vectors/coordinate-vectors.json`:
@@ -8,6 +9,8 @@
 //!   coordinate rather than returning a plausible-looking tail. This is the
 //!   public API a consumer (a generated SDK binding, an evaluation trace, an
 //!   error message) uses.
+//! - `parse_package_coordinate` is the same STRICT grammar for a package at a
+//!   version, as a lock names one: no `/name`, and the version required.
 //! - `lenient_versionless_key` is the total, non-erroring structural variant
 //!   that carrier routing uses: it reduces a datatype URI to its versionless
 //!   key WITHOUT validating the version content, or returns `None` when the
@@ -40,6 +43,13 @@ pub struct Coordinate {
     pub version: Option<CoordinateVersion>,
 }
 
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct PackageCoordinate {
+    pub publisher: String,
+    pub package: String,
+    pub version: CoordinateVersion,
+}
+
 fn invalid(uri: &str, reason: &str) -> CanonError {
     CanonError(format!(
         "parseCoordinate: '{}' is not a valid Kanonak coordinate ({}); \
@@ -57,6 +67,26 @@ fn version_part(p: &str) -> Option<u64> {
         return None;
     }
     p.parse().ok()
+}
+
+/// `major.minor.patch`, each part a `version_part`, or `None`.
+fn parse_version(text: &str) -> Option<CoordinateVersion> {
+    let parts: Vec<&str> = text.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    Some(CoordinateVersion {
+        major: version_part(parts[0])?,
+        minor: version_part(parts[1])?,
+        patch: version_part(parts[2])?,
+    })
+}
+
+fn version_reason(text: &str) -> String {
+    format!(
+        "version '{}' is not exactly major.minor.patch (digits, no leading zeros)",
+        text
+    )
 }
 
 /// Parse a coordinate `publisher/package[@version]/name` into its parts.
@@ -111,30 +141,88 @@ pub fn parse_coordinate(uri: &str) -> Result<Coordinate, CanonError> {
         return Err(invalid(uri, "more than one '@'"));
     }
 
-    let parts: Vec<&str> = version_str.split('.').collect();
-    let nums: Option<Vec<u64>> = if parts.len() == 3 {
-        parts.iter().map(|p| version_part(p)).collect()
-    } else {
-        None
-    };
-    match nums {
-        Some(n) => Ok(Coordinate {
+    match parse_version(version_str) {
+        Some(version) => Ok(Coordinate {
             publisher: publisher.to_string(),
             package: package.to_string(),
             name: name.to_string(),
-            version: Some(CoordinateVersion {
-                major: n[0],
-                minor: n[1],
-                patch: n[2],
-            }),
+            version: Some(version),
         }),
-        None => Err(invalid(
-            uri,
+        None => Err(invalid(uri, &version_reason(version_str))),
+    }
+}
+
+fn invalid_package(coordinate: &str, reason: &str) -> CanonError {
+    CanonError(format!(
+        "parsePackageCoordinate: '{}' is not a valid Kanonak package coordinate ({}); \
+         expected publisher/package@major.minor.patch",
+        coordinate, reason
+    ))
+}
+
+/// Parse a package's coordinate `publisher/package@version` into its parts.
+/// Errors on malformed input, on a resource's coordinate (which has a
+/// `/name`), and on a versionless one.
+pub fn parse_package_coordinate(coordinate: &str) -> Result<PackageCoordinate, CanonError> {
+    if coordinate.is_empty() {
+        return Err(invalid_package(coordinate, "empty string"));
+    }
+    if coordinate.chars().any(char::is_whitespace) {
+        return Err(invalid_package(coordinate, "whitespace is not allowed"));
+    }
+    if coordinate.contains('#') {
+        return Err(invalid_package(
+            coordinate,
+            "'#' is reserved for embedded resources",
+        ));
+    }
+
+    let segments: Vec<&str> = coordinate.split('/').collect();
+    if segments.len() != 2 {
+        return Err(invalid_package(
+            coordinate,
             &format!(
-                "version '{}' is not exactly major.minor.patch (digits, no leading zeros)",
-                version_str
+                "expected exactly 2 '/'-separated segments, got {}",
+                segments.len()
             ),
-        )),
+        ));
+    }
+    let (publisher, middle) = (segments[0], segments[1]);
+    if publisher.is_empty() || middle.is_empty() {
+        return Err(invalid_package(coordinate, "empty segment"));
+    }
+    if publisher.contains('@') {
+        return Err(invalid_package(
+            coordinate,
+            "'@' is only valid after the package name",
+        ));
+    }
+
+    let at = match middle.find('@') {
+        None => {
+            return Err(invalid_package(
+                coordinate,
+                "no version: a package coordinate states one",
+            ))
+        }
+        Some(i) => i,
+    };
+    let package = &middle[..at];
+    let version_str = &middle[at + 1..];
+    if package.is_empty() {
+        return Err(invalid_package(coordinate, "empty package name before @"));
+    }
+    if version_str.contains('@') {
+        return Err(invalid_package(coordinate, "more than one '@'"));
+    }
+
+    match parse_version(version_str) {
+        Some(version) => Ok(PackageCoordinate {
+            publisher: publisher.to_string(),
+            package: package.to_string(),
+            version,
+        }),
+        None => Err(invalid_package(coordinate, &version_reason(version_str))),
     }
 }
 

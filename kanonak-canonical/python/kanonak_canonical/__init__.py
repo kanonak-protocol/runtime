@@ -28,6 +28,7 @@ __all__ = [
     "Embedded",
     "KList",
     "Package",
+    "PackageCoordinate",
     "RawScalar",
     "Reference",
     "Statement",
@@ -54,19 +55,23 @@ __all__ = [
     "lenient_versionless_key",
     "local_name",
     "parse_coordinate",
+    "parse_package_coordinate",
     "versionless_key",
 ]
 
 CANONICAL_FORM_VERSION = "1"
 
 # ===========================================================================
-# Coordinates — publisher/package[@version]/name (issue #17)
+# Coordinates — publisher/package[@version]/name (issue #17), and a package's
+# own coordinate, publisher/package@version (runtime#53)
 # ===========================================================================
 #
 # Two strictness levels, both pinned by ``vectors/coordinate-vectors.json``:
 # ``parse_coordinate`` (with the ``versionless_key`` / ``local_name``
 # conveniences) is STRICT and raises rather than returning a plausible-looking
-# tail; ``lenient_versionless_key`` is the total, non-raising structural
+# tail, and so is ``parse_package_coordinate``, the same grammar for a package
+# at a version, as a lock names one: no ``/name``, and the version required;
+# ``lenient_versionless_key`` is the total, non-raising structural
 # variant that carrier routing uses, so ``carrier_of`` stays total and
 # byte-identical under canonicalFormVersion "1" — an unparseable datatype URI
 # routes to no carrier (raw token preserved), never to a guess. No ordering
@@ -90,8 +95,26 @@ class Coordinate:
     version: Optional[CoordinateVersion] = None  # None for the versionless form
 
 
+@dataclass(frozen=True)
+class PackageCoordinate:
+    publisher: str
+    package: str
+    version: CoordinateVersion
+
+
 _VERSION_PART = re.compile(r"0|[1-9][0-9]*")  # exactly 0, or no leading zero
 _WHITESPACE = re.compile(r"\s")
+
+
+def _parse_version(text: str) -> Optional[CoordinateVersion]:
+    parts = text.split(".")
+    if len(parts) != 3 or not all(_VERSION_PART.fullmatch(p) for p in parts):
+        return None
+    return CoordinateVersion(int(parts[0]), int(parts[1]), int(parts[2]))
+
+
+def _version_reason(text: str) -> str:
+    return f"version '{text}' is not exactly major.minor.patch (digits, no leading zeros)"
 
 
 def _invalid_coordinate(uri: str, reason: str) -> ValueError:
@@ -124,13 +147,50 @@ def parse_coordinate(uri: str) -> Coordinate:
         raise _invalid_coordinate(uri, "empty package name before @")
     if "@" in version_part:
         raise _invalid_coordinate(uri, "more than one '@'")
-    parts = version_part.split(".")
-    if len(parts) != 3 or not all(_VERSION_PART.fullmatch(p) for p in parts):
-        raise _invalid_coordinate(
-            uri, f"version '{version_part}' is not exactly major.minor.patch (digits, no leading zeros)"
+    version = _parse_version(version_part)
+    if version is None:
+        raise _invalid_coordinate(uri, _version_reason(version_part))
+    return Coordinate(publisher, package, name, version)
+
+
+def _invalid_package_coordinate(coordinate: str, reason: str) -> ValueError:
+    return ValueError(
+        f"parse_package_coordinate: '{coordinate}' is not a valid Kanonak package coordinate ({reason}); "
+        f"expected publisher/package@major.minor.patch"
+    )
+
+
+def parse_package_coordinate(coordinate: str) -> PackageCoordinate:
+    """Parse a package's coordinate ``publisher/package@version``. Strict: raises on
+    malformed input, on a resource's coordinate (which has a ``/name``), and on a
+    versionless one."""
+    if coordinate == "":
+        raise _invalid_package_coordinate(coordinate, "empty string")
+    if _WHITESPACE.search(coordinate):
+        raise _invalid_package_coordinate(coordinate, "whitespace is not allowed")
+    if "#" in coordinate:
+        raise _invalid_package_coordinate(coordinate, "'#' is reserved for embedded resources")
+    segments = coordinate.split("/")
+    if len(segments) != 2:
+        raise _invalid_package_coordinate(
+            coordinate, f"expected exactly 2 '/'-separated segments, got {len(segments)}"
         )
-    return Coordinate(publisher, package, name,
-                      CoordinateVersion(int(parts[0]), int(parts[1]), int(parts[2])))
+    publisher, middle = segments
+    if not publisher or not middle:
+        raise _invalid_package_coordinate(coordinate, "empty segment")
+    if "@" in publisher:
+        raise _invalid_package_coordinate(coordinate, "'@' is only valid after the package name")
+    if "@" not in middle:
+        raise _invalid_package_coordinate(coordinate, "no version: a package coordinate states one")
+    package, version_part = middle.split("@", 1)
+    if not package:
+        raise _invalid_package_coordinate(coordinate, "empty package name before @")
+    if "@" in version_part:
+        raise _invalid_package_coordinate(coordinate, "more than one '@'")
+    version = _parse_version(version_part)
+    if version is None:
+        raise _invalid_package_coordinate(coordinate, _version_reason(version_part))
+    return PackageCoordinate(publisher, package, version)
 
 
 def versionless_key(uri: str) -> str:

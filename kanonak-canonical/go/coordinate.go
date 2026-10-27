@@ -1,4 +1,5 @@
-// Kanonak coordinate parsing — publisher/package[@version]/name (issue #17).
+// Kanonak coordinate parsing — publisher/package[@version]/name (issue #17),
+// and a package's own coordinate, publisher/package@version (runtime#53).
 //
 // Two operations, two strictness levels, both pinned by
 // vectors/coordinate-vectors.json:
@@ -8,6 +9,8 @@
 //     rather than returning a plausible-looking tail. This is the public API
 //     a consumer (a generated SDK binding, an evaluation trace, an error
 //     message) uses.
+//   - ParsePackageCoordinate is the same STRICT grammar for a package at a
+//     version, as a lock names one: no /name, and the version required.
 //   - LenientVersionlessKey is the total, non-erroring structural variant
 //     that carrier routing uses: it reduces a datatype URI to its versionless
 //     key WITHOUT validating the version content, or returns ok=false when
@@ -44,8 +47,31 @@ type Coordinate struct {
 	Version *CoordinateVersion
 }
 
+type PackageCoordinate struct {
+	Publisher string
+	Package   string
+	Version   CoordinateVersion
+}
+
 // Exactly 0 or a digit run with no leading zero — one version part.
 var versionPartRe = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)
+
+// parseVersion reads major.minor.patch, each part matching versionPartRe.
+func parseVersion(text string) (CoordinateVersion, bool) {
+	parts := strings.Split(text, ".")
+	if len(parts) != 3 || !versionPartRe.MatchString(parts[0]) ||
+		!versionPartRe.MatchString(parts[1]) || !versionPartRe.MatchString(parts[2]) {
+		return CoordinateVersion{}, false
+	}
+	major, _ := strconv.Atoi(parts[0])
+	minor, _ := strconv.Atoi(parts[1])
+	patch, _ := strconv.Atoi(parts[2])
+	return CoordinateVersion{Major: major, Minor: minor, Patch: patch}, true
+}
+
+func versionReason(text string) string {
+	return fmt.Sprintf("version %q is not exactly major.minor.patch (digits, no leading zeros)", text)
+}
 
 func invalidCoordinate(uri, reason string) error {
 	return fmt.Errorf(
@@ -93,22 +119,64 @@ func ParseCoordinate(uri string) (Coordinate, error) {
 		return Coordinate{}, invalidCoordinate(uri, "more than one '@'")
 	}
 
-	parts := strings.Split(versionPart, ".")
-	if len(parts) != 3 || !versionPartRe.MatchString(parts[0]) ||
-		!versionPartRe.MatchString(parts[1]) || !versionPartRe.MatchString(parts[2]) {
-		return Coordinate{}, invalidCoordinate(uri,
-			fmt.Sprintf("version %q is not exactly major.minor.patch (digits, no leading zeros)", versionPart))
+	version, ok := parseVersion(versionPart)
+	if !ok {
+		return Coordinate{}, invalidCoordinate(uri, versionReason(versionPart))
+	}
+	return Coordinate{Publisher: publisher, Package: pkg, Name: name, Version: &version}, nil
+}
+
+func invalidPackageCoordinate(coordinate, reason string) error {
+	return fmt.Errorf(
+		"parsePackageCoordinate: %q is not a valid Kanonak package coordinate (%s); expected publisher/package@major.minor.patch",
+		coordinate, reason)
+}
+
+// ParsePackageCoordinate parses a package's coordinate publisher/package@version
+// into its parts. Errors on malformed input, on a resource's coordinate (which
+// has a /name), and on a versionless one.
+func ParsePackageCoordinate(coordinate string) (PackageCoordinate, error) {
+	if coordinate == "" {
+		return PackageCoordinate{}, invalidPackageCoordinate(coordinate, "empty string")
+	}
+	if strings.IndexFunc(coordinate, unicode.IsSpace) >= 0 {
+		return PackageCoordinate{}, invalidPackageCoordinate(coordinate, "whitespace is not allowed")
+	}
+	if strings.Contains(coordinate, "#") {
+		return PackageCoordinate{}, invalidPackageCoordinate(coordinate, "'#' is reserved for embedded resources")
 	}
 
-	major, _ := strconv.Atoi(parts[0])
-	minor, _ := strconv.Atoi(parts[1])
-	patch, _ := strconv.Atoi(parts[2])
-	return Coordinate{
-		Publisher: publisher,
-		Package:   pkg,
-		Name:      name,
-		Version:   &CoordinateVersion{Major: major, Minor: minor, Patch: patch},
-	}, nil
+	segments := strings.Split(coordinate, "/")
+	if len(segments) != 2 {
+		return PackageCoordinate{}, invalidPackageCoordinate(coordinate,
+			fmt.Sprintf("expected exactly 2 '/'-separated segments, got %d", len(segments)))
+	}
+	publisher, middle := segments[0], segments[1]
+	if publisher == "" || middle == "" {
+		return PackageCoordinate{}, invalidPackageCoordinate(coordinate, "empty segment")
+	}
+	if strings.Contains(publisher, "@") {
+		return PackageCoordinate{}, invalidPackageCoordinate(coordinate, "'@' is only valid after the package name")
+	}
+
+	at := strings.Index(middle, "@")
+	if at == -1 {
+		return PackageCoordinate{}, invalidPackageCoordinate(coordinate, "no version: a package coordinate states one")
+	}
+	pkg := middle[:at]
+	versionPart := middle[at+1:]
+	if pkg == "" {
+		return PackageCoordinate{}, invalidPackageCoordinate(coordinate, "empty package name before @")
+	}
+	if strings.Contains(versionPart, "@") {
+		return PackageCoordinate{}, invalidPackageCoordinate(coordinate, "more than one '@'")
+	}
+
+	version, ok := parseVersion(versionPart)
+	if !ok {
+		return PackageCoordinate{}, invalidPackageCoordinate(coordinate, versionReason(versionPart))
+	}
+	return PackageCoordinate{Publisher: publisher, Package: pkg, Version: version}, nil
 }
 
 // VersionlessKey returns the versionless canonical key publisher/package/name
