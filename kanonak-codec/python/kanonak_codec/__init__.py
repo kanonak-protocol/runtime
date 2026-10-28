@@ -751,13 +751,17 @@ def _decimal_of_lexical(prop: Dict[str, Any], lexical: str) -> str:
 
 
 def _whole_number(value: Any) -> Optional[int]:
-    """An ``int``, or a ``float`` holding a whole number, as an ``int``; None for
-    anything else. A ``bool`` is an ``int`` in Python, and never a number here."""
+    """An ``int``, or a ``float`` or ``Decimal`` holding a whole number, as an
+    ``int``; None for anything else. A ``bool`` is an ``int`` in Python, and never
+    a number here. A ``Decimal``, as ``json.loads(text, parse_float=Decimal)``
+    gives, is judged exactly, so ``1.0000000000000000001`` isn't taken for 1."""
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
         return value
     if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, Decimal) and value.is_finite() and value == value.to_integral_value():
         return int(value)
     return None
 

@@ -371,10 +371,17 @@ def run_json_numbers_file(vectors: str) -> "tuple[int, int]":
         print("FAIL [{}] expected [json-number-form], got: {}".format(cid, err))
         return False
 
-    for case in data["readCases"]:
-        cid = "read " + case["id"]
+    # Each read case twice: as json.loads parses by default, and with parse_float=Decimal, which keeps a JSON number
+    # exact, so a non-whole one is refused rather than rounded to a whole one first.
+    read_cases = [(case, parse) for parse in (None, Decimal) for case in data["readCases"]]
+    edge = {"id": "integer-number-not-whole-past-double-precision", "field": "integer",
+            "json": "1.0000000000000000001", "expectError": True}
+    read_cases.append((edge, Decimal))
+    for case, parse_float in read_cases:
+        cid = "read " + case["id"] + (" (Decimal)" if parse_float else "")
         field = case["field"]
-        obj = json.loads('{{"$type": {}, {}: {}}}'.format(json.dumps(data["class"]), json.dumps(field), case["json"]))
+        obj = json.loads('{{"$type": {}, {}: {}}}'.format(json.dumps(data["class"]), json.dumps(field), case["json"]),
+                         parse_float=parse_float)
         try:
             got = lexical_of(props[field], deserialize_exact(obj, schema)[field])
         except ValueError as err:

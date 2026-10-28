@@ -1251,7 +1251,9 @@ pub fn serialize_exact(node: &Node, schema: &Json) -> Result<Node, CodecError> {
 /// sign-restricted forms and `decimal` as a string of canonical digits, and
 /// `long`, `unsignedLong` and the narrow integers as a number. A value JSON may
 /// already have rounded, or one outside its datatype's range, is refused with
-/// an error ending `[json-number-form]`.
+/// an error ending `[json-number-form]`. It judges the `Value`s it's given:
+/// without serde_json's `arbitrary_precision`, `1.0000000000000000001` is
+/// already the `f64` `1.0`, so a caller that must refuse it parses with it.
 #[allow(deprecated)]
 pub fn deserialize_exact(json_obj: &Node, schema: &Json) -> Result<Node, CodecError> {
     convert_node(&deserialize(json_obj, schema)?, schema, read_json_number)

@@ -626,5 +626,9 @@ final class JSONNumberVectorTests: XCTestCase {
             let expected = try parseJSON(c["json"] as! String)
             XCTAssertTrue(jsonEqual(got[field]!, expected), "[\(id)] got \(got[field]!)")
         }
+
+        // A JSON number is judged from its token, so one a double would round to a whole number isn't taken for it.
+        let edge = try parseJSON("{\"$type\": \(try writeJSON(cls)), \"integer\": 1.0000000000000000001}") as! [String: Any]
+        expectRefusal("integer-number-not-whole-past-double-precision") { try deserializeExact(edge, schema: schema) }
     }
 }

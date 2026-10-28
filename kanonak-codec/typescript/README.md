@@ -26,7 +26,10 @@ TypeScript references **`@kanonak-protocol/canonical`** — its only dependency.
   four sign-restricted forms, `long`, `unsignedLong`) as a `bigint`, a `decimal`
   as a string of its canonical digits, and `int` and narrower as a `number`;
   `serializeExact` writes a wide integer and a decimal as a string of their
-  canonical digits, and a narrow integer as a number. A JSON number past ±(2^53 − 1) for a wide integer, a number for a decimal, a string for a narrow integer, or a value outside its datatype's range is refused, ending `[json-number-form]`, as `codec-vectors-json-numbers.json` pins in every port.
+  canonical digits, and a narrow integer as a number. `deserializeExact` judges
+  the values it's given: `JSON.parse` has already read a number such as
+  `1.0000000000000000001` as `1`, so a caller that must refuse it judges the
+  number's source, as a reviver's `context.source` gives it (Node 22). A JSON number past ±(2^53 − 1) for a wide integer, a number for a decimal, a string for a narrow integer, or a value outside its datatype's range is refused, ending `[json-number-form]`, as `codec-vectors-json-numbers.json` pins in every port.
 - **`serialize(node)` / `deserialize(json, schema)`**, deprecated for the two above — the normalized-JSON wire
   form. Open-world assertions outside the type-model round-trip losslessly
   through `$extra` (top-level wire fields, collected under `$extra` on the typed

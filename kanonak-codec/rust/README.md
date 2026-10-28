@@ -35,7 +35,9 @@ let member = enum_member(&schema, "example.com/vocab@5.0.0/north");             
   and decimal value in its JSON form (kanonak-protocol 4.11.0's `numbers-in-json`, runtime#54), through
   lists and embedded values. In the node, `integer`, its four sign-restricted forms and `decimal` are a
   string of their canonical digits, since a `serde_json::Value` holds no integer past 64 bits; `long`,
-  `unsignedLong` and `int` and narrower are numbers. A JSON number past ±(2^53 − 1) for a wide integer, a number for a decimal, a string for a narrow integer, or a value outside its datatype's range is refused, ending `[json-number-form]`, as `codec-vectors-json-numbers.json` pins in every port. The two below are deprecated for them.
+  `unsignedLong` and `int` and narrower are numbers. `deserialize_exact` judges the `Value`s it's given:
+  without serde_json's `arbitrary_precision`, a number such as `1.0000000000000000001` is already the `f64`
+  `1.0`, so a caller that must refuse it parses with that feature. A JSON number past ±(2^53 − 1) for a wide integer, a number for a decimal, a string for a narrow integer, or a value outside its datatype's range is refused, ending `[json-number-form]`, as `codec-vectors-json-numbers.json` pins in every port. The two below are deprecated for them.
 - `serialize` — modeled fields (nulls dropped) then `$extra` spread as siblings
   (modeled wins a collision; no `$extra` key on the wire).
 - `deserialize` — `$`-keys and `$type`-modeled fields stay top-level; everything

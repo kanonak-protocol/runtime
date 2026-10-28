@@ -777,7 +777,7 @@ private let jsonNumberForms: [String: JSONNumberForm] = [
     "\(xsd)/unsignedByte": .narrow(min: 0, max: Int64(UInt8.max)),
 ]
 
-private let maxSafeWhole: Double = 9007199254740991
+private let maxSafeWhole = "9007199254740991"
 
 private typealias NumberConversion = (CodecProp, JSONNumberForm, Any) throws -> Any
 
@@ -830,11 +830,31 @@ private func decimalOfLexical(_ prop: CodecProp, _ lexical: String) throws -> St
     }
 }
 
-/// A JSON number's value when it is a whole number, read as JSON readers read
-/// it, through a double. Within ±(2^53 − 1) that is exact.
-private func wholeNumber(_ n: JSONNumber) -> Double? {
-    guard let d = Double(n.token), d.isFinite, d == d.rounded() else { return nil }
-    return d
+/// A JSON number's value as canonical integer digits, when it is a whole
+/// number within ±(2^53 − 1). It is judged from the token, never through a
+/// double, so `1.0000000000000000001` isn't taken for 1.
+private func safeWholeDigits(_ n: JSONNumber) -> String? {
+    var token = Substring(n.token)
+    let negative = token.hasPrefix("-")
+    if negative { token = token.dropFirst() }
+    var exponent = 0
+    if let e = token.firstIndex(where: { $0 == "e" || $0 == "E" }) {
+        guard let x = Int(token[token.index(after: e)...]) else { return nil }
+        exponent = x
+        token = token[..<e]
+    }
+    let parts = token.split(separator: ".", omittingEmptySubsequences: false)
+    guard parts.count <= 2, let intPart = parts.first, !intPart.isEmpty else { return nil }
+    let digits = Array(intPart + (parts.count == 2 ? parts[1] : ""))
+    guard digits.allSatisfy({ ("0"..."9").contains($0) }) else { return nil }
+    let point = intPart.count + exponent
+    if point < digits.count, !digits[max(point, 0)...].allSatisfy({ $0 == "0" }) { return nil }
+    let magnitude = point <= 0 ? "0"
+        : point < digits.count ? String(digits[..<point])
+        : String(digits) + String(repeating: "0", count: min(point - digits.count, maxSafeWhole.count))
+    guard let canonical = try? canonicalInteger(magnitude),
+          compareCanonicalIntegers(canonical, maxSafeWhole) <= 0 else { return nil }
+    return negative && canonical != "0" ? "-" + canonical : canonical
 }
 
 private func digitsOf<T: BinaryInteger>(_ n: T) -> String { String(n) }
@@ -853,15 +873,15 @@ private func readJSONNumber(_ prop: CodecProp, _ form: JSONNumberForm, _ value: 
         if let s = value as? String {
             return holder.holding(try inWideRange(prop, try integerOfLexical(prop, s), min, max))
         }
-        if let n = value as? JSONNumber, let d = wholeNumber(n), abs(d) <= maxSafeWhole {
-            return holder.holding(try inWideRange(prop, String(Int64(d)), min, max))
+        if let n = value as? JSONNumber, let digits = safeWholeDigits(n) {
+            return holder.holding(try inWideRange(prop, digits, min, max))
         }
         throw jsonNumberError(prop, "a wide integer is read from a string, or from a whole JSON number within ±(2^53 − 1); got \(describeJSON(value))")
     case .narrow(let min, let max):
-        guard let n = value as? JSONNumber, let d = wholeNumber(n), abs(d) <= maxSafeWhole else {
+        guard let n = value as? JSONNumber, let digits = safeWholeDigits(n), let whole = Int64(digits) else {
             throw jsonNumberError(prop, "a narrow integer is read from a whole JSON number only; got \(describeJSON(value))")
         }
-        return try inNarrowRange(prop, Int64(d), min, max)
+        return try inNarrowRange(prop, whole, min, max)
     }
 }
 
@@ -880,8 +900,8 @@ private func writeJSONNumber(_ prop: CodecProp, _ form: JSONNumberForm, _ value:
             digits = try integerOfLexical(prop, s)
         } else if let n = value as? any BinaryInteger {
             digits = digitsOf(n)
-        } else if let n = value as? JSONNumber, let d = wholeNumber(n), abs(d) <= maxSafeWhole {
-            digits = String(Int64(d))
+        } else if let n = value as? JSONNumber, let whole = safeWholeDigits(n) {
+            digits = whole
         } else {
             throw jsonNumberError(prop, "pass a wide integer as an integer, a string, or a whole number within ±(2^53 − 1); got \(describeJSON(value))")
         }
@@ -890,8 +910,8 @@ private func writeJSONNumber(_ prop: CodecProp, _ form: JSONNumberForm, _ value:
         let n: Int64
         if let i = value as? any BinaryInteger, let fits = Int64(exactly: i) {
             n = fits
-        } else if let j = value as? JSONNumber, let d = wholeNumber(j), abs(d) <= maxSafeWhole {
-            n = Int64(d)
+        } else if let j = value as? JSONNumber, let digits = safeWholeDigits(j), let whole = Int64(digits) {
+            n = whole
         } else {
             throw jsonNumberError(prop, "pass a narrow integer as a whole number; got \(describeJSON(value))")
         }

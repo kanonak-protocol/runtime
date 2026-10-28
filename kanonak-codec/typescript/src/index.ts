@@ -993,6 +993,10 @@ export function serializeExact(node: CodecNode, schema: CodecSchema): Record<str
  * wide integer to a `bigint`, from a string or a whole number within ±(2^53 − 1); a decimal to its canonical digits,
  * from a string only; a narrow integer to a `number`, from a whole number only. A value JSON may already have rounded,
  * or one outside its datatype's range, is refused, ending `[json-number-form]`.
+ *
+ * It judges the values it is given. `JSON.parse` reads a number such as `1.0000000000000000001` as `1` before this
+ * sees it, so a caller that must refuse it judges the number's source, as a `JSON.parse` reviver's `context.source`
+ * gives it (Node 22).
  */
 export function deserializeExact(json: Record<string, unknown>, schema: CodecSchema): CodecNode {
   const node = deserialize(json, schema);
