@@ -20,7 +20,12 @@ use kanonak_canonical::{
 };
 use serde_json::{Map, Value as Json};
 
+mod numbers;
 mod typed;
+pub use numbers::{
+    Decimal, Integer, IntegerDatatype, Long, NegativeInteger, NonNegativeInteger, NonPositiveInteger,
+    PositiveInteger, UnsignedLong, XsdInteger,
+};
 pub use typed::{to_node, KanonakNode, KanonakResource, Ref};
 
 /// The reserved `$`-envelope keys, which never become statements/predicates.
@@ -910,7 +915,7 @@ pub fn deserialize(json_obj: &Node, schema: &Json) -> Result<Node, CodecError> {
 
 /// How JSON carries a datatype's values.
 #[derive(Clone, Copy)]
-enum JsonNumberForm {
+pub(crate) enum JsonNumberForm {
     /// Written as a string; read from a string, or from a whole number within
     /// ±(2^53 − 1).
     Wide,
@@ -920,28 +925,45 @@ enum JsonNumberForm {
     Narrow,
 }
 
-/// THE table of the datatypes JSON carries as a number or a string of digits,
-/// by versionless key: each one's form, and its range's bounds where it has
-/// them. Every bound fits in `i128`.
+/// The datatypes JSON carries as a number or a string of digits, by
+/// versionless key.
 fn json_number_form(key: &str) -> Option<(JsonNumberForm, Option<i128>, Option<i128>)> {
+    xsd_number_form(key.strip_prefix("kanonak.org/core-xsd/")?)
+}
+
+/// THE table of the core-xsd datatypes JSON carries as a number or a string of
+/// digits, by local name: each one's form, and its range's bounds where it has
+/// them. Every bound fits in `i128`.
+pub(crate) fn xsd_number_form(local: &str) -> Option<(JsonNumberForm, Option<i128>, Option<i128>)> {
     use JsonNumberForm::{Decimal, Narrow, Wide};
-    Some(match key {
-        "kanonak.org/core-xsd/integer" => (Wide, None, None),
-        "kanonak.org/core-xsd/nonNegativeInteger" => (Wide, Some(0), None),
-        "kanonak.org/core-xsd/positiveInteger" => (Wide, Some(1), None),
-        "kanonak.org/core-xsd/nonPositiveInteger" => (Wide, None, Some(0)),
-        "kanonak.org/core-xsd/negativeInteger" => (Wide, None, Some(-1)),
-        "kanonak.org/core-xsd/long" => (Wide, Some(i64::MIN.into()), Some(i64::MAX.into())),
-        "kanonak.org/core-xsd/unsignedLong" => (Wide, Some(0), Some(u64::MAX.into())),
-        "kanonak.org/core-xsd/decimal" => (Decimal, None, None),
-        "kanonak.org/core-xsd/int" => (Narrow, Some(i32::MIN.into()), Some(i32::MAX.into())),
-        "kanonak.org/core-xsd/short" => (Narrow, Some(i16::MIN.into()), Some(i16::MAX.into())),
-        "kanonak.org/core-xsd/byte" => (Narrow, Some(i8::MIN.into()), Some(i8::MAX.into())),
-        "kanonak.org/core-xsd/unsignedInt" => (Narrow, Some(0), Some(u32::MAX.into())),
-        "kanonak.org/core-xsd/unsignedShort" => (Narrow, Some(0), Some(u16::MAX.into())),
-        "kanonak.org/core-xsd/unsignedByte" => (Narrow, Some(0), Some(u8::MAX.into())),
+    Some(match local {
+        "integer" => (Wide, None, None),
+        "nonNegativeInteger" => (Wide, Some(0), None),
+        "positiveInteger" => (Wide, Some(1), None),
+        "nonPositiveInteger" => (Wide, None, Some(0)),
+        "negativeInteger" => (Wide, None, Some(-1)),
+        "long" => (Wide, Some(i64::MIN.into()), Some(i64::MAX.into())),
+        "unsignedLong" => (Wide, Some(0), Some(u64::MAX.into())),
+        "decimal" => (Decimal, None, None),
+        "int" => (Narrow, Some(i32::MIN.into()), Some(i32::MAX.into())),
+        "short" => (Narrow, Some(i16::MIN.into()), Some(i16::MAX.into())),
+        "byte" => (Narrow, Some(i8::MIN.into()), Some(i8::MAX.into())),
+        "unsignedInt" => (Narrow, Some(0), Some(u32::MAX.into())),
+        "unsignedShort" => (Narrow, Some(0), Some(u16::MAX.into())),
+        "unsignedByte" => (Narrow, Some(0), Some(u8::MAX.into())),
         _ => return None,
     })
+}
+
+/// Whether an integer's canonical digits lie outside the bounds. Every bound
+/// fits in `i128`, so digits too long for one lie past the bound on their
+/// sign's side, if there is one.
+pub(crate) fn outside_bounds(digits: &str, min: Option<i128>, max: Option<i128>) -> bool {
+    match digits.parse::<i128>() {
+        Ok(n) => min.map_or(false, |min| n < min) || max.map_or(false, |max| n > max),
+        Err(_) if digits.starts_with('-') => min.is_some(),
+        Err(_) => max.is_some(),
+    }
 }
 
 /// A modeled field whose datatype JSON carries as a number or a string of
@@ -970,17 +992,8 @@ impl NumberField<'_> {
     }
 
     /// An integer's canonical digits, refused outside the datatype's range.
-    /// Every bound fits in `i128`, so digits too long for one lie past the
-    /// bound on their sign's side, if there is one.
     fn in_range(&self, digits: String) -> Result<String, CodecError> {
-        let outside = match digits.parse::<i128>() {
-            Ok(n) => {
-                self.min.map_or(false, |min| n < min) || self.max.map_or(false, |max| n > max)
-            }
-            Err(_) if digits.starts_with('-') => self.min.is_some(),
-            Err(_) => self.max.is_some(),
-        };
-        if outside {
+        if outside_bounds(&digits, self.min, self.max) {
             return self.refuse(format!("{} is outside {}'s range", digits, self.datatype));
         }
         Ok(digits)
@@ -1045,7 +1058,7 @@ fn whole_digits(value: &Json) -> Option<String> {
 
 /// Whether an integer lies within ±(2^53 − 1), where a double holds every
 /// whole number exactly.
-fn within_double_precision(digits: &str) -> bool {
+pub(crate) fn within_double_precision(digits: &str) -> bool {
     const MAX_SAFE_INTEGER: i128 = (1 << 53) - 1;
     digits
         .parse::<i128>()

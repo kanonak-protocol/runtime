@@ -38,6 +38,16 @@ let member = enum_member(&schema, "example.com/vocab@5.0.0/north");             
   `unsignedLong` and `int` and narrower are numbers. `deserialize_exact` judges the `Value`s it's given:
   without serde_json's `arbitrary_precision`, a number such as `1.0000000000000000001` is already the `f64`
   `1.0`, so a caller that must refuse it parses with that feature. A JSON number past ±(2^53 − 1) for a wide integer, a number for a decimal, a string for a narrow integer, or a value outside its datatype's range is refused, ending `[json-number-form]`, as `codec-vectors-json-numbers.json` pins in every port. The two below are deprecated for them.
+- The serde binding (2.2.0), for a generated struct's fields, so serde_json reads and writes them as
+  `serialize_exact` and `deserialize_exact` do:
+  - `Integer<D>`, an `integer` or one of its sign-restricted forms held as its canonical digits, where `D` is
+    `XsdInteger`, `NonNegativeInteger`, `PositiveInteger`, `NonPositiveInteger` or `NegativeInteger`, whose range
+    it checks;
+  - `Long` and `UnsignedLong`, over `i64` and `u64`, written as strings;
+  - `Decimal`, held as its canonical digits and read from a string only.
+
+  `int` and narrower take `i32` and the rest, which serde_json already refuses a string, a fraction or overflow
+  for. Each refusal of these types ends `[json-number-form]`.
 - `serialize` — modeled fields (nulls dropped) then `$extra` spread as siblings
   (modeled wins a collision; no `$extra` key on the wire).
 - `deserialize` — `$`-keys and `$type`-modeled fields stay top-level; everything
