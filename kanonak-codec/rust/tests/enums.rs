@@ -11,8 +11,9 @@
 //!   positive hashes are the ones the same nodes produce without them;
 //! - `expectError` cases are rejected at CANONICALIZATION. Unlike the $types
 //!   file's all-three-surfaces contract this violation is schema-DEPENDENT:
-//!   `serialize` is schema-free and `deserialize` does not recurse into
-//!   embedded values, so canonicalization is the only surface that can see it.
+//!   `serialize` and `deserialize` carry an embedded value whose class the
+//!   schema lacks as it stands, so canonicalization is the only surface that
+//!   refuses it.
 
 use kanonak_codec::{canonical_form, content_hash, serialize, Node};
 use serde_json::Value as J;
@@ -116,7 +117,7 @@ fn codec_vectors_enums() {
             failures += 1;
         }
         for (i, node) in nodes.iter().enumerate() {
-            let wire = J::Object(serialize(node).unwrap());
+            let wire = J::Object(serialize(node, &schema).unwrap());
             if wire != c["expectedSerialize"][i] {
                 eprintln!("[{}] serialize[{}] mismatch", id, i);
                 failures += 1;

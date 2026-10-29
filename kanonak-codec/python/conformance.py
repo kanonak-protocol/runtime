@@ -7,6 +7,7 @@ import json
 import re
 import os
 import sys
+from decimal import Decimal
 
 # Resolve the sibling canonical port + the shared vectors without installing.
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -33,6 +34,7 @@ TYPES_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-types.js
 REFERENCES_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-references.json")
 ENUMS_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-enums.json")
 COMPAT_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-compat.json")
+JSON_NUMBERS_VECTOR_FILE = os.path.join(_HERE, "..", "vectors", "codec-vectors-json-numbers.json")
 
 
 def _expect_form_and_hash(case, cid, nodes, schema, pkg, passed, failed):
@@ -82,7 +84,7 @@ def run_file(vectors: str) -> "tuple[int, int]":
             passed, failed = _expect_form_and_hash(case, cid, nodes, schema, pkg, passed, failed)
 
         for i, node in enumerate(nodes):
-            got = serialize(node)
+            got = serialize(node, schema)
             exp = case["expectedSerialize"][i]
             if got != exp:
                 failed += 1
@@ -122,7 +124,7 @@ def run_types_file(vectors: str) -> "tuple[int, int]":
         if case.get("expectError"):
             surfaces = [
                 ("canonicalize", lambda: canonical_form(nodes, schema, pkg)),
-                ("serialize", lambda: [serialize(n) for n in nodes]),
+                ("serialize", lambda: [serialize(n, schema) for n in nodes]),
                 ("deserialize", lambda: [deserialize(n, schema) for n in nodes]),
             ]
             ok = True
@@ -153,7 +155,7 @@ def run_types_file(vectors: str) -> "tuple[int, int]":
         else:
             passed += 1
 
-        ser = [serialize(n) for n in nodes]
+        ser = [serialize(n, schema) for n in nodes]
         if ser != case["expectedSerialize"]:
             failed += 1
             print(f"FAIL [{cid}] serialize\n  got: {ser}\n  exp: {case['expectedSerialize']}")
@@ -161,7 +163,7 @@ def run_types_file(vectors: str) -> "tuple[int, int]":
             passed += 1
 
         round_tripped = [deserialize(s, schema) for s in ser]
-        rt_ser = [serialize(n) for n in round_tripped]
+        rt_ser = [serialize(n, schema) for n in round_tripped]
         rt_hash = content_hash(round_tripped, schema, pkg)
         if rt_ser != case["expectedSerialize"] or rt_hash != case["expectedHash"]:
             failed += 1
@@ -180,9 +182,9 @@ def run_enums_file(vectors: str) -> "tuple[int, int]":
     STANDS ALONE, with no ``classes`` twin; ``enums`` and an enum-ranged
     ``range`` are canonicalization-INERT; and expectError cases are rejected at
     CANONICALIZATION. Unlike the $types file's all-three-surfaces contract this
-    violation is schema-DEPENDENT — serialize is schema-free and deserialize
-    does not recurse into embedded values, so canonicalization is the only
-    surface that can see it."""
+    violation is schema-DEPENDENT — serialize and deserialize carry an embedded
+    value whose class the schema lacks as it stands, so canonicalization is the
+    only surface that refuses it."""
     with io.open(vectors, encoding="utf-8") as fh:
         data = json.load(fh)
     schema = data["schema"]
@@ -227,7 +229,7 @@ def run_enums_file(vectors: str) -> "tuple[int, int]":
 
         form = canonical_form(nodes, schema, pkg)
         hashed = content_hash(nodes, schema, pkg)
-        ser = [serialize(n) for n in nodes]
+        ser = [serialize(n, schema) for n in nodes]
         ok = True
         if form != case["expectedCanonicalForm"]:
             ok = False
@@ -314,6 +316,98 @@ def run_compat_file(vectors: str) -> "tuple[int, int]":
             ok = got == case["expectedHash"]
             if not ok:
                 print("FAIL [{}] hash got {} exp {}".format(cid, got, case["expectedHash"]))
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+
+    print("{}: {} passed, {} failed".format(os.path.basename(vectors), passed, failed))
+    return passed, failed
+
+
+def run_json_numbers_file(vectors: str) -> "tuple[int, int]":
+    """The JSON forms of integer and decimal values (runtime#54): serialize and
+    deserialize against the shared vectors. A value read must be this port's
+    exact type for its datatype, a ``Decimal`` for a decimal and an ``int`` for
+    every integer, holding the expected canonical lexical form; a value written
+    must be the expected JSON, an ``int`` or a ``str``."""
+    with io.open(vectors, encoding="utf-8") as fh:
+        data = json.load(fh)
+    schema = data["schema"]
+    props = schema["classes"][data["class"]]["props"]
+    decimal_uri = data["datatypes"]["decimal"]
+    passed = 0
+    failed = 0
+
+    def props_of(prop):
+        return schema["classes"][prop["range"]]["props"]
+
+    def exact(prop, lexical):
+        if isinstance(lexical, list):
+            return [exact(prop, item) for item in lexical]
+        if prop["kind"] == "object":
+            return {k: exact(props_of(prop)[k], v) for k, v in lexical.items()}
+        return Decimal(lexical) if prop["datatype"] == decimal_uri else int(lexical)
+
+    def lexical_of(prop, value):
+        if isinstance(value, list):
+            return [lexical_of(prop, item) for item in value]
+        if prop["kind"] == "object" and isinstance(value, dict):
+            return {k: lexical_of(props_of(prop)[k], v) for k, v in value.items()}
+        want = Decimal if prop.get("datatype") == decimal_uri else int
+        if type(value) is not want:
+            return "<{} {!r}>".format(type(value).__name__, value)
+        return format(value, "f") if want is Decimal else str(value)
+
+    def as_json(value):
+        return json.dumps(value, sort_keys=True, default=lambda v: "<{} {!r}>".format(type(v).__name__, v))
+
+    def refused(err, cid):
+        if str(err).endswith("[json-number-form]"):
+            return True
+        print("FAIL [{}] expected [json-number-form], got: {}".format(cid, err))
+        return False
+
+    # Each read case twice: as json.loads parses by default, and with parse_float=Decimal, which keeps a JSON number
+    # exact, so a non-whole one is refused rather than rounded to a whole one first.
+    read_cases = [(case, parse) for parse in (None, Decimal) for case in data["readCases"]]
+    edge = {"id": "integer-number-not-whole-past-double-precision", "field": "integer",
+            "json": "1.0000000000000000001", "expectError": True}
+    read_cases.append((edge, Decimal))
+    for case, parse_float in read_cases:
+        cid = "read " + case["id"] + (" (Decimal)" if parse_float else "")
+        field = case["field"]
+        obj = json.loads('{{"$type": {}, {}: {}}}'.format(json.dumps(data["class"]), json.dumps(field), case["json"]),
+                         parse_float=parse_float)
+        try:
+            got = lexical_of(props[field], deserialize(obj, schema)[field])
+        except ValueError as err:
+            ok = bool(case.get("expectError")) and refused(err, cid)
+            if not case.get("expectError"):
+                print("FAIL [{}] threw {}".format(cid, err))
+        else:
+            ok = not case.get("expectError") and got == case["expected"]
+            if not ok:
+                print("FAIL [{}] expected {}, got {}".format(cid, "a refusal" if case.get("expectError") else case["expected"], got))
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+
+    for case in data["writeCases"]:
+        cid = "write " + case["id"]
+        field = case["field"]
+        node = {"$type": data["class"], field: exact(props[field], case["value"])}
+        try:
+            got = serialize(node, schema)[field]
+        except ValueError as err:
+            ok = bool(case.get("expectError")) and refused(err, cid)
+            if not case.get("expectError"):
+                print("FAIL [{}] threw {}".format(cid, err))
+        else:
+            ok = not case.get("expectError") and as_json(got) == as_json(json.loads(case["json"]))
+            if not ok:
+                print("FAIL [{}] expected {}, got {}".format(cid, "a refusal" if case.get("expectError") else case["json"], as_json(got)))
         if ok:
             passed += 1
         else:
@@ -507,6 +601,10 @@ def main() -> int:
     failed += f
 
     p, f = run_types_typed()
+    passed += p
+    failed += f
+
+    p, f = run_json_numbers_file(JSON_NUMBERS_VECTOR_FILE)
     passed += p
     failed += f
 

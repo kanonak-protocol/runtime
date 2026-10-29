@@ -254,7 +254,7 @@
               "probe.example.com/schema@1.0.0/PartDef",
               "probe.example.com/schema@1.0.0/SealedDef"
             ],
-            "size": 2
+            "size": "2"
           }
         }
       ]
@@ -304,12 +304,12 @@
                 "probe.example.com/schema@1.0.0/PartDef",
                 "probe.example.com/schema@1.0.0/SealedDef"
               ],
-              "size": 1
+              "size": "1"
             },
             {
               "$name": "b",
               "$type": "probe.example.com/schema@1.0.0/PartDef",
-              "size": 2
+              "size": "2"
             }
           ]
         }

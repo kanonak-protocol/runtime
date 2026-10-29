@@ -65,9 +65,10 @@ impl Guest for Component {
         kanonak_codec::canonical_form(&nodes, &schema, &pkg).map_err(|e| e.to_string())
     }
 
-    fn serialize(node: String) -> Result<String, String> {
+    fn serialize(node: String, schema: String) -> Result<String, String> {
         let node = parse_object("node", &node)?;
-        let wire = kanonak_codec::serialize(&node).map_err(|e| e.to_string())?;
+        let schema = parse_json("schema", &schema)?;
+        let wire = kanonak_codec::serialize(&node, &schema).map_err(|e| e.to_string())?;
         to_json_string(&wire)
     }
 

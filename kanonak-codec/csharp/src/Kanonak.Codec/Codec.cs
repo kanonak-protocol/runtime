@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Numerics;
 using Kanonak.Canonical;
 
 namespace Kanonak.Codec
@@ -601,17 +602,31 @@ namespace Kanonak.Codec
         // -- Wire (de)serialization ---------------------------------------------
 
         /// <summary>
-        /// Serialize a typed node to its normalized-JSON wire form. The modeled fields
-        /// (drop null) come first in node order; then <c>$extra</c> entries spread as
-        /// sibling fields AFTER — a modeled field wins a name collision, and no
-        /// <c>$extra</c> key rides on the wire (<c>[JsonExtensionData]</c> semantics).
+        /// Serialize a node to its normalized-JSON wire form. The modeled fields (drop null) come first in node
+        /// order; then <c>$extra</c> entries spread as sibling fields AFTER — a modeled field wins a name collision,
+        /// and no <c>$extra</c> key rides on the wire (<c>[JsonExtensionData]</c> semantics). Each integer and
+        /// decimal value is written in its JSON form (kanonak-protocol 4.11.0's <c>numbers-in-json</c>), through
+        /// lists and embedded values: a wide integer and a decimal as a string of their canonical digits, a narrow
+        /// integer as a <see cref="long"/>. A wide integer is passed as a <see cref="BigInteger"/>, any integer type,
+        /// a lexical string or a whole <see cref="double"/> within ±(2^53 − 1); a decimal as a lexical string or a
+        /// <see cref="decimal"/>; a narrow integer as any integer type or a whole <see cref="double"/>. Anything
+        /// else, or a value outside its datatype's range, is refused with a message ending
+        /// <c>[json-number-form]</c>.
         /// </summary>
-        public static Dictionary<string, object> Serialize(IReadOnlyDictionary<string, object> node)
+        public static Dictionary<string, object> Serialize(IReadOnlyDictionary<string, object> node, CodecSchema schema)
         {
             // Producer-side $types validation, at every depth — fail closest to the bug.
             string where = GetString(node, "$id") ?? GetString(node, "$type") ?? "(node)";
             AssertTypesEnvelopes(node, "serialize " + where);
             AssertReferenceValues(node, "serialize " + where);
+            string typeUri = GetString(node, "$type");
+            if (typeUri == null) throw new ArgumentException("Cannot serialize: missing string $type");
+            CodecClass cls = ClassOrThrow(schema, typeUri, "node " + (GetString(node, "$id") ?? typeUri));
+            return ProjectNode(ConvertFields(node, cls, schema, WriteJsonNumber));
+        }
+
+        private static Dictionary<string, object> ProjectNode(IReadOnlyDictionary<string, object> node)
+        {
             var outMap = new Dictionary<string, object>();
             foreach (var kv in node)
             {
@@ -628,17 +643,29 @@ namespace Kanonak.Codec
         }
 
         /// <summary>
-        /// Parse normalized JSON into a typed node. <c>$</c>-envelope keys and the fields
-        /// modeled on the node's <c>$type</c> stay top-level; every other key is an
-        /// open-world assertion collected into <c>$extra</c> so a strongly-typed consumer
-        /// round-trips it losslessly. Requires a string <c>$type</c> (the one field that
-        /// cannot be inferred) and a class in the schema that can read it: the exact
-        /// class, or the same class at a compatible later version (runtime#28 — the
-        /// same lookup <see cref="TypeMatches(IReadOnlyDictionary{string, object}, string, CodecSchema)"/>
-        /// uses). The node keeps the <c>$type</c> it was WRITTEN with; the producer's
-        /// bytes are the producer's.
+        /// Parse normalized JSON into a node. <c>$</c>-envelope keys and the fields modeled on the node's
+        /// <c>$type</c> stay top-level; every other key is an open-world assertion collected into <c>$extra</c> so a
+        /// strongly-typed consumer round-trips it losslessly. Requires a string <c>$type</c> (the one field that
+        /// cannot be inferred) and a class in the schema that can read it: the exact class, or the same class at a
+        /// compatible later version (runtime#28 — the same lookup
+        /// <see cref="TypeMatches(IReadOnlyDictionary{string, object}, string, CodecSchema)"/> uses). The node keeps
+        /// the <c>$type</c> it was WRITTEN with; the producer's bytes are the producer's. Each integer and decimal
+        /// value is read exactly (kanonak-protocol 4.11.0's <c>numbers-in-json</c>), through lists and embedded
+        /// values: <c>integer</c> and its four sign-restricted forms to a <see cref="BigInteger"/>, <c>long</c> to a
+        /// <see cref="long"/> and <c>unsignedLong</c> to a <see cref="ulong"/>, each from a string or a whole JSON
+        /// number within ±(2^53 − 1); a decimal to a string of its canonical digits, from a string only; a narrow
+        /// integer to a <see cref="long"/>, from a whole JSON number only. A value JSON may already have rounded, or
+        /// one outside its datatype's range, is refused with a message ending <c>[json-number-form]</c>.
         /// </summary>
         public static Dictionary<string, object> Deserialize(IReadOnlyDictionary<string, object> json, CodecSchema schema)
+        {
+            Dictionary<string, object> node = ParseNode(json, schema);
+            string typeUri = (string)node["$type"];
+            CodecClass cls = ClassOrThrow(schema, typeUri, "node " + (GetString(node, "$id") ?? typeUri));
+            return ConvertFields(node, cls, schema, ReadJsonNumber);
+        }
+
+        internal static Dictionary<string, object> ParseNode(IReadOnlyDictionary<string, object> json, CodecSchema schema)
         {
             if (!json.TryGetValue("$type", out var typeObj) || !(typeObj is string typeUri))
                 throw new ArgumentException("Cannot deserialize: missing string $type");
@@ -664,6 +691,250 @@ namespace Kanonak.Codec
             }
             if (extra != null) node["$extra"] = extra;
             return node;
+        }
+
+        // -- The JSON forms of integer and decimal values (runtime#54) ----------
+        //
+        // kanonak-protocol 4.11.0's numbers-in-json: a JSON number can't carry every
+        // integer or decimal exactly in every language, so a wide integer and a
+        // decimal travel as a string of their digits, and a reader refuses a number
+        // that may already have been rounded.
+
+        private enum JsonNumberKind { Wide, Decimal, Narrow }
+
+        /// <summary>
+        /// How JSON carries a datatype's values, the range they must lie in, and the type this port gives an
+        /// integer as.
+        /// </summary>
+        private sealed class JsonNumberForm
+        {
+            internal readonly JsonNumberKind Kind;
+            internal readonly BigInteger? Min;
+            internal readonly BigInteger? Max;
+            internal readonly Func<BigInteger, object> Exact;
+
+            private JsonNumberForm(JsonNumberKind kind, BigInteger? min, BigInteger? max, Func<BigInteger, object> exact)
+            {
+                Kind = kind;
+                Min = min;
+                Max = max;
+                Exact = exact;
+            }
+
+            internal static JsonNumberForm Wide(BigInteger? min, BigInteger? max, Func<BigInteger, object> exact)
+                => new JsonNumberForm(JsonNumberKind.Wide, min, max, exact);
+
+            internal static JsonNumberForm Narrow(BigInteger min, BigInteger max)
+                => new JsonNumberForm(JsonNumberKind.Narrow, min, max, n => (long)n);
+
+            internal static readonly JsonNumberForm Decimal = new JsonNumberForm(JsonNumberKind.Decimal, null, null, null);
+        }
+
+        private const string Xsd = "kanonak.org/core-xsd/";
+
+        /// <summary>Every integer and decimal datatype, by versionless key, with its JSON form.</summary>
+        private static readonly Dictionary<string, JsonNumberForm> JsonNumberForms = new Dictionary<string, JsonNumberForm>
+        {
+            [Xsd + "integer"] = JsonNumberForm.Wide(null, null, n => n),
+            [Xsd + "nonNegativeInteger"] = JsonNumberForm.Wide(0, null, n => n),
+            [Xsd + "positiveInteger"] = JsonNumberForm.Wide(1, null, n => n),
+            [Xsd + "nonPositiveInteger"] = JsonNumberForm.Wide(null, 0, n => n),
+            [Xsd + "negativeInteger"] = JsonNumberForm.Wide(null, -1, n => n),
+            [Xsd + "long"] = JsonNumberForm.Wide(long.MinValue, long.MaxValue, n => (long)n),
+            [Xsd + "unsignedLong"] = JsonNumberForm.Wide(ulong.MinValue, ulong.MaxValue, n => (ulong)n),
+            [Xsd + "decimal"] = JsonNumberForm.Decimal,
+            [Xsd + "int"] = JsonNumberForm.Narrow(int.MinValue, int.MaxValue),
+            [Xsd + "short"] = JsonNumberForm.Narrow(short.MinValue, short.MaxValue),
+            [Xsd + "byte"] = JsonNumberForm.Narrow(sbyte.MinValue, sbyte.MaxValue),
+            [Xsd + "unsignedInt"] = JsonNumberForm.Narrow(uint.MinValue, uint.MaxValue),
+            [Xsd + "unsignedShort"] = JsonNumberForm.Narrow(ushort.MinValue, ushort.MaxValue),
+            [Xsd + "unsignedByte"] = JsonNumberForm.Narrow(byte.MinValue, byte.MaxValue),
+        };
+
+        /// <summary>2^53 − 1: past it a double no longer holds every whole number, so a JSON number may have been rounded.</summary>
+        private static readonly BigInteger MaxSafeInteger = new BigInteger(9007199254740991L);
+
+        private delegate object NumberConversion(CodecProp prop, JsonNumberForm form, object value);
+
+        private static ArgumentException JsonNumberError(CodecProp prop, string why)
+            => new ArgumentException(prop.Predicate + ": " + why + " [json-number-form]");
+
+        private static string DescribeJson(object value)
+        {
+            if (value == null) return "null";
+            if (value is string s) return "the string \"" + s + "\"";
+            return value.GetType().Name + " " + Lexical(value);
+        }
+
+        private static BigInteger InRange(CodecProp prop, JsonNumberForm form, BigInteger n)
+        {
+            if ((form.Min != null && n < form.Min.Value) || (form.Max != null && n > form.Max.Value))
+                throw JsonNumberError(prop, n.ToString(CultureInfo.InvariantCulture) + " is outside " + prop.Datatype + "'s range");
+            return n;
+        }
+
+        private static BigInteger IntegerOfLexical(CodecProp prop, string lexical)
+        {
+            try
+            {
+                return BigInteger.Parse(Datatypes.CanonicalInteger(lexical), CultureInfo.InvariantCulture);
+            }
+            catch (FormatException)
+            {
+                throw JsonNumberError(prop, "\"" + lexical + "\" is not an integer lexical form");
+            }
+        }
+
+        private static string DecimalOfLexical(CodecProp prop, string lexical)
+        {
+            try
+            {
+                return Datatypes.CanonicalDecimal(lexical);
+            }
+            catch (FormatException)
+            {
+                throw JsonNumberError(prop, "\"" + lexical + "\" is not a decimal lexical form");
+            }
+        }
+
+        private static bool IsWhole(double d) => !double.IsNaN(d) && !double.IsInfinity(d) && Math.Floor(d) == d;
+
+        /// <summary>The value of any built-in integer type, or null for anything else.</summary>
+        private static BigInteger? IntegerValue(object value)
+        {
+            switch (value)
+            {
+                case sbyte n: return n;
+                case byte n: return n;
+                case short n: return n;
+                case ushort n: return n;
+                case int n: return n;
+                case uint n: return n;
+                case long n: return n;
+                case ulong n: return n;
+                default: return null;
+            }
+        }
+
+        /// <summary>The value of a JSON number, as any CLR number type holds one, when it is whole; else null.</summary>
+        private static BigInteger? WholeJsonNumber(object value)
+        {
+            switch (value)
+            {
+                case double d: return IsWhole(d) ? new BigInteger(d) : (BigInteger?)null;
+                case float f: return IsWhole(f) ? new BigInteger(f) : (BigInteger?)null;
+                case decimal m: return decimal.Truncate(m) == m ? new BigInteger(m) : (BigInteger?)null;
+                default: return IntegerValue(value);
+            }
+        }
+
+        /// <summary>A value as JSON carries it, to the exact type this port gives it.</summary>
+        private static object ReadJsonNumber(CodecProp prop, JsonNumberForm form, object value)
+        {
+            switch (form.Kind)
+            {
+                case JsonNumberKind.Decimal:
+                    if (!(value is string decimalLexical))
+                        throw JsonNumberError(prop,
+                            "a decimal is read from a JSON string only, so it can't have been rounded; got " + DescribeJson(value));
+                    return DecimalOfLexical(prop, decimalLexical);
+                case JsonNumberKind.Wide:
+                    if (value is string lexical) return form.Exact(InRange(prop, form, IntegerOfLexical(prop, lexical)));
+                    BigInteger? safe = WholeJsonNumber(value);
+                    if (safe != null && BigInteger.Abs(safe.Value) <= MaxSafeInteger)
+                        return form.Exact(InRange(prop, form, safe.Value));
+                    throw JsonNumberError(prop,
+                        "a wide integer is read from a string, or from a whole JSON number within ±(2^53 − 1); got " +
+                        DescribeJson(value));
+                default:
+                    BigInteger? whole = WholeJsonNumber(value);
+                    if (whole == null)
+                        throw JsonNumberError(prop, "a narrow integer is read from a whole JSON number only; got " + DescribeJson(value));
+                    return form.Exact(InRange(prop, form, whole.Value));
+            }
+        }
+
+        /// <summary>A value of a type this port accepts, to its JSON form.</summary>
+        private static object WriteJsonNumber(CodecProp prop, JsonNumberForm form, object value)
+        {
+            switch (form.Kind)
+            {
+                case JsonNumberKind.Decimal:
+                    if (value is string decimalLexical) return DecimalOfLexical(prop, decimalLexical);
+                    if (value is decimal m) return DecimalOfLexical(prop, m.ToString(CultureInfo.InvariantCulture));
+                    throw JsonNumberError(prop,
+                        "pass a decimal as a string of its digits or a System.Decimal, which hold it exactly; got " +
+                        DescribeJson(value));
+                case JsonNumberKind.Wide:
+                    BigInteger? n = value is BigInteger big ? big
+                        : value is string lexical ? IntegerOfLexical(prop, lexical)
+                        : value is double d && IsWhole(d) && Math.Abs(d) <= 9007199254740991d ? new BigInteger(d)
+                        : IntegerValue(value);
+                    if (n == null)
+                        throw JsonNumberError(prop,
+                            "pass a wide integer as a BigInteger, an integer type, a string, or a whole double within " +
+                            "±(2^53 − 1); got " + DescribeJson(value));
+                    return InRange(prop, form, n.Value).ToString(CultureInfo.InvariantCulture);
+                default:
+                    BigInteger? whole = value is double nd && IsWhole(nd) ? new BigInteger(nd) : IntegerValue(value);
+                    if (whole == null)
+                        throw JsonNumberError(prop, "pass a narrow integer as an integer type or a whole double; got " + DescribeJson(value));
+                    return form.Exact(InRange(prop, form, whole.Value));
+            }
+        }
+
+        private static JsonNumberForm JsonNumberFormOf(CodecProp prop)
+        {
+            if (prop.Kind != "datatype" || prop.Datatype == null) return null;
+            string key = Coordinate.LenientVersionlessKey(prop.Datatype);
+            return key != null && JsonNumberForms.TryGetValue(key, out var form) ? form : null;
+        }
+
+        private static CodecClass ClassOrThrow(CodecSchema schema, string typeUri, string what)
+        {
+            CodecClass cls = ClassFor(schema, typeUri, out var error);
+            if (cls == null) throw new ArgumentException("Cannot convert " + what + ": " + error);
+            return cls;
+        }
+
+        /// <summary>
+        /// A copy of a node or embedded value with each modeled field's integers and decimals converted, through
+        /// lists and embedded values. <c>$</c>-envelope keys, <c>$extra</c> and references are left as they are.
+        /// </summary>
+        private static Dictionary<string, object> ConvertFields(
+            IReadOnlyDictionary<string, object> fields, CodecClass cls, CodecSchema schema, NumberConversion convert)
+        {
+            var outMap = new Dictionary<string, object>();
+            foreach (var kv in fields) outMap[kv.Key] = kv.Value;
+            foreach (var kv in cls.Props)
+            {
+                if (outMap.TryGetValue(kv.Key, out var value) && value != null)
+                    outMap[kv.Key] = ConvertValue(kv.Value, value, schema, convert);
+            }
+            return outMap;
+        }
+
+        private static object ConvertValue(CodecProp prop, object value, CodecSchema schema, NumberConversion convert)
+        {
+            if (IsList(value, out var items))
+            {
+                var list = new List<object>();
+                foreach (var item in items) list.Add(ConvertValue(prop, item, schema, convert));
+                return list;
+            }
+            if (prop.Kind == "datatype")
+            {
+                JsonNumberForm form = JsonNumberFormOf(prop);
+                return form == null ? value : convert(prop, form, value);
+            }
+            if (value is IReadOnlyDictionary<string, object> map && !map.ContainsKey("$ref"))
+            {
+                string clsUri = GetString(map, "$type") ?? prop.Range;
+                CodecClass cls = clsUri == null ? null : ClassFor(schema, clsUri, out _);
+                // A value no class here types is carried as given, as $extra is; hashing refuses it where it must (runtime#37).
+                return cls == null ? value : ConvertFields(map, cls, schema, convert);
+            }
+            return value;
         }
 
         // -- Helpers -------------------------------------------------------------

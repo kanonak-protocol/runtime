@@ -15,14 +15,14 @@ local-name fields. A generated typed model serializes to one.
 
 ```rust
 use kanonak_codec::{
-    build_package, canonical_form, content_hash, deserialize, enum_member, serialize,
-    type_matches, Node,
+    build_package, canonical_form, content_hash, deserialize, enum_member, serialize, type_matches,
+    Node,
 };
 
 // nodes: &[Node], schema/pkg: &serde_json::Value
 let hash = content_hash(&nodes, &schema, &pkg)?;   // "sha256:..."
 let form = canonical_form(&nodes, &schema, &pkg)?; // {"subjects":[...]}
-let wire = serialize(&node)?;                       // normalized-JSON Node
+let wire = serialize(&node, &schema)?;              // normalized-JSON Node, numbers in their JSON forms
 let node = deserialize(&wire, &schema)?;            // typed Node (unmodeled -> $extra)
 let is_app = type_matches(&node, "example.com/vocab@5.1.0/Application", &schema)?; // bool
 let member = enum_member(&schema, "example.com/vocab@5.0.0/north");                // Option<EnumMemberMatch>
@@ -31,10 +31,27 @@ let member = enum_member(&schema, "example.com/vocab@5.0.0/north");             
 - `build_package` — the canonical input model (subject per node + synthesized
   package-wrapper subject). The seam every other entrypoint shares.
 - `content_hash` / `canonical_form` — delegate to `kanonak-canonical`.
-- `serialize` — modeled fields (nulls dropped) then `$extra` spread as siblings
-  (modeled wins a collision; no `$extra` key on the wire).
-- `deserialize` — `$`-keys and `$type`-modeled fields stay top-level; everything
-  else collects into `$extra` for lossless round-trip.
+- `serialize` / `deserialize` — the normalized-JSON wire form. `serialize` writes modeled fields
+  (nulls dropped) then `$extra` spread as siblings (modeled wins a collision; no `$extra` key on the
+  wire); `deserialize` keeps `$`-keys and `$type`-modeled fields top-level and collects everything
+  else into `$extra` for lossless round-trip. From 3.0.0, each integer and decimal value travels in
+  its JSON form (kanonak-protocol 4.11.0's `numbers-in-json`, runtime#54), through lists and embedded
+  values. In the node, `integer`, its four sign-restricted forms and `decimal` are a string of their
+  canonical digits, since a `serde_json::Value` holds no integer past 64 bits; `long`,
+  `unsignedLong` and `int` and narrower are numbers. An embedded value whose class the schema doesn't
+  hold is carried as given. `deserialize` judges the `Value`s it's given: without serde_json's
+  `arbitrary_precision`, a number such as `1.0000000000000000001` is already the `f64` `1.0`, so a
+  caller that must refuse it parses with that feature. A JSON number past ±(2^53 − 1) for a wide integer, a number for a decimal, a string for a narrow integer, or a value outside its datatype's range is refused, ending `[json-number-form]`, as `codec-vectors-json-numbers.json` pins in every port.
+- The serde binding (3.0.0), for a generated struct's fields, so serde_json reads and writes them as
+  `serialize` and `deserialize` do:
+  - `Integer<D>`, an `integer` or one of its sign-restricted forms held as its canonical digits, where `D` is
+    `XsdInteger`, `NonNegativeInteger`, `PositiveInteger`, `NonPositiveInteger` or `NegativeInteger`, whose range
+    it checks;
+  - `Long` and `UnsignedLong`, over `i64` and `u64`, written as strings;
+  - `Decimal`, held as its canonical digits and read from a string only.
+
+  `int` and narrower take `i32` and the rest, which serde_json already refuses a string, a fraction or overflow
+  for. Each refusal of these types ends `[json-number-form]`.
 - `type_matches` — whether a node (any member of `$types`, else its `$type`) is
   an instance of a class: the class itself, or a subclass whose schema entry
   lists it in the optional `ancestors` field (every superclass, transitively,
@@ -48,7 +65,7 @@ let member = enum_member(&schema, "example.com/vocab@5.0.0/north");             
 earlier compatible version of the schema's own package still reads: the exact
 versioned class first, else the same class at the highest version for which
 `kanonak_canonical::is_readable_by(written, schema_version)` holds.
-`deserialize`, `type_matches` and `enum_member` share that one lookup, and the
+`serialize`, `deserialize`, `type_matches` and `enum_member` share that one lookup, and the
 decoded node keeps the `$type` it was written with. Rejections end in a
 bracketed kind — `[unknown-type]`, `[newer-version]`, `[other-major]`,
 `[other-minor-line]`. Hashing stays EXACT-VERSION only: a content hash is

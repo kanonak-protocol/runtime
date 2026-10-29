@@ -1,4 +1,5 @@
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -8,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.kanonak.canonical.Coordinate;
 import org.kanonak.codec.Codec;
 import org.kanonak.codec.CodecSchema;
 import org.kanonak.codec.CodecSchema.CodecClass;
@@ -67,6 +69,12 @@ public final class Conformance {
             passed += cc[0];
             failed += cc[1];
             System.out.println(compatVectors + ": " + cc[0] + " passed, " + cc[1] + " failed");
+
+            String numbersVectors = "../vectors/codec-vectors-json-numbers.json";
+            int[] nc = runJsonNumbersFile(numbersVectors);
+            passed += nc[0];
+            failed += nc[1];
+            System.out.println(numbersVectors + ": " + nc[0] + " passed, " + nc[1] + " failed");
         }
 
         System.out.println("\n" + passed + " passed, " + failed + " failed");
@@ -109,7 +117,7 @@ public final class Conformance {
                     ok = false;
                     System.out.println("FAIL [" + cid + "] expected canonicalize to reject, it did not");
                 }
-                if (!rejects(() -> nodes.forEach(Codec::serialize))) {
+                if (!rejects(() -> nodes.forEach(n -> Codec.serialize(n, schema)))) {
                     ok = false;
                     System.out.println("FAIL [" + cid + "] expected serialize to reject, it did not");
                 }
@@ -147,14 +155,14 @@ public final class Conformance {
             List<Map<String, Object>> roundTripped = new ArrayList<>();
             boolean serOk = true;
             for (int i = 0; i < nodes.size(); i++) {
-                Map<String, Object> wire = Codec.serialize(nodes.get(i));
+                Map<String, Object> wire = Codec.serialize(nodes.get(i), schema);
                 if (!deepEquals(wire, expSerialize.get(i))) {
                     serOk = false;
                     System.out.println("FAIL [" + cid + "] serialize[" + i + "]\n  got: " + wire
                         + "\n  exp: " + expSerialize.get(i));
                 }
                 Map<String, Object> back = Codec.deserialize(wire, schema);
-                if (!deepEquals(Codec.serialize(back), expSerialize.get(i))) {
+                if (!deepEquals(Codec.serialize(back, schema), expSerialize.get(i))) {
                     serOk = false;
                     System.out.println("FAIL [" + cid + "] round-trip serialize[" + i + "] mismatch");
                 }
@@ -240,7 +248,7 @@ public final class Conformance {
 
             List<Object> expSerialize = asList(caseObj.get("expectedSerialize"));
             for (int i = 0; i < nodes.size(); i++) {
-                Object got = Codec.serialize(nodes.get(i));
+                Object got = Codec.serialize(nodes.get(i), schema);
                 Object exp = expSerialize.get(i);
                 if (deepEquals(got, exp)) {
                     passed++;
@@ -323,9 +331,9 @@ public final class Conformance {
      * STANDS ALONE, with no `classes` twin; `enums` and an enum-ranged `range`
      * are canonicalization-INERT; and expectError cases are rejected at
      * CANONICALIZATION. Unlike the $types file's all-three-surfaces contract
-     * this violation is schema-DEPENDENT: serialize is schema-free and
-     * deserialize does not recurse into embedded values, so canonicalization is
-     * the only surface that can see it.
+     * this violation is schema-DEPENDENT: serialize and deserialize carry an
+     * embedded value whose class the schema lacks as it stands, so
+     * canonicalization is the only surface that refuses it.
      */
     static int[] runEnumsFile(String vectors) throws Exception {
         @SuppressWarnings("unchecked")
@@ -408,7 +416,7 @@ public final class Conformance {
             }
             List<Object> expectedSer = asList(caseObj.get("expectedSerialize"));
             for (int i = 0; i < nodes.size(); i++) {
-                if (!deepEquals(Codec.serialize(nodes.get(i)), expectedSer.get(i))) {
+                if (!deepEquals(Codec.serialize(nodes.get(i), schema), expectedSer.get(i))) {
                     ok = false;
                     System.out.println("FAIL [" + cid + "] serialize[" + i + "] mismatch");
                 }
@@ -518,6 +526,160 @@ public final class Conformance {
         }
 
         return new int[] {passed, failed};
+    }
+
+    /** This port's type for each datatype JSON carries in a form of its own, by versionless key (runtime#54). */
+    static final Map<String, Class<?>> EXACT_TYPES = exactTypes();
+
+    static Map<String, Class<?>> exactTypes() {
+        Map<String, Class<?>> types = new LinkedHashMap<>();
+        for (String name : List.of("integer", "nonNegativeInteger", "positiveInteger", "nonPositiveInteger",
+                "negativeInteger", "unsignedLong")) {
+            types.put("kanonak.org/core-xsd/" + name, BigInteger.class);
+        }
+        for (String name : List.of("long", "int", "short", "byte", "unsignedInt", "unsignedShort", "unsignedByte")) {
+            types.put("kanonak.org/core-xsd/" + name, Long.class);
+        }
+        types.put("kanonak.org/core-xsd/decimal", BigDecimal.class);
+        return types;
+    }
+
+    /**
+     * The JSON forms of integer and decimal values (runtime#54), through
+     * {@link Codec#deserialize} and {@link Codec#serialize}. A read
+     * case parses {@code {"$type": class, field: json}} with this runner's
+     * reader, whose numbers keep their tokens, and compares the field's value,
+     * each scalar of its datatype's type here, as its canonical lexical form.
+     * A write case builds the field's value in those types and compares what
+     * is written with the parsed {@code json}, every number written a
+     * {@link Long}. A refusal must end {@code [json-number-form]}.
+     */
+    static int[] runJsonNumbersFile(String vectors) throws Exception {
+        Map<String, Object> data = asMap(Json.parse(Files.readString(Paths.get(vectors), StandardCharsets.UTF_8)));
+        CodecSchema schema = parseSchema(asMap(data.get("schema")));
+        String typeUri = (String) data.get("class");
+        CodecClass cls = schema.classes().get(typeUri);
+
+        int passed = 0;
+        int failed = 0;
+
+        for (Object co : asList(data.get("readCases"))) {
+            Map<String, Object> c = asMap(co);
+            String cid = (String) c.get("id");
+            String field = (String) c.get("field");
+            Map<String, Object> json = asMap(Json.parse(
+                "{\"$type\": " + toJson(typeUri) + ", " + toJson(field) + ": " + c.get("json") + "}"));
+            boolean ok;
+            if (Boolean.TRUE.equals(c.get("expectError"))) {
+                ok = rejectsWithKind(() -> Codec.deserialize(json, schema), "json-number-form", cid);
+            } else {
+                try {
+                    Object got = lexicalOf(cls.props().get(field), Codec.deserialize(json, schema).get(field), schema);
+                    ok = deepEquals(got, c.get("expected"));
+                    if (!ok) {
+                        System.out.println("FAIL [" + cid + "] deserialize\n  got: " + got + "\n  exp: " + c.get("expected"));
+                    }
+                } catch (RuntimeException err) {
+                    ok = false;
+                    System.out.println("FAIL [" + cid + "] deserialize threw: " + err.getMessage());
+                }
+            }
+            if (ok) passed++; else failed++;
+        }
+
+        for (Object co : asList(data.get("writeCases"))) {
+            Map<String, Object> c = asMap(co);
+            String cid = (String) c.get("id");
+            String field = (String) c.get("field");
+            Map<String, Object> node = new LinkedHashMap<>();
+            node.put("$type", typeUri);
+            node.put(field, exactOf(cls.props().get(field), c.get("value"), schema));
+            boolean ok;
+            if (Boolean.TRUE.equals(c.get("expectError"))) {
+                ok = rejectsWithKind(() -> Codec.serialize(node, schema), "json-number-form", cid);
+            } else {
+                Object exp = Json.parse((String) c.get("json"));
+                try {
+                    Object got = Codec.serialize(node, schema).get(field);
+                    ok = deepEquals(got, exp) && numbersAreLongs(got);
+                    if (!ok) {
+                        System.out.println("FAIL [" + cid + "] serialize\n  got: " + got + "\n  exp: " + exp);
+                    }
+                } catch (RuntimeException err) {
+                    ok = false;
+                    System.out.println("FAIL [" + cid + "] serialize threw: " + err.getMessage());
+                }
+            }
+            if (ok) passed++; else failed++;
+        }
+
+        return new int[] {passed, failed};
+    }
+
+    /**
+     * A value {@link Codec#deserialize} gave, as its canonical lexical
+     * form: a list item by item, an embedded value field by field. A scalar
+     * that isn't of its datatype's type here renders as what it is instead.
+     */
+    static Object lexicalOf(CodecProp prop, Object value, CodecSchema schema) {
+        if (value instanceof List<?> list) {
+            List<Object> out = new ArrayList<>();
+            for (Object item : list) {
+                out.add(lexicalOf(prop, item, schema));
+            }
+            return out;
+        }
+        if (value instanceof Map<?, ?> m) {
+            CodecClass embedded = schema.classes().get(prop.range());
+            Map<String, Object> out = new LinkedHashMap<>();
+            for (Map.Entry<String, Object> e : asMap(m).entrySet()) {
+                out.put(e.getKey(), lexicalOf(embedded.props().get(e.getKey()), e.getValue(), schema));
+            }
+            return out;
+        }
+        Class<?> type = EXACT_TYPES.get(Coordinate.lenientVersionlessKey(prop.datatype()));
+        if (!type.isInstance(value)) {
+            return "a " + value.getClass().getSimpleName() + ", where this port holds a " + type.getSimpleName();
+        }
+        return value instanceof BigDecimal d ? d.toPlainString() : value.toString();
+    }
+
+    /** A canonical lexical form as this port's type for its datatype: a list item by item, an embedded value field by field. */
+    static Object exactOf(CodecProp prop, Object lexical, CodecSchema schema) {
+        if (lexical instanceof List<?> list) {
+            List<Object> out = new ArrayList<>();
+            for (Object item : list) {
+                out.add(exactOf(prop, item, schema));
+            }
+            return out;
+        }
+        if (lexical instanceof Map<?, ?> m) {
+            CodecClass embedded = schema.classes().get(prop.range());
+            Map<String, Object> out = new LinkedHashMap<>();
+            for (Map.Entry<String, Object> e : asMap(m).entrySet()) {
+                out.put(e.getKey(), exactOf(embedded.props().get(e.getKey()), e.getValue(), schema));
+            }
+            return out;
+        }
+        String text = (String) lexical;
+        Class<?> type = EXACT_TYPES.get(Coordinate.lenientVersionlessKey(prop.datatype()));
+        if (type == BigDecimal.class) {
+            return new BigDecimal(text);
+        }
+        BigInteger n = new BigInteger(text);
+        // A value past a long's range, which serialize must refuse, can only be given as a BigInteger.
+        return type == BigInteger.class || n.bitLength() >= 64 ? n : (Object) n.longValue();
+    }
+
+    /** Whether every number in a written value is a {@link Long}, as serialize writes a narrow integer. */
+    static boolean numbersAreLongs(Object value) {
+        if (value instanceof List<?> list) {
+            return list.stream().allMatch(Conformance::numbersAreLongs);
+        }
+        if (value instanceof Map<?, ?> m) {
+            return m.values().stream().allMatch(Conformance::numbersAreLongs);
+        }
+        return !(value instanceof Number) || value instanceof Long;
     }
 
     /** Whether {@code run} throws with a message ending in {@code [kind]}; reports otherwise. */

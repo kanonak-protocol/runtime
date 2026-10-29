@@ -72,7 +72,7 @@
           "$id": "probe.example.com/data@1.0.0/a1",
           "accountCode": "paul",
           "seats": 5,
-          "rate": 1.5,
+          "rate": "1.5",
           "active": true,
           "owner": {
             "$ref": "probe.example.com/data@1.0.0/p1"
@@ -95,8 +95,8 @@
           "$type": "probe.example.com/schema@1.0.0/Account",
           "$id": "probe.example.com/data@1.0.0/a1",
           "accountCode": "paul",
-          "seats": 5,
-          "rate": 1.5,
+          "seats": "5",
+          "rate": "1.5",
           "active": true,
           "owner": {
             "$ref": "probe.example.com/data@1.0.0/p1"

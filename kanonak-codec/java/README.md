@@ -20,8 +20,8 @@ A node is a `Map<String, Object>`: the `$`-envelope (`$type`, `$id`, optional
 Codec.buildPackage(nodes, schema, pkg);   // -> CanonicalForm.Package
 Codec.canonicalForm(nodes, schema, pkg);  // the {subjects:[...]} JSON
 Codec.contentHash(nodes, schema, pkg);    // "sha256:..." — matches `kanonak hash`
-Codec.serialize(node);                    // node -> normalized-JSON wire Map
-Codec.deserialize(json, schema);          // normalized-JSON Map -> node
+Codec.serialize(node, schema);            // node -> normalized-JSON wire Map, numbers in their JSON forms
+Codec.deserialize(json, schema);          // normalized-JSON Map -> node, numbers exact
 Codec.typeMatches(node, classUri, schema); // a generated type guard (also takes a KanonakNode)
 Codec.enumMember(schema, ref);            // -> EnumMemberMatch(enumType, uri, member), or null
 ```
@@ -36,9 +36,20 @@ no `$extra` key appears on the wire). `deserialize` does the inverse split:
 `$`-prefixed keys and keys modeled on `$type` stay top-level, everything else
 goes under `$extra`.
 
+From 3.0.0, each integer and decimal value travels in its JSON form
+(kanonak-protocol 4.11.0's `numbers-in-json`, runtime#54), through lists and
+embedded values. `deserialize` gives `integer` and its four sign-restricted
+forms as a `BigInteger`, `long` as a `Long`, `unsignedLong` as a `BigInteger`,
+`decimal` as a `BigDecimal`, and `int` and narrower as a `Long`; `serialize`
+writes a wide integer and a decimal as a string of their canonical digits, and a
+narrow integer as a `Long`. An embedded value whose class the schema doesn't
+hold is carried as given. A JSON number past ±(2^53 − 1) for a wide integer, a number for a decimal, a string for a narrow integer, or a value outside its datatype's range is refused, ending `[json-number-form]`, as `codec-vectors-json-numbers.json` pins in every port.
+
 Numeric scalars may be supplied as a plain `Number` or as a `JsonNumber` (which
 retains the exact source token, so the lexical form has no locale or
-trailing-zero/scientific artifacts).
+trailing-zero/scientific artifacts). `serialize` takes a decimal only as a
+`BigDecimal` or a string of its digits; its Javadoc lists what it takes for each
+datatype.
 
 An object property's value is either a reference (`{"$ref": uri}`) or an
 embedded value (0.2.0): a map with no `$id`, an optional `$name` (the authored
@@ -88,8 +99,9 @@ TypedNodes.toNode(typed, schema);  // typed instance -> node (the Map contract)
 ```
 
 `toNode` projects the instance to its wire map reflectively (JDK-only — no
-JSON library) and splits it back through `Codec.deserialize`, so the typed
-path and the dictionary path are one contract, not two.
+JSON library) and splits it back as `Codec.deserialize` splits it, its values
+as the instance holds them, so the typed path and the dictionary path are one
+contract, not two.
 
 ### Reading and writing with Jackson (2.1.0)
 

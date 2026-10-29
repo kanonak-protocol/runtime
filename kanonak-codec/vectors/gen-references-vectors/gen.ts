@@ -153,13 +153,13 @@ const strip = (nodes: CodecNode[]): CodecNode[] =>
 for (const c of accepted) {
   c.expectedCanonicalForm = packageCanonicalForm(c.nodes, schema, c.pkg);
   c.expectedHash = packageContentHash(c.nodes, schema, c.pkg);
-  c.expectedSerialize = c.nodes.map((n) => serialize(n));
+  c.expectedSerialize = c.nodes.map((n) => serialize(n, schema));
 }
 for (const c of rejected) {
   // All three surfaces reject, for the fragment and only the fragment.
   for (const [what, run] of [
     ['canonicalize', () => packageCanonicalForm(c.nodes, schema, c.pkg)],
-    ['serialize', () => c.nodes.map((n) => serialize(n))],
+    ['serialize', () => c.nodes.map((n) => serialize(n, schema))],
     ['deserialize', () => c.nodes.map((n) => deserialize(n as Record<string, unknown>, schema))],
   ] as const) {
     if (!throws(run)) throw new Error(`case ${c.id}: expected ${what} to reject, it did not`);

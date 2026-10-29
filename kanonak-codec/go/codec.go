@@ -233,7 +233,8 @@ type PackageContext struct {
 
 // lexical returns the raw lexical token of a scalar — the input the canonical
 // form normalizes. bool -> "true"/"false", string -> as-is, json.Number ->
-// its original token. Anything else fails loudly.
+// its original token, *big.Int or a Go integer -> its digits, as Deserialize
+// gives them. Anything else fails loudly.
 func lexical(value interface{}) (string, error) {
 	switch v := value.(type) {
 	case bool:
@@ -243,11 +244,13 @@ func lexical(value interface{}) (string, error) {
 		return "false", nil
 	case string:
 		return v, nil
-	case interface{ String() string }: // json.Number
+	case interface{ String() string }: // json.Number, *big.Int
 		return v.String(), nil
-	default:
-		return "", fmt.Errorf("codec: unsupported scalar lexical %T (%v)", value, value)
 	}
+	if n, ok := goInteger(value); ok {
+		return n.String(), nil
+	}
+	return "", fmt.Errorf("codec: unsupported scalar lexical %T (%v)", value, value)
 }
 
 // value builds a canonical Value for a single (non-list) raw field value.
@@ -497,25 +500,10 @@ func ContentHash(nodes []map[string]interface{}, schema CodecSchema, pkg Package
 	return canonical.CanonicalHash(p)
 }
 
-// Serialize renders a typed node to its normalized-JSON wire form. $extra
-// entries ride as sibling fields after the modeled ones; a modeled field wins a
-// name collision ([JsonExtensionData] semantics). nil values are dropped.
-// Fallible since 0.4.0: an invalid $types envelope (at any depth) is a producer
-// bug and fails at emit time.
-func Serialize(node map[string]interface{}) (map[string]interface{}, error) {
-	where, _ := node["$id"].(string)
-	if where == "" {
-		where, _ = node["$type"].(string)
-	}
-	if where == "" {
-		where = "(node)"
-	}
-	if err := assertTypesEnvelopes(node, "serialize "+where); err != nil {
-		return nil, err
-	}
-	if err := assertReferenceValues(node, "serialize "+where); err != nil {
-		return nil, err
-	}
+// projectNode is a node's normalized-JSON wire projection. $extra entries ride
+// as sibling fields after the modeled ones; a modeled field wins a name
+// collision ([JsonExtensionData] semantics). nil values are dropped.
+func projectNode(node map[string]interface{}) map[string]interface{} {
 	out := make(map[string]interface{})
 	for key, val := range node {
 		if key == "$extra" || val == nil {
@@ -533,18 +521,19 @@ func Serialize(node map[string]interface{}) (map[string]interface{}, error) {
 			}
 		}
 	}
-	return out, nil
+	return out
 }
 
-// Deserialize parses normalized JSON into a typed node. $-envelope keys and
-// fields modeled on the node's $type stay top-level; every other key is
-// collected into $extra so a strongly-typed consumer round-trips it losslessly.
+// parseNode is a node parsed from normalized JSON, its values as JSON gave
+// them. $-envelope keys and fields modeled on the node's $type stay top-level;
+// every other key is collected into $extra so a strongly-typed consumer
+// round-trips it losslessly.
 //
 // Requires a class in the schema that can read $type: the exact class, or the
 // same class at a compatible later version (runtime#28 - see classFor). The
 // node keeps the $type it was WRITTEN with; the producer's bytes are the
 // producer's.
-func Deserialize(jsonObj map[string]interface{}, schema CodecSchema) (map[string]interface{}, error) {
+func parseNode(jsonObj map[string]interface{}, schema CodecSchema) (map[string]interface{}, error) {
 	typeURI, ok := jsonObj["$type"].(string)
 	if !ok {
 		return nil, fmt.Errorf("codec: cannot deserialize: missing string $type")

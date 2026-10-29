@@ -23,8 +23,9 @@ var memberURIRe = regexp.MustCompile(`^[^/]+/[^/@]+@\d+\.\d+\.\d+/[^/]+$`)
 //     positive hashes are the ones the same nodes produce without them);
 //   - expectError cases are rejected at CANONICALIZATION. Unlike the $types
 //     file's all-three-surfaces contract this violation is schema-DEPENDENT:
-//     Serialize is schema-free and Deserialize does not recurse into embedded
-//     values, so canonicalization is the only surface that can see it.
+//     Serialize and Deserialize carry an embedded value whose class the schema
+//     lacks as it stands, so canonicalization is the only surface that refuses
+//     it.
 func TestCodecVectorsEnums(t *testing.T) {
 	data, err := os.ReadFile("../vectors/codec-vectors-enums.json")
 	if err != nil {
@@ -70,6 +71,16 @@ func TestCodecVectorsEnums(t *testing.T) {
 			if _, err := CanonicalForm(c.Nodes, schema, pkg); err == nil {
 				t.Errorf("[%s] expected canonicalization to reject, it did not", c.ID)
 			}
+			for i, node := range c.Nodes {
+				wire, serErr := Serialize(node, schema)
+				back, deErr := Deserialize(node, schema)
+				want := normalizeJSON(t, node)
+				if serErr != nil || deErr != nil || !reflect.DeepEqual(normalizeJSON(t, wire), want) ||
+					!reflect.DeepEqual(normalizeJSON(t, back), want) {
+					t.Errorf("[%s] node[%d]: serialize and deserialize must carry it as given, got %v (%v) and %v (%v)",
+						c.ID, i, wire, serErr, back, deErr)
+				}
+			}
 			continue
 		}
 
@@ -92,7 +103,7 @@ func TestCodecVectorsEnums(t *testing.T) {
 		}
 
 		for i, node := range c.Nodes {
-			wire, err := Serialize(node)
+			wire, err := Serialize(node, schema)
 			if err != nil {
 				t.Errorf("[%s] serialize[%d] error: %v", c.ID, i, err)
 				continue

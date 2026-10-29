@@ -36,7 +36,7 @@ function runFile(relative: string): void {
   for (const c of d.cases) {
     const nodes: CodecNode[] = c.nodes;
     const pkg: PackageContext = c.pkg;
-    const ser = nodes.map((n) => serialize(n));
+    const ser = nodes.map((n) => serialize(n, schema));
     const serOk = JSON.stringify(ser) === JSON.stringify(c.expectedSerialize);
 
     if (c.expectHashError) {
@@ -98,9 +98,9 @@ function runFile(relative: string): void {
  *    positive hashes are the ones the same nodes produce without them);
  *  - `expectError` cases must be rejected at CANONICALIZATION. Unlike the
  *    $types file's all-three-surfaces contract, this violation is
- *    schema-DEPENDENT: `serialize` is schema-free and `deserialize` does not
- *    recurse into embedded values, so canonicalization is the only surface
- *    that can see it. Requiring the other two would be requiring them to do
+ *    schema-DEPENDENT: `serialize` and `deserialize` carry an embedded value
+ *    whose class the schema lacks as it stands, so canonicalization is the
+ *    only surface that can see it. Requiring the other two would be requiring them to do
  *    something they are deliberately not built to do.
  */
 function runEnumsFile(relative: string): void {
@@ -155,7 +155,7 @@ function runEnumsFile(relative: string): void {
 
     const form = packageCanonicalForm(nodes, schema, pkg);
     const hash = packageContentHash(nodes, schema, pkg);
-    const ser = nodes.map((n) => serialize(n));
+    const ser = nodes.map((n) => serialize(n, schema));
 
     const formOk = form === c.expectedCanonicalForm;
     const hashOk = hash === c.expectedHash;
@@ -188,7 +188,7 @@ function runTypesFile(relative: string): void {
     if (c.expectError) {
       const surfaces: Array<[string, () => unknown]> = [
         ['canonicalize', () => packageCanonicalForm(nodes, schema, pkg)],
-        ['serialize', () => nodes.map((n) => serialize(n))],
+        ['serialize', () => nodes.map((n) => serialize(n, schema))],
         ['deserialize', () => nodes.map((n) => deserialize(n as Record<string, unknown>, schema))],
       ];
       let ok = true;
@@ -206,9 +206,9 @@ function runTypesFile(relative: string): void {
 
     const form = packageCanonicalForm(nodes, schema, pkg);
     const hash = packageContentHash(nodes, schema, pkg);
-    const ser = nodes.map((n) => serialize(n));
-    const roundTripped = nodes.map((n) => deserialize(serialize(n), schema));
-    const rtSer = roundTripped.map((n) => serialize(n));
+    const ser = nodes.map((n) => serialize(n, schema));
+    const roundTripped = nodes.map((n) => deserialize(serialize(n, schema), schema));
+    const rtSer = roundTripped.map((n) => serialize(n, schema));
     const rtHash = packageContentHash(roundTripped, schema, pkg);
 
     const formOk = form === c.expectedCanonicalForm;
@@ -474,6 +474,60 @@ console.log(`typed surface: ${typedPass}/${typedTotal} pass`);
   if (safe === packageContentHash([account({ seats: '42' })], schema, pkg)) pass++;
   else { totalFails++; console.error('unsafe-number safe integer: a number and its string hash differently'); }
   console.log(`unsafe numbers (TypeScript only): ${pass}/4 pass`);
+}
+
+// The JSON forms of integer and decimal values (runtime#54): serialize and deserialize against the shared vectors.
+{
+  const relative = 'codec-vectors-json-numbers.json';
+  const d: any = JSON.parse(readFileSync(new URL(`../../vectors/${relative}`, import.meta.url), 'utf8'));
+  const schema: CodecSchema = d.schema;
+  const decimalFields = new Set(['decimal']);
+  const narrowFields = new Set(['int', 'short', 'byte', 'unsignedInt', 'unsignedShort', 'unsignedByte']);
+  // This port's exact type for a value, from its canonical lexical form: a bigint, a decimal's digits, or a number.
+  const exact = (field: string, lexical: unknown): unknown => {
+    if (Array.isArray(lexical)) return lexical.map((item) => exact(field, item));
+    const text = lexical as string;
+    return decimalFields.has(field) ? text : narrowFields.has(field) ? Number(text) : BigInt(text);
+  };
+  // A value read back as its canonical lexical form, item by item and field by field.
+  const lexicalOf = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(lexicalOf);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, lexicalOf(v)]));
+    }
+    return String(value);
+  };
+  let pass = 0;
+  for (const c of d.readCases) {
+    const json = JSON.parse(`{"$type": ${JSON.stringify(d.class)}, ${JSON.stringify(c.field)}: ${c.json}}`);
+    let got: unknown;
+    try {
+      got = lexicalOf((deserialize(json, schema) as Record<string, unknown>)[c.field]);
+    } catch (e) {
+      if (c.expectError && (e as Error).message.endsWith('[json-number-form]')) pass++;
+      else { totalFails++; console.error(`${relative} read ${c.id}: threw ${(e as Error).message}`); }
+      continue;
+    }
+    if (c.expectError) { totalFails++; console.error(`${relative} read ${c.id}: expected a refusal, got ${JSON.stringify(got)}`); continue; }
+    if (JSON.stringify(got) === JSON.stringify(c.expected)) pass++;
+    else { totalFails++; console.error(`${relative} read ${c.id}: expected ${JSON.stringify(c.expected)}, got ${JSON.stringify(got)}`); }
+  }
+  for (const c of d.writeCases) {
+    // An embedded Amount's one field is a decimal, which this port holds as its digits.
+    const value = c.field === 'amount' ? { value: c.value.value } : exact(c.field, c.value);
+    let got: unknown;
+    try {
+      got = serialize({ $type: d.class, [c.field]: value } as CodecNode, schema)[c.field];
+    } catch (e) {
+      if (c.expectError && (e as Error).message.endsWith('[json-number-form]')) pass++;
+      else { totalFails++; console.error(`${relative} write ${c.id}: threw ${(e as Error).message}`); }
+      continue;
+    }
+    if (c.expectError) { totalFails++; console.error(`${relative} write ${c.id}: expected a refusal, got ${JSON.stringify(got)}`); continue; }
+    if (JSON.stringify(got) === JSON.stringify(JSON.parse(c.json))) pass++;
+    else { totalFails++; console.error(`${relative} write ${c.id}: expected ${c.json}, got ${JSON.stringify(got)}`); }
+  }
+  console.log(`${relative}: ${pass}/${d.readCases.length + d.writeCases.length} pass`);
 }
 
 if (totalFails > 0) { console.error(`\n${totalFails} FAILURES`); process.exit(1); }

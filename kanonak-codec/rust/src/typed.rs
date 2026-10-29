@@ -5,7 +5,7 @@
 //! through [`to_node`] — native serde, no reflection, one contract with the
 //! dictionary path.
 
-use crate::{deserialize, CodecError, Node};
+use crate::{parse_node, CodecError, Node};
 use serde::de::DeserializeOwned;
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize};
@@ -210,13 +210,13 @@ impl<'de, T: DeserializeOwned> Deserialize<'de> for Ref<T> {
 /// A typed instance's codec node (the dictionary contract). The bridge is
 /// native serde: the instance serializes to its normalized-JSON wire form
 /// (envelope-as-data + [`Ref<T>`] values), and the wire form maps onto the
-/// node contract through the SAME split [`deserialize`] defines — one
-/// contract, not two.
+/// node contract through the SAME split [`crate::deserialize`] defines — one
+/// contract, not two. Its values stay as the instance's serde writes them.
 pub fn to_node<T: Serialize>(typed: &T, schema: &Json) -> Result<Node, CodecError> {
     let wire = serde_json::to_value(typed)
         .map_err(|e| CodecError::Malformed(format!("typed value failed to serialize: {}", e)))?;
     match wire.as_object() {
-        Some(map) => deserialize(map, schema),
+        Some(map) => parse_node(map, schema),
         None => Err(CodecError::Malformed(
             "a typed instance must serialize to a JSON object (the wire node form)".into(),
         )),

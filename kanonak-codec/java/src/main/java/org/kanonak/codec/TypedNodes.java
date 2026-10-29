@@ -31,11 +31,12 @@ public final class TypedNodes {
      * model's optionality), then {@link KanonakNode#getExtra() extra} entries
      * as sibling fields after the modeled ones (a modeled field wins a name
      * collision — {@link Codec#serialize} semantics) — and the wire map splits
-     * back onto the node contract via {@link Codec#deserialize}.
+     * back onto the node contract as {@link Codec#deserialize} splits it. Its
+     * values stay as the typed instance holds them.
      */
     public static Map<String, Object> toNode(Object typed, CodecSchema schema) {
         Objects.requireNonNull(typed, "typed");
-        return Codec.deserialize(toWireMap(typed), schema);
+        return Codec.parseNode(toWireMap(typed), schema);
     }
 
     /** A typed instance's normalized-JSON wire form as a map. */

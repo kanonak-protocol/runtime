@@ -14,13 +14,18 @@
 //! distinct from `kanonak_canonical::Value` (the canonical-input value enum).
 
 use kanonak_canonical::{
-    canonical_form as canonical_form_pkg, canonical_hash as canonical_hash_pkg, carrier_of,
-    is_readable_by, parse_coordinate, versionless_key, CanonError, CoordinateVersion, Package,
-    Statement, Subject, Value,
+    canonical_decimal, canonical_form as canonical_form_pkg, canonical_hash as canonical_hash_pkg,
+    canonical_integer, carrier_of, is_readable_by, lenient_versionless_key, parse_coordinate,
+    versionless_key, CanonError, CoordinateVersion, Package, Statement, Subject, Value,
 };
 use serde_json::{Map, Value as Json};
 
+mod numbers;
 mod typed;
+pub use numbers::{
+    Decimal, Integer, IntegerDatatype, Long, NegativeInteger, NonNegativeInteger, NonPositiveInteger,
+    PositiveInteger, UnsignedLong, XsdInteger,
+};
 pub use typed::{to_node, KanonakNode, KanonakResource, Ref};
 
 /// The reserved `$`-envelope keys, which never become statements/predicates.
@@ -814,19 +819,9 @@ pub fn content_hash(nodes: &[Node], schema: &Json, pkg: &Json) -> Result<String,
     Ok(canonical_hash_pkg(&build_package(nodes, schema, pkg)?)?)
 }
 
-/// Serialize a typed node to its normalized-JSON wire form. `$extra` entries ride
-/// as sibling fields after the modeled ones; a modeled field wins a name
-/// collision (`[JsonExtensionData]` semantics). No `$extra` key on the wire.
-/// Fallible since 0.4.0: an invalid `$types` envelope (at any depth) is a
-/// producer bug and fails at emit time, as does a fragment reference (runtime#6).
-pub fn serialize(node: &Node) -> Result<Node, CodecError> {
-    let where_ = node
-        .get("$id")
-        .or_else(|| node.get("$type"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("(node)");
-    assert_types_envelopes_map(node, &format!("serialize {}", where_))?;
-    assert_reference_values_map(node, &format!("serialize {}", where_))?;
+/// A node's normalized-JSON wire projection: `$extra` spread back to top
+/// level, nulls dropped.
+fn project_node(node: &Node) -> Node {
     let mut out = Map::new();
     for (key, value) in node.iter() {
         if key == "$extra" || value.is_null() {
@@ -841,18 +836,12 @@ pub fn serialize(node: &Node) -> Result<Node, CodecError> {
             }
         }
     }
-    Ok(out)
+    out
 }
 
-/// Parse normalized JSON into a typed node. `$`-envelope keys and fields modeled
-/// on the node's `$type` stay top-level; every other key is collected into
-/// `$extra` so a strongly-typed consumer round-trips it losslessly. Requires
-/// `$type` (the one field that cannot be inferred) and a class in the schema
-/// that can read it: the exact class, or the same class at a compatible later
-/// version (runtime#28 — see [`type_matches`] for the same rule). The node
-/// keeps the `$type` it was WRITTEN with; the producer's bytes are the
-/// producer's.
-pub fn deserialize(json_obj: &Node, schema: &Json) -> Result<Node, CodecError> {
+/// A node parsed from normalized JSON as [`deserialize`] parses it, its values
+/// as JSON gave them.
+pub(crate) fn parse_node(json_obj: &Node, schema: &Json) -> Result<Node, CodecError> {
     let type_uri = json_obj
         .get("$type")
         .and_then(|t| t.as_str())
@@ -894,4 +883,400 @@ pub fn deserialize(json_obj: &Node, schema: &Json) -> Result<Node, CodecError> {
         node.insert("$extra".to_string(), Json::Object(extra));
     }
     Ok(node)
+}
+
+// The JSON forms of integer and decimal values (kanonak-protocol 4.11.0's
+// `numbers-in-json`, runtime#54). A JSON number can't carry every integer or
+// decimal exactly in every language, so a wide integer and a decimal travel as
+// a string of their digits, and a reader refuses a number that may already
+// have been rounded.
+
+/// How JSON carries a datatype's values.
+#[derive(Clone, Copy)]
+pub(crate) enum JsonNumberForm {
+    /// Written as a string; read from a string, or from a whole number within
+    /// ±(2^53 − 1).
+    Wide,
+    /// Written as a string; read from a string only.
+    Decimal,
+    /// Written as a number; read from a whole number only.
+    Narrow,
+}
+
+/// The datatypes JSON carries as a number or a string of digits, by
+/// versionless key.
+fn json_number_form(key: &str) -> Option<(JsonNumberForm, Option<i128>, Option<i128>)> {
+    xsd_number_form(key.strip_prefix("kanonak.org/core-xsd/")?)
+}
+
+/// THE table of the core-xsd datatypes JSON carries as a number or a string of
+/// digits, by local name: each one's form, and its range's bounds where it has
+/// them. Every bound fits in `i128`.
+pub(crate) fn xsd_number_form(local: &str) -> Option<(JsonNumberForm, Option<i128>, Option<i128>)> {
+    use JsonNumberForm::{Decimal, Narrow, Wide};
+    Some(match local {
+        "integer" => (Wide, None, None),
+        "nonNegativeInteger" => (Wide, Some(0), None),
+        "positiveInteger" => (Wide, Some(1), None),
+        "nonPositiveInteger" => (Wide, None, Some(0)),
+        "negativeInteger" => (Wide, None, Some(-1)),
+        "long" => (Wide, Some(i64::MIN.into()), Some(i64::MAX.into())),
+        "unsignedLong" => (Wide, Some(0), Some(u64::MAX.into())),
+        "decimal" => (Decimal, None, None),
+        "int" => (Narrow, Some(i32::MIN.into()), Some(i32::MAX.into())),
+        "short" => (Narrow, Some(i16::MIN.into()), Some(i16::MAX.into())),
+        "byte" => (Narrow, Some(i8::MIN.into()), Some(i8::MAX.into())),
+        "unsignedInt" => (Narrow, Some(0), Some(u32::MAX.into())),
+        "unsignedShort" => (Narrow, Some(0), Some(u16::MAX.into())),
+        "unsignedByte" => (Narrow, Some(0), Some(u8::MAX.into())),
+        _ => return None,
+    })
+}
+
+/// Whether an integer's canonical digits lie outside the bounds. Every bound
+/// fits in `i128`, so digits too long for one lie past the bound on their
+/// sign's side, if there is one.
+pub(crate) fn outside_bounds(digits: &str, min: Option<i128>, max: Option<i128>) -> bool {
+    match digits.parse::<i128>() {
+        Ok(n) => min.map_or(false, |min| n < min) || max.map_or(false, |max| n > max),
+        Err(_) if digits.starts_with('-') => min.is_some(),
+        Err(_) => max.is_some(),
+    }
+}
+
+/// A modeled field whose datatype JSON carries as a number or a string of
+/// digits.
+struct NumberField<'a> {
+    predicate: &'a str,
+    datatype: &'a str,
+    form: JsonNumberForm,
+    min: Option<i128>,
+    max: Option<i128>,
+}
+
+impl NumberField<'_> {
+    fn refuse<T>(&self, why: impl std::fmt::Display) -> Result<T, CodecError> {
+        err(format!("{}: {} [json-number-form]", self.predicate, why))
+    }
+
+    fn integer_of_lexical(&self, lexical: &str) -> Result<String, CodecError> {
+        canonical_integer(lexical)
+            .or_else(|_| self.refuse(format!("{:?} is not an integer lexical form", lexical)))
+    }
+
+    fn decimal_of_lexical(&self, lexical: &str) -> Result<String, CodecError> {
+        canonical_decimal(lexical)
+            .or_else(|_| self.refuse(format!("{:?} is not a decimal lexical form", lexical)))
+    }
+
+    /// An integer's canonical digits, refused outside the datatype's range.
+    fn in_range(&self, digits: String) -> Result<String, CodecError> {
+        if outside_bounds(&digits, self.min, self.max) {
+            return self.refuse(format!("{} is outside {}'s range", digits, self.datatype));
+        }
+        Ok(digits)
+    }
+
+    /// An integer as a node here holds it: a number where its datatype bounds
+    /// it on both sides, so it fits an `i64` or a `u64`; else a string of its
+    /// canonical digits, since no Rust integer holds every value.
+    fn held(&self, digits: String) -> Result<Json, CodecError> {
+        if self.min.is_none() || self.max.is_none() {
+            return Ok(Json::String(digits));
+        }
+        digits
+            .parse::<i64>()
+            .map(Json::from)
+            .or_else(|_| digits.parse::<u64>().map(Json::from))
+            .or_else(|_| self.refuse(format!("{} fits neither an i64 nor a u64", digits)))
+    }
+}
+
+/// The JSON number form of a modeled field's datatype, or `None` when JSON
+/// carries its values as they stand.
+fn number_field<'a>(name: &str, prop: &'a Json) -> Result<Option<NumberField<'a>>, CodecError> {
+    let datatype = match prop.get("datatype").and_then(|d| d.as_str()) {
+        Some(datatype) => datatype,
+        None => return Ok(None),
+    };
+    let (form, min, max) =
+        match lenient_versionless_key(datatype).and_then(|key| json_number_form(&key)) {
+            Some(found) => found,
+            None => return Ok(None),
+        };
+    let predicate = prop
+        .get("predicate")
+        .and_then(|p| p.as_str())
+        .ok_or_else(|| CodecError::Malformed(format!("prop {} is missing 'predicate'", name)))?;
+    Ok(Some(NumberField {
+        predicate,
+        datatype,
+        form,
+        min,
+        max,
+    }))
+}
+
+/// A JSON number's value as an integer's canonical digits, when it is a whole
+/// number.
+fn whole_digits(value: &Json) -> Option<String> {
+    let n = match value {
+        Json::Number(n) => n,
+        _ => return None,
+    };
+    if let Some(i) = n.as_i64() {
+        return Some(i.to_string());
+    }
+    if let Some(u) = n.as_u64() {
+        return Some(u.to_string());
+    }
+    let f = n.as_f64().filter(|f| f.fract() == 0.0)?;
+    canonical_integer(&format!("{:.0}", f)).ok()
+}
+
+/// Whether an integer lies within ±(2^53 − 1), where a double holds every
+/// whole number exactly.
+pub(crate) fn within_double_precision(digits: &str) -> bool {
+    const MAX_SAFE_INTEGER: i128 = (1 << 53) - 1;
+    digits
+        .parse::<i128>()
+        .map_or(false, |n| n.abs() <= MAX_SAFE_INTEGER)
+}
+
+fn describe_json(value: &Json) -> String {
+    let kind = match value {
+        Json::Null => return "null".to_string(),
+        Json::Bool(_) => "the boolean",
+        Json::Number(_) => "the number",
+        Json::String(_) => "the string",
+        Json::Array(_) => "the list",
+        Json::Object(_) => "the object",
+    };
+    format!("{} {}", kind, value)
+}
+
+type NumberConversion = fn(&NumberField, &Json) -> Result<Json, CodecError>;
+
+/// A value as JSON carries it, to the type a node here holds it as.
+fn read_json_number(field: &NumberField, value: &Json) -> Result<Json, CodecError> {
+    match field.form {
+        JsonNumberForm::Decimal => match value {
+            Json::String(s) => Ok(Json::String(field.decimal_of_lexical(s)?)),
+            other => field.refuse(format!(
+                "a decimal is read from a JSON string only, so it can't have been rounded; got {}",
+                describe_json(other)
+            )),
+        },
+        JsonNumberForm::Wide => {
+            let digits = match value {
+                Json::String(s) => Some(field.integer_of_lexical(s)?),
+                Json::Number(_) => whole_digits(value).filter(|d| within_double_precision(d)),
+                _ => None,
+            };
+            match digits {
+                Some(digits) => field.held(field.in_range(digits)?),
+                None => field.refuse(format!(
+                    "a wide integer is read from a string, or from a whole JSON number within \
+                     ±(2^53 − 1); got {}",
+                    describe_json(value)
+                )),
+            }
+        }
+        JsonNumberForm::Narrow => match whole_digits(value) {
+            Some(digits) => field.held(field.in_range(digits)?),
+            None => field.refuse(format!(
+                "a narrow integer is read from a whole JSON number only; got {}",
+                describe_json(value)
+            )),
+        },
+    }
+}
+
+/// A value as a node here holds it, to its JSON form.
+fn write_json_number(field: &NumberField, value: &Json) -> Result<Json, CodecError> {
+    match field.form {
+        JsonNumberForm::Decimal => match value {
+            Json::String(s) => Ok(Json::String(field.decimal_of_lexical(s)?)),
+            other => field.refuse(format!(
+                "pass a decimal as a string of its digits, which holds it exactly; got {}",
+                describe_json(other)
+            )),
+        },
+        JsonNumberForm::Wide => {
+            let digits = match value {
+                Json::String(s) => Some(field.integer_of_lexical(s)?),
+                Json::Number(n) => {
+                    whole_digits(value).filter(|d| !n.is_f64() || within_double_precision(d))
+                }
+                _ => None,
+            };
+            match digits {
+                Some(digits) => Ok(Json::String(field.in_range(digits)?)),
+                None => field.refuse(format!(
+                    "pass a wide integer as a string of its digits, an i64 or u64 number, or a \
+                     whole number within ±(2^53 − 1); got {}",
+                    describe_json(value)
+                )),
+            }
+        }
+        JsonNumberForm::Narrow => match whole_digits(value) {
+            Some(digits) => field.held(field.in_range(digits)?),
+            None => field.refuse(format!(
+                "pass a narrow integer as a whole number; got {}",
+                describe_json(value)
+            )),
+        },
+    }
+}
+
+/// The modeled fields of the class `type_uri` names, found as [`deserialize`]
+/// finds it.
+fn props_to_convert<'a>(
+    schema: &'a Json,
+    type_uri: &str,
+    what: &str,
+) -> Result<&'a Map<String, Json>, CodecError> {
+    let (cls_uri, cls) = class_for(classes_of(schema)?, type_uri)
+        .map_err(|e| CodecError::Malformed(format!("Cannot convert {}: {}", what, e)))?;
+    props_of(cls_uri, cls)
+}
+
+fn props_of<'a>(cls_uri: &str, cls: &'a Json) -> Result<&'a Map<String, Json>, CodecError> {
+    cls.get("props")
+        .and_then(|p| p.as_object())
+        .ok_or_else(|| CodecError::Malformed(format!("class {} is missing 'props'", cls_uri)))
+}
+
+/// Each modeled field's value, through lists and embedded values, with its
+/// integers and decimals converted. `$extra`, the envelope and references are
+/// left as they are.
+fn convert_fields(
+    fields: &Map<String, Json>,
+    props: &Map<String, Json>,
+    schema: &Json,
+    convert: NumberConversion,
+) -> Result<Map<String, Json>, CodecError> {
+    let mut out = fields.clone();
+    for (name, prop) in props {
+        if let Some(value) = out.get_mut(name).filter(|v| !v.is_null()) {
+            *value = convert_value(name, prop, value, schema, convert)?;
+        }
+    }
+    Ok(out)
+}
+
+fn convert_value(
+    name: &str,
+    prop: &Json,
+    value: &Json,
+    schema: &Json,
+    convert: NumberConversion,
+) -> Result<Json, CodecError> {
+    if let Json::Array(items) = value {
+        return items
+            .iter()
+            .map(|item| convert_value(name, prop, item, schema, convert))
+            .collect::<Result<Vec<Json>, CodecError>>()
+            .map(Json::Array);
+    }
+    if prop.get("kind").and_then(|k| k.as_str()) == Some("datatype") {
+        return match number_field(name, prop)? {
+            Some(field) => convert(&field, value),
+            None => Ok(value.clone()),
+        };
+    }
+    match value {
+        Json::Object(map) if !map.contains_key("$ref") => {
+            let cls_uri = map
+                .get("$type")
+                .and_then(|t| t.as_str())
+                .or_else(|| prop.get("range").and_then(|r| r.as_str()));
+            let found = match cls_uri {
+                Some(cls_uri) => class_for(classes_of(schema)?, cls_uri).ok(),
+                None => None,
+            };
+            // A value no class here types is carried as given, as `$extra` is;
+            // hashing refuses it where it must (runtime#37).
+            match found {
+                Some((cls_uri, cls)) => Ok(Json::Object(convert_fields(
+                    map,
+                    props_of(cls_uri, cls)?,
+                    schema,
+                    convert,
+                )?)),
+                None => Ok(value.clone()),
+            }
+        }
+        _ => Ok(value.clone()),
+    }
+}
+
+fn convert_node(
+    node: &Node,
+    schema: &Json,
+    convert: NumberConversion,
+) -> Result<Node, CodecError> {
+    let type_uri = node
+        .get("$type")
+        .and_then(|t| t.as_str())
+        .ok_or_else(|| {
+            CodecError::Malformed("Cannot convert a node: missing string $type".into())
+        })?;
+    let what = format!(
+        "node {}",
+        node.get("$id").and_then(|i| i.as_str()).unwrap_or(type_uri)
+    );
+    convert_fields(node, props_to_convert(schema, type_uri, &what)?, schema, convert)
+}
+
+/// Serialize a node to its normalized-JSON wire form. `$extra` entries ride as
+/// sibling fields after the modeled ones; a modeled field wins a name
+/// collision (`[JsonExtensionData]` semantics). No `$extra` key on the wire.
+/// Each integer and decimal value is written in its JSON form
+/// (kanonak-protocol 4.11.0's `numbers-in-json`, runtime#54), through lists and
+/// embedded values: a wide integer (`integer`, its four sign-restricted forms,
+/// `long`, `unsignedLong`) and a decimal as a string of its canonical digits, a
+/// narrow integer (`int` and narrower) as a number. Takes a wide integer as a
+/// string of digits, an `i64` or `u64` number, or a whole number within
+/// ±(2^53 − 1); a decimal as a string of digits; a narrow integer as a whole
+/// number. Anything else, or a value outside its datatype's range, is refused
+/// with an error ending `[json-number-form]`. `$type` is required, and its
+/// class is found as [`deserialize`] finds it; an embedded value whose class
+/// the schema doesn't hold is carried as given. An invalid `$types` envelope
+/// (at any depth) is a producer bug and fails at emit time, as does a fragment
+/// reference (runtime#6).
+pub fn serialize(node: &Node, schema: &Json) -> Result<Node, CodecError> {
+    let where_ = node
+        .get("$id")
+        .or_else(|| node.get("$type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("(node)");
+    assert_types_envelopes_map(node, &format!("serialize {}", where_))?;
+    assert_reference_values_map(node, &format!("serialize {}", where_))?;
+    Ok(project_node(&convert_node(node, schema, write_json_number)?))
+}
+
+/// Parse normalized JSON into a typed node. `$`-envelope keys and fields modeled
+/// on the node's `$type` stay top-level; every other key is collected into
+/// `$extra` so a strongly-typed consumer round-trips it losslessly. Requires
+/// `$type` (the one field that cannot be inferred) and a class in the schema
+/// that can read it: the exact class, or the same class at a compatible later
+/// version (runtime#28 — see [`type_matches`] for the same rule). The node
+/// keeps the `$type` it was WRITTEN with; the producer's bytes are the
+/// producer's.
+///
+/// Each integer and decimal value is read exactly (kanonak-protocol 4.11.0's
+/// `numbers-in-json`, runtime#54), through lists and embedded values: a wide
+/// integer from a string, or from a whole JSON number within ±(2^53 − 1); a
+/// decimal from a string only; a narrow integer from a whole number only. The
+/// node holds `integer`, its four sign-restricted forms and `decimal` as a
+/// string of canonical digits, and `long`, `unsignedLong` and the narrow
+/// integers as a number. A value JSON may already have rounded, or one outside
+/// its datatype's range, is refused with an error ending `[json-number-form]`.
+/// An embedded value whose class the schema doesn't hold is carried as given.
+/// It judges the `Value`s it's given: without serde_json's
+/// `arbitrary_precision`, `1.0000000000000000001` is already the `f64` `1.0`,
+/// so a caller that must refuse it parses with it.
+pub fn deserialize(json_obj: &Node, schema: &Json) -> Result<Node, CodecError> {
+    convert_node(&parse_node(json_obj, schema)?, schema, read_json_number)
 }

@@ -236,6 +236,8 @@ private func writeValue(_ out: inout String, _ value: Any) throws {
         out.append(String(n))
     case let n as Int64:
         out.append(String(n))
+    case let n as UInt64:
+        out.append(String(n))
     case let d as Double:
         out.append(ecmaScriptDoubleToken(d))
     case is NSNull:

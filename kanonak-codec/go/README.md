@@ -30,13 +30,30 @@ pkg    := codec.PackageContext{Publisher: "...", PackageName: "...", Version: ".
 form, err := codec.CanonicalForm(nodes, schema, pkg) // {"subjects":[...]} JSON
 hash, err := codec.ContentHash(nodes, schema, pkg)   // "sha256:..."
 
-wire, err := codec.Serialize(node)            // typed node -> normalized JSON
-node, err := codec.Deserialize(wire, schema)  // normalized JSON -> typed node
+wire, err := codec.Serialize(node, schema)   // typed node -> normalized JSON
+node, err := codec.Deserialize(wire, schema) // normalized JSON -> typed node
 
 ok, err := codec.TypeMatches(node, classURI, schema) // generated type guard
 ok, err = typed.KanonakNode.TypeMatches(classURI, schema) // same, on a typed instance
 m, found := codec.LookupEnumMember(schema, ref)      // {"$ref": ...} -> enum member
 ```
+
+`Serialize` and `Deserialize` carry the normalized-JSON wire form. Open-world
+assertions outside the type-model round-trip losslessly through `$extra`
+(top-level wire fields, collected under `$extra` on the node —
+`[JsonExtensionData]` semantics). From 3.0.0, each integer and decimal value
+travels in its JSON form (kanonak-protocol 4.11.0's `numbers-in-json`,
+runtime#54), through lists and embedded values. `Deserialize` gives `integer`
+and its four sign-restricted forms as a `*big.Int`, `long` as an `int64`,
+`unsignedLong` as a `uint64`, `decimal` as a `string` of its canonical digits,
+and `int`, `short`, `byte`, `unsignedInt`, `unsignedShort` and `unsignedByte`
+as an `int64`, from a `json.Number` or a `float64` alike. `Serialize` writes a
+wide integer and a decimal as a string of their canonical digits, and a narrow
+integer as an `int64`. An embedded value whose class the schema doesn't hold
+is carried as given. A JSON number past ±(2^53 − 1) for a wide integer, a
+number for a decimal, a string for a narrow integer, or a value outside its
+datatype's range is refused with an error ending in `[json-number-form]`, gated
+by `codec-vectors-json-numbers.json`.
 
 A reference value (`{"$ref": uri}`) must address a named resource
 (`publisher/package[@version]/name`): a `$ref` carrying a URI fragment (`#`), at
@@ -59,7 +76,7 @@ same way (`EnumMemberMatch{EnumType, URI, Member}`, or `found == false` for
 ends in a bracketed kind: `[unknown-type]`, `[newer-version]`, `[other-major]`,
 `[other-minor-line]`, `[hash-needs-exact-version]`, `[hash-undeclared-statement]`.
 Hashing also refuses a statement the schema doesn't declare, an `$extra` entry or a key the class doesn't model, with `[hash-undeclared-statement]`: a codec holds one package's schema and can't type another package's predicate, so such a node is hashed with the SDK, over the graph. Serializing and deserializing still carry it (codec 2.0.0, runtime#37). From 2.0.0 the module path is
-`github.com/kanonak-protocol/runtime/kanonak-codec/go/v2`.
+`github.com/kanonak-protocol/runtime/kanonak-codec/go/v3`.
 
 An object property carries a reference (`{"$ref": "..."}`) or an embedded
 node, gated by `codec-vectors-embedded.json`. Malformed input fails loudly;

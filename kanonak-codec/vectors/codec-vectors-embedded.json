@@ -103,7 +103,7 @@
             {
               "$name": "first",
               "sku": "X",
-              "qty": 1
+              "qty": "1"
             }
           ]
         }
@@ -141,7 +141,7 @@
           "items": [
             {
               "sku": "X",
-              "qty": 1
+              "qty": "1"
             }
           ]
         }
@@ -183,7 +183,7 @@
               "$name": "first",
               "$type": "probe.example.com/schema@1.0.0/LineItem",
               "sku": "X",
-              "qty": 1
+              "qty": "1"
             }
           ]
         }
@@ -226,12 +226,12 @@
             {
               "$name": "a",
               "sku": "X",
-              "qty": 1
+              "qty": "1"
             },
             {
               "$name": "b",
               "sku": "Y",
-              "qty": 2
+              "qty": "2"
             }
           ]
         }
@@ -274,12 +274,12 @@
             {
               "$name": "b",
               "sku": "Y",
-              "qty": 2
+              "qty": "2"
             },
             {
               "$name": "a",
               "sku": "X",
-              "qty": 1
+              "qty": "1"
             }
           ]
         }

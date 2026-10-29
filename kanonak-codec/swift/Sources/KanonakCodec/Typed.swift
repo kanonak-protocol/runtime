@@ -161,7 +161,7 @@ public func toNode(_ typed: any Encodable, schema: CodecSchema) throws -> [Strin
     guard let obj = try parseJSON(wire) as? [String: Any] else {
         throw CodecError("codec: a typed instance must serialize to a JSON object (the wire node form)")
     }
-    return try deserialize(obj, schema: schema)
+    return try deserializeNode(obj, schema: schema)
 }
 
 /// The canonical form of a package built from typed instances.
