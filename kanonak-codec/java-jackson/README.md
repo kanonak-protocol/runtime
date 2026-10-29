@@ -19,7 +19,7 @@ Order order = json.readValue(text, Order.class);   // Order extends KanonakNode
 
 `KanonakModule` names each envelope accessor by its key: `$id`, `$type`, `$types`,
 `$name`, `$contentHash` and `$version`. An envelope key that's absent is left out
-on write, as `Codec.serialize` leaves it out.
+on write, as `Codec.serialize(node, schema)` leaves it out.
 
 What the module leaves to others:
 - **The fields.** A generated class binds its own fields.

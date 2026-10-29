@@ -1,11 +1,7 @@
 //! Drives the shared codec golden vectors through the Rust kanonak-codec port.
 
 use kanonak_canonical::local_name;
-#[allow(deprecated)]
-use kanonak_codec::{deserialize, serialize};
-use kanonak_codec::{
-    canonical_form, content_hash, deserialize_exact, serialize_exact, CodecError, Node,
-};
+use kanonak_codec::{canonical_form, content_hash, deserialize, serialize, CodecError, Node};
 use serde_json::Value as J;
 use std::fs;
 use std::path::PathBuf;
@@ -58,7 +54,7 @@ fn codec_vectors_references() {
 }
 
 /// The JSON forms of integer and decimal values (runtime#54):
-/// `serialize_exact` and `deserialize_exact` against the shared vectors. A
+/// `serialize` and `deserialize` against the shared vectors. A
 /// read case's field is rendered back to its canonical lexical form; a write
 /// case's value is built as this port holds it.
 #[test]
@@ -81,8 +77,7 @@ fn codec_vectors_json_numbers() {
             case["json"].as_str().unwrap()
         );
         let json: Node = serde_json::from_str(&text).unwrap();
-        let read =
-            deserialize_exact(&json, schema).map(|node| lexical_of(&J::Object(node)[field]));
+        let read = deserialize(&json, schema).map(|node| lexical_of(&J::Object(node)[field]));
         if json_number_case_holds("read", case, read, &case["expected"]) {
             pass += 1;
         }
@@ -96,7 +91,7 @@ fn codec_vectors_json_numbers() {
             Some(text) => serde_json::from_str(text).unwrap(),
             None => J::Null,
         };
-        let written = serialize_exact(&node, schema).map(|wire| J::Object(wire)[field].clone());
+        let written = serialize(&node, schema).map(|wire| J::Object(wire)[field].clone());
         if json_number_case_holds("write", case, written, &expected) {
             pass += 1;
         }
@@ -196,7 +191,6 @@ fn held_value(schema: &J, class: &str, field: &str, lexical: &J) -> J {
     }
 }
 
-#[allow(deprecated)]
 fn run_types_file(file: &str) {
     let doc = read_doc(file);
     let schema = doc["schema"].clone();
@@ -217,7 +211,7 @@ fn run_types_file(file: &str) {
                 fails += 1;
                 eprintln!("FAIL [{}] expected canonicalize to reject, it did not", id);
             }
-            if nodes.iter().all(|n| serialize(n).is_ok()) {
+            if nodes.iter().all(|n| serialize(n, &schema).is_ok()) {
                 fails += 1;
                 eprintln!("FAIL [{}] expected serialize to reject, it did not", id);
             }
@@ -248,7 +242,7 @@ fn run_types_file(file: &str) {
         let expected_serialize = case["expectedSerialize"].as_array().unwrap();
         let mut round_tripped: Vec<Node> = Vec::with_capacity(nodes.len());
         for (i, node) in nodes.iter().enumerate() {
-            let wire = serialize(node).unwrap();
+            let wire = serialize(node, &schema).unwrap();
             if &J::Object(wire.clone()) != &expected_serialize[i] {
                 fails += 1;
                 eprintln!(
@@ -260,7 +254,7 @@ fn run_types_file(file: &str) {
                 );
             }
             let back = deserialize(&wire, &schema).unwrap();
-            if &J::Object(serialize(&back).unwrap()) != &expected_serialize[i] {
+            if &J::Object(serialize(&back, &schema).unwrap()) != &expected_serialize[i] {
                 fails += 1;
                 eprintln!("FAIL [{}] round-trip serialize[{}] mismatch", id, i);
             }
@@ -284,7 +278,6 @@ fn run_types_file(file: &str) {
     );
 }
 
-#[allow(deprecated)]
 fn run_file(file: &str) {
     let doc = read_doc(file);
     let schema = doc["schema"].clone();
@@ -340,7 +333,7 @@ fn run_file(file: &str) {
 
         let expected_serialize = case["expectedSerialize"].as_array().unwrap();
         for (i, node) in nodes.iter().enumerate() {
-            let actual = J::Object(serialize(node).unwrap());
+            let actual = J::Object(serialize(node, &schema).unwrap());
             let expected = &expected_serialize[i];
             if &actual != expected {
                 fails += 1;

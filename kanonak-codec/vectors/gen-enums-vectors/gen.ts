@@ -164,7 +164,7 @@ const cases: Case[] = [
       'fields against — so canonicalization fails loudly instead of inventing a mapping. This ' +
       'case is what keeps `range` inert for enum-ranged props: the inertness holds precisely ' +
       'because this path is unreachable. Rejection is required at CANONICALIZATION only — ' +
-      'serialize is schema-free and deserialize does not recurse into embedded values.',
+      'serialize and deserialize carry an embedded value whose class the schema lacks as it stands.',
     pkg,
     expectError: true,
     nodes: [
@@ -183,7 +183,7 @@ for (const c of cases) {
   if (c.expectError) continue;
   c.expectedCanonicalForm = packageCanonicalForm(c.nodes, schema, c.pkg);
   c.expectedHash = packageContentHash(c.nodes, schema, c.pkg);
-  c.expectedSerialize = c.nodes.map((n) => serialize(n));
+  c.expectedSerialize = c.nodes.map((n) => serialize(n, schema));
 }
 
 // INERTNESS, enforced at generation time as well as in the vectors: the hash

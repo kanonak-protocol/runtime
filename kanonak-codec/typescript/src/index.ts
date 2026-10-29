@@ -262,11 +262,12 @@ export function embed<T extends KanonakNode>(value: T, name?: string): T {
 /**
  * A typed instance's codec node. Provided for cross-port parity — in
  * TypeScript the typed object already IS the node (the round through
- * {@link serialize} + {@link deserialize} normalizes `$extra` placement and
- * drops undefined, which the codec entry points tolerate anyway).
+ * the wire projection and back normalizes `$extra` placement and drops
+ * undefined, which the codec entry points tolerate anyway). Its values stay as
+ * the typed object holds them.
  */
 export function toNode(typed: KanonakNode, schema: CodecSchema): CodecNode {
-  return deserialize(serialize(typed), schema);
+  return parseNode(projectNode(typed), schema);
 }
 
 /**
@@ -746,15 +747,14 @@ export function packageContentHash(
 }
 
 /**
- * Serialize a typed node to its normalized-JSON wire form. The node is already
+ * A node's normalized-JSON wire projection. The node is already
  * the wire shape (`$`-envelope + alias-collapsed local-name fields + `Ref<T>`
  * values), so this is a shallow projection that (a) drops `undefined`, and (b)
  * spreads `$extra` entries back to TOP LEVEL — the open-world assertions ride
  * as sibling fields on the wire (`[JsonExtensionData]` semantics), not under a
  * `$extra` key. A modeled field always wins a name collision with an extra.
  */
-/** @deprecated Use {@link serializeExact}, which writes integer and decimal values in their JSON forms (runtime#54). */
-export function serialize(node: CodecNode): Record<string, unknown> {
+function projectNode(node: CodecNode): Record<string, unknown> {
   // Producer-side $types validation, at every depth — fail closest to the bug.
   assertTypesEnvelopes(node, `serialize ${node.$id ?? node.$type ?? '(node)'}`);
   assertReferenceValues(node, `serialize ${node.$id ?? node.$type ?? '(node)'}`);
@@ -772,7 +772,7 @@ export function serialize(node: CodecNode): Record<string, unknown> {
 }
 
 /**
- * Parse normalized-JSON into a typed node. `$`-envelope keys and the fields
+ * A node parsed from normalized JSON, its values as JSON gave them. `$`-envelope keys and the fields
  * modeled on the node's `$type` stay top-level; every other key is an
  * open-world assertion collected into `$extra` so a strongly-typed consumer
  * round-trips it losslessly. Requires `$type` (the one field that cannot be
@@ -781,8 +781,7 @@ export function serialize(node: CodecNode): Record<string, unknown> {
  * {@link classFor}). The node keeps the `$type` it was WRITTEN with; the
  * producer's bytes are the producer's.
  */
-/** @deprecated Use {@link deserializeExact}, which reads integer and decimal values exactly (runtime#54). */
-export function deserialize(json: Record<string, unknown>, schema: CodecSchema): CodecNode {
+function parseNode(json: Record<string, unknown>, schema: CodecSchema): CodecNode {
   const typeUri = json.$type;
   if (typeof typeUri !== 'string') throw new Error('Cannot deserialize: missing string $type');
   // Reader-side $types validation, at every depth: an unsorted / singleton /
@@ -967,30 +966,34 @@ function convertValue(prop: CodecProp, value: unknown, schema: CodecSchema, conv
   if (value && typeof value === 'object' && !('$ref' in value)) {
     const map = value as Record<string, unknown>;
     const clsUri = typeof map.$type === 'string' ? map.$type : prop.range;
-    if (!clsUri) {
-      throw new Error(`Cannot convert the embedded value under ${prop.predicate}: it carries no $type and the property declares no range.`);
-    }
-    return convertFields(map, classOrThrow(schema, clsUri, `the embedded value under ${prop.predicate}`), schema, convert);
+    const match = clsUri === undefined ? undefined : classFor(schema, clsUri);
+    // A value no class here types is carried as given, as `$extra` is; hashing refuses it where it must (runtime#37).
+    if (match === undefined || !('cls' in match)) return value;
+    return convertFields(map, match.cls, schema, convert);
   }
   return value;
 }
 
 /**
- * Serialize a node to normalized JSON, writing each integer and decimal value in its JSON form (kanonak-protocol
- * 4.11.0's `numbers-in-json`, runtime#54): a wide integer and a decimal as a string of their canonical digits, a
- * narrow integer as a number. A value outside its datatype's range is refused, ending `[json-number-form]`. The
- * result holds no `bigint`, so `JSON.stringify` writes it as it stands.
+ * Serialize a node to its normalized-JSON wire form: `$extra` spread back to top level, `undefined` dropped, and each
+ * integer and decimal value in its JSON form (kanonak-protocol 4.11.0's `numbers-in-json`, runtime#54): a wide
+ * integer and a decimal as a string of their canonical digits, a narrow integer as a number. A value outside its
+ * datatype's range is refused, ending `[json-number-form]`. The result holds no `bigint`, so `JSON.stringify` writes
+ * it as it stands.
  */
-export function serializeExact(node: CodecNode, schema: CodecSchema): Record<string, unknown> {
+export function serialize(node: CodecNode, schema: CodecSchema): Record<string, unknown> {
+  assertTypesEnvelopes(node, `serialize ${node.$id ?? node.$type ?? '(node)'}`);
+  assertReferenceValues(node, `serialize ${node.$id ?? node.$type ?? '(node)'}`);
   const typeUri = node.$type;
   if (typeof typeUri !== 'string') throw new Error('Cannot serialize: missing string $type');
   const cls = classOrThrow(schema, typeUri, `node ${node.$id ?? typeUri}`);
-  return serialize(convertFields(node as Record<string, unknown>, cls, schema, writeJsonNumber) as CodecNode);
+  return projectNode(convertFields(node as Record<string, unknown>, cls, schema, writeJsonNumber) as CodecNode);
 }
 
 /**
- * Parse normalized JSON into a node, as {@link deserialize} does, reading each integer and decimal value exactly: a
- * wide integer to a `bigint`, from a string or a whole number within ±(2^53 − 1); a decimal to its canonical digits,
+ * Parse normalized JSON into a node. `$type` is required, and read by the exact class or the same class at a
+ * compatible later version; every key the class doesn't model is kept in `$extra`. Each integer and decimal value is
+ * read exactly: a wide integer to a `bigint`, from a string or a whole number within ±(2^53 − 1); a decimal to its canonical digits,
  * from a string only; a narrow integer to a `number`, from a whole number only. A value JSON may already have rounded,
  * or one outside its datatype's range, is refused, ending `[json-number-form]`.
  *
@@ -998,8 +1001,8 @@ export function serializeExact(node: CodecNode, schema: CodecSchema): Record<str
  * sees it, so a caller that must refuse it judges the number's source, as a `JSON.parse` reviver's `context.source`
  * gives it (Node 22).
  */
-export function deserializeExact(json: Record<string, unknown>, schema: CodecSchema): CodecNode {
-  const node = deserialize(json, schema);
+export function deserialize(json: Record<string, unknown>, schema: CodecSchema): CodecNode {
+  const node = parseNode(json, schema);
   const cls = classOrThrow(schema, node.$type!, `node ${node.$id ?? node.$type}`);
   return convertFields(node as Record<string, unknown>, cls, schema, readJsonNumber) as CodecNode;
 }

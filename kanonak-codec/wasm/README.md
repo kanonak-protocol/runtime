@@ -17,7 +17,7 @@ The surface is JSON text in / JSON text out ([`wit/codec.wit`](./wit/codec.wit))
 interface codec {
     content-hash:   func(nodes: string, schema: string, pkg: string) -> result<string, string>;
     canonical-form: func(nodes: string, schema: string, pkg: string) -> result<string, string>;
-    serialize:      func(node: string) -> result<string, string>;
+    serialize:      func(node: string, schema: string) -> result<string, string>;
     deserialize:    func(node: string, schema: string) -> result<string, string>;
 }
 ```
@@ -25,9 +25,18 @@ interface codec {
 `nodes` is a JSON array of typed nodes (the `$`-envelope plus alias-collapsed
 fields), `schema` the embedded `CodecSchema`, `pkg` the package context
 (`{publisher, packageName, version, label?}`). The schema is just an input
-string — the component stays agnostic to how a caller obtained it. `serialize`
-is schema-free, mirroring the native ports. Errors are the codec's fail-loud
-messages; there are no fallbacks.
+string — the component stays agnostic to how a caller obtained it. From 3.0.0,
+`serialize` and `deserialize` carry each integer and decimal value in its JSON
+form (kanonak-protocol 4.11.0's `numbers-in-json`, runtime#54), as the native
+ports do: a wide integer (`integer`, its four sign-restricted forms, `long`,
+`unsignedLong`) and a decimal as a string of their canonical digits, a narrow
+integer (`int` and narrower) as a number. `deserialize` reads a wide integer
+from a string or a whole number within ±(2^53 − 1), a decimal from a string
+only, and a narrow integer from a whole number only, and refuses a value JSON
+may already have rounded, or one outside its datatype's range, ending
+`[json-number-form]`. An embedded value whose class the schema doesn't hold is
+carried as given. Errors are the codec's fail-loud messages; there are no
+fallbacks.
 
 The WIT package version is the component's ABI version, and it is the codec
 version: `package kanonak:codec@X.Y.Z` always equals the codec release it
@@ -43,7 +52,7 @@ tagged with the codec version (the native `kanonak-codec@X.Y.Z` and the
 component `codec:X.Y.Z` ship as one coordinated release):
 
 ```sh
-wkg oci pull ghcr.io/kanonak-protocol/codec:2.2.0 -o codec.wasm
+wkg oci pull ghcr.io/kanonak-protocol/codec:3.0.0 -o codec.wasm
 ```
 
 Anonymous pull, no auth — any OCI-capable fetcher (`oras`, etc.) works too.

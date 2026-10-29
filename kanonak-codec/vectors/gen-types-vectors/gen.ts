@@ -315,7 +315,7 @@ for (const c of cases) {
     // Prove all three surfaces reject, then leave only the marker in the file.
     for (const [what, run] of [
       ['canonicalize', () => packageCanonicalForm(c.nodes, schema, c.pkg)],
-      ['serialize', () => c.nodes.map((n) => serialize(n))],
+      ['serialize', () => c.nodes.map((n) => serialize(n, schema))],
     ] as const) {
       let threw = false;
       try {
@@ -329,7 +329,7 @@ for (const c of cases) {
   }
   c.expectedCanonicalForm = packageCanonicalForm(c.nodes, schema, c.pkg);
   c.expectedHash = packageContentHash(c.nodes, schema, c.pkg);
-  c.expectedSerialize = c.nodes.map((n) => serialize(n));
+  c.expectedSerialize = c.nodes.map((n) => serialize(n, schema));
 }
 
 const doc = {

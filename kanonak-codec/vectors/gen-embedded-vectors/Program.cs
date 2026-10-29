@@ -88,13 +88,13 @@ var schemaBlock = new JsonObject
 
 // -- node builders (wire form) -----------------------------------------------
 
-JsonObject LineItemNode(string? name, string sku, int qty, bool explicitType = false)
+JsonObject LineItemNode(Func<int, JsonNode> qtyForm, string? name, string sku, int qty, bool explicitType = false)
 {
     var n = new JsonObject();
     if (name != null) n["$name"] = name;
     if (explicitType) n["$type"] = $"{SCHEMA}/LineItem";
     n["sku"] = sku;
-    n["qty"] = qty;
+    n["qty"] = qtyForm(qty);
     return n;
 }
 
@@ -125,17 +125,17 @@ var pkgBlock = new JsonObject
     ["label"] = "Embedded Probe Data",
 };
 
-void AddCase(string id, string description, JsonArray nodes, Package canonical)
+void AddCase(string id, string description, Func<Func<int, JsonNode>, JsonArray> nodes, Package canonical)
 {
     cases.Add(new JsonObject
     {
         ["id"] = id,
         ["description"] = description,
         ["pkg"] = pkgBlock.DeepClone(),
-        ["nodes"] = nodes,
+        ["nodes"] = nodes(qty => qty),
         ["expectedCanonicalForm"] = CanonicalForm.Serialize(canonical),
         ["expectedHash"] = CanonicalForm.Hash(canonical),
-        ["expectedSerialize"] = nodes.DeepClone(),
+        ["expectedSerialize"] = nodes(qty => qty.ToString()),
     });
 }
 
@@ -151,7 +151,7 @@ AddCase(
     "A named embedded value ($name = the authored dict-key) inside a list-valued object property. " +
     "The embedded carries NO type statement — its type is inferred from the property's range and " +
     "is not materialized in canonical form.",
-    new JsonArray(OrderNode("o1", items: new JsonArray(LineItemNode("first", "X", 1)), note: "A")),
+    q => new JsonArray(OrderNode("o1", items: new JsonArray(LineItemNode(q, "first", "X", 1)), note: "A")),
     Pkg(new Subject($"{DATA}/o1", new List<Statement>
     {
         TypeStmt($"{SCHEMA}/Order"),
@@ -164,7 +164,7 @@ AddCase(
     "embedded-unnamed-positional",
     "The same embedded content with NO $name (a positional list item). The name participates in " +
     "content identity, so this case hashes differently from embedded-named-in-list.",
-    new JsonArray(OrderNode("o1", items: new JsonArray(LineItemNode(null, "X", 1)), note: "A")),
+    q => new JsonArray(OrderNode("o1", items: new JsonArray(LineItemNode(q, null, "X", 1)), note: "A")),
     Pkg(new Subject($"{DATA}/o1", new List<Statement>
     {
         TypeStmt($"{SCHEMA}/Order"),
@@ -178,7 +178,7 @@ AddCase(
     "An embedded value carrying an explicit $type emits a type statement inside the embedded — " +
     "hash-relevant even when it equals the range-derived type (mirrors the reference " +
     "implementation, which warns that the declaration is redundant but still canonicalizes it).",
-    new JsonArray(OrderNode("o1", items: new JsonArray(LineItemNode("first", "X", 1, explicitType: true)), note: "A")),
+    q => new JsonArray(OrderNode("o1", items: new JsonArray(LineItemNode(q, "first", "X", 1, explicitType: true)), note: "A")),
     Pkg(new Subject($"{DATA}/o1", new List<Statement>
     {
         TypeStmt($"{SCHEMA}/Order"),
@@ -190,7 +190,7 @@ AddCase(
 AddCase(
     "embedded-list-order",
     "Two named embeddeds in source order [a, b]. List order is fully semantic and hashed.",
-    new JsonArray(OrderNode("o1", items: new JsonArray(LineItemNode("a", "X", 1), LineItemNode("b", "Y", 2)))),
+    q => new JsonArray(OrderNode("o1", items: new JsonArray(LineItemNode(q, "a", "X", 1), LineItemNode(q, "b", "Y", 2)))),
     Pkg(new Subject($"{DATA}/o1", new List<Statement>
     {
         TypeStmt($"{SCHEMA}/Order"),
@@ -205,7 +205,7 @@ AddCase(
     "The SAME two embeddeds in swapped order [b, a] — a deliberately different expected canonical " +
     "form and hash from embedded-list-order. A port that normalizes, sorts, or randomizes embedded " +
     "collection order (e.g. by representing the dict-keyed group as a map) fails this pair.",
-    new JsonArray(OrderNode("o1", items: new JsonArray(LineItemNode("b", "Y", 2), LineItemNode("a", "X", 1)))),
+    q => new JsonArray(OrderNode("o1", items: new JsonArray(LineItemNode(q, "b", "Y", 2), LineItemNode(q, "a", "X", 1)))),
     Pkg(new Subject($"{DATA}/o1", new List<Statement>
     {
         TypeStmt($"{SCHEMA}/Order"),
@@ -220,7 +220,7 @@ AddCase(
     "embedded-nested",
     "An embedded inside an embedded (customer -> address), each level named. Field mapping at " +
     "every depth uses the containing property's range class.",
-    new JsonArray(OrderNode("o1", customer: new JsonArray(new JsonObject
+    _ => new JsonArray(OrderNode("o1", customer: new JsonArray(new JsonObject
     {
         ["$name"] = "cust",
         ["name"] = "Ada",
@@ -249,7 +249,7 @@ AddCase(
     "canonicalized as a bare embedded, not a one-element list. Wire list-ness is explicit: the " +
     "authored dict-keyed YAML form always arrives from the parser as a list; a node built " +
     "programmatically may carry a bare embedded.",
-    new JsonArray(OrderNode("o1", customer: new JsonObject { ["$name"] = "cust", ["name"] = "Ada" })),
+    _ => new JsonArray(OrderNode("o1", customer: new JsonObject { ["$name"] = "cust", ["name"] = "Ada" })),
     Pkg(new Subject($"{DATA}/o1", new List<Statement>
     {
         TypeStmt($"{SCHEMA}/Order"),
@@ -261,7 +261,7 @@ AddCase(
     "empty-list-emits-nothing",
     "An empty list under any property contributes NO statement to the canonical form (absent and " +
     "empty are identical at the canonical layer). The wire serialize preserves the empty list.",
-    new JsonArray(OrderNode("o1", items: new JsonArray(), note: "A")),
+    _ => new JsonArray(OrderNode("o1", items: new JsonArray(), note: "A")),
     Pkg(new Subject($"{DATA}/o1", new List<Statement>
     {
         TypeStmt($"{SCHEMA}/Order"),

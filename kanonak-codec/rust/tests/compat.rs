@@ -5,9 +5,9 @@
 //! kind the vector names — the one part of an error message every port
 //! reproduces.
 
-#[allow(deprecated)]
-use kanonak_codec::deserialize;
-use kanonak_codec::{content_hash, enum_member, type_matches, CodecError, KanonakNode, Node};
+use kanonak_codec::{
+    content_hash, deserialize, enum_member, type_matches, CodecError, KanonakNode, Node,
+};
 use serde_json::{json, Value as J};
 use std::fs;
 use std::path::PathBuf;
@@ -46,7 +46,6 @@ fn rejected<T: std::fmt::Debug>(result: Result<T, CodecError>, kind: &str, id: &
 }
 
 #[test]
-#[allow(deprecated)]
 fn codec_vectors_compat() {
     let doc = read_doc("codec-vectors-compat.json");
     let schemas = &doc["schemas"];
@@ -186,7 +185,6 @@ fn codec_vectors_compat() {
 /// without it still parses, and without it a type match is by the class
 /// itself only (a subclass node does not match its superclass check).
 #[test]
-#[allow(deprecated)]
 fn ancestors_absent_is_stricter_never_looser() {
     let doc = read_doc("codec-vectors-compat.json");
     let mut schema = doc["schemas"]["five-one"].clone();

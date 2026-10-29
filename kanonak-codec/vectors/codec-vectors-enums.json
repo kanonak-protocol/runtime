@@ -113,7 +113,7 @@
   },
   {
    "id": "enum-range-embedded-rejected",
-   "description": "An EMBEDDED value on an enum-ranged property must be rejected. An enum member is a reference, never an embeddable resource, and `Condition` has no `classes` entry to map fields against — so canonicalization fails loudly instead of inventing a mapping. This case is what keeps `range` inert for enum-ranged props: the inertness holds precisely because this path is unreachable. Rejection is required at CANONICALIZATION only — serialize is schema-free and deserialize does not recurse into embedded values.",
+   "description": "An EMBEDDED value on an enum-ranged property must be rejected. An enum member is a reference, never an embeddable resource, and `Condition` has no `classes` entry to map fields against — so canonicalization fails loudly instead of inventing a mapping. This case is what keeps `range` inert for enum-ranged props: the inertness holds precisely because this path is unreachable. Rejection is required at CANONICALIZATION only — serialize and deserialize carry an embedded value whose class the schema lacks as it stands.",
    "pkg": {
     "publisher": "probe.example.com",
     "packageName": "data",

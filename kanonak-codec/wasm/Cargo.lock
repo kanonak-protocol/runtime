@@ -140,7 +140,7 @@ dependencies = [
 
 [[package]]
 name = "kanonak-codec"
-version = "2.2.0"
+version = "3.0.0"
 dependencies = [
  "kanonak-canonical",
  "serde",
@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "kanonak-codec-wasm"
-version = "2.2.0"
+version = "3.0.0"
 dependencies = [
  "kanonak-codec",
  "serde_json",

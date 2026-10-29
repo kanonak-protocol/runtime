@@ -30,7 +30,7 @@ const (
 )
 
 // jsonNumberForm is how JSON carries a datatype's values, the range they lie
-// in (a nil bound is unbounded), and the Go value DeserializeExact gives an
+// in (a nil bound is unbounded), and the Go value Deserialize gives an
 // integer of it.
 type jsonNumberForm struct {
 	form     numberForm
@@ -311,27 +311,42 @@ func convertValue(prop Prop, value interface{}, schema CodecSchema, convert numb
 	if clsURI == "" {
 		clsURI = prop.Range
 	}
-	if clsURI == "" {
-		return nil, fmt.Errorf(
-			"codec: cannot convert the embedded value under %s: it carries no $type and the "+
-				"property declares no range", prop.Predicate)
-	}
 	cls, err := classFor(schema, clsURI)
 	if err != nil {
-		return nil, fmt.Errorf("codec: cannot convert the embedded value under %s: %w", prop.Predicate, err)
+		// A value no class here types is carried as given, as $extra is;
+		// hashing refuses it where it must (runtime#37).
+		return value, nil
 	}
 	return convertFields(m, cls, schema, convert)
 }
 
-// SerializeExact renders a node to normalized JSON as Serialize does, writing
-// each integer and decimal value in its JSON form (runtime#54): a wide integer
-// and a decimal as a string of their canonical digits, a narrow integer as an
-// int64. A wide integer is taken as a *big.Int, a big.Int, a Go integer, a
-// lexical string or a whole number within ±(2^53 − 1); a decimal as a string
-// only; a narrow integer as a Go integer or a whole number. The node's $type
-// must name a class in the schema. A value outside its datatype's range, or of
-// another type, is refused, ending [json-number-form].
-func SerializeExact(node map[string]interface{}, schema CodecSchema) (map[string]interface{}, error) {
+// Serialize renders a node to its normalized-JSON wire form. $extra entries
+// ride as sibling fields after the modeled ones; a modeled field wins a name
+// collision ([JsonExtensionData] semantics). nil values are dropped. An invalid
+// $types envelope, at any depth, is a producer bug and fails at emit time.
+//
+// Each integer and decimal value is written in its JSON form (kanonak-protocol
+// 4.11.0's numbers-in-json, runtime#54): a wide integer and a decimal as a
+// string of their canonical digits, a narrow integer as an int64. A wide
+// integer is taken as a *big.Int, a big.Int, a Go integer, a lexical string or
+// a whole number within ±(2^53 − 1); a decimal as a string only; a narrow
+// integer as a Go integer or a whole number. The node's $type must name a class
+// in the schema. A value outside its datatype's range, or of another type, is
+// refused, ending [json-number-form].
+func Serialize(node map[string]interface{}, schema CodecSchema) (map[string]interface{}, error) {
+	where, _ := node["$id"].(string)
+	if where == "" {
+		where, _ = node["$type"].(string)
+	}
+	if where == "" {
+		where = "(node)"
+	}
+	if err := assertTypesEnvelopes(node, "serialize "+where); err != nil {
+		return nil, err
+	}
+	if err := assertReferenceValues(node, "serialize "+where); err != nil {
+		return nil, err
+	}
 	typeURI, ok := node["$type"].(string)
 	if !ok {
 		return nil, fmt.Errorf("codec: cannot serialize: missing string $type")
@@ -344,11 +359,19 @@ func SerializeExact(node map[string]interface{}, schema CodecSchema) (map[string
 	if err != nil {
 		return nil, err
 	}
-	return Serialize(converted)
+	return projectNode(converted), nil
 }
 
-// DeserializeExact parses normalized JSON into a node as Deserialize does,
-// reading each integer and decimal value exactly (runtime#54): an integer,
+// Deserialize parses normalized JSON into a node. $-envelope keys and fields
+// modeled on the node's $type stay top-level; every other key is collected
+// into $extra so a strongly-typed consumer round-trips it losslessly.
+//
+// Requires a class in the schema that can read $type: the exact class, or the
+// same class at a compatible later version (runtime#28 - see classFor). The
+// node keeps the $type it was WRITTEN with; the producer's bytes are the
+// producer's.
+//
+// Each integer and decimal value is read exactly (runtime#54): an integer,
 // nonNegativeInteger, positiveInteger, nonPositiveInteger or negativeInteger
 // to a *big.Int, a long to an int64 and an unsignedLong to a uint64, each from
 // a string or a whole number within ±(2^53 − 1); a decimal to a string of its
@@ -356,8 +379,8 @@ func SerializeExact(node map[string]interface{}, schema CodecSchema) (map[string
 // whole number only. A number may arrive as a json.Number or a float64. A
 // value JSON may already have rounded, or one outside its datatype's range, is
 // refused, ending [json-number-form].
-func DeserializeExact(jsonObj map[string]interface{}, schema CodecSchema) (map[string]interface{}, error) {
-	node, err := Deserialize(jsonObj, schema)
+func Deserialize(jsonObj map[string]interface{}, schema CodecSchema) (map[string]interface{}, error) {
+	node, err := parseNode(jsonObj, schema)
 	if err != nil {
 		return nil, err
 	}

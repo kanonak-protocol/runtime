@@ -1,8 +1,8 @@
 /**
  * Generates codec-vectors-json-numbers.json — the JSON forms of integer and
- * decimal values (kanonak-codec 2.2.0, kanonak-protocol/runtime#54), as
+ * decimal values (kanonak-codec 3.0.0, kanonak-protocol/runtime#54), as
  * kanonak-protocol 4.11.0's `numbers-in-json` convention gives them. Every
- * port's `serializeExact` and `deserializeExact`, and each language's JSON
+ * port's `serialize` and `deserialize`, and each language's JSON
  * binding, read and write exactly these.
  *
  * Unlike the other codec vectors, the expected values are the convention's,
@@ -134,8 +134,8 @@ write('embedded-decimal', 'amount', { value: '1.5' }, '{"value": "1.5"}');
 
 const out = {
   description:
-    'The JSON forms of integer and decimal values (kanonak-codec 2.2.0, runtime#54), as kanonak-protocol 4.11.0\'s ' +
-    'numbers-in-json convention gives them. Every port\'s serializeExact and deserializeExact, and each language\'s ' +
+    'The JSON forms of integer and decimal values (kanonak-codec 3.0.0, runtime#54), as kanonak-protocol 4.11.0\'s ' +
+    'numbers-in-json convention gives them. Every port\'s serialize and deserialize, and each language\'s ' +
     'JSON binding, read and write exactly these. readCases: a node of `class` whose `field` holds the JSON text `json` ' +
     'reads as `expected`, the canonical lexical form of each value (a list item by item, an embedded value field by ' +
     'field, each by its own datatype), or, with expectError, is refused. A wide integer (integer, its four ' +

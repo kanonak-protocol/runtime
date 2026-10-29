@@ -30,16 +30,14 @@ exact-version only. Every rejection message ends in a bracketed kind:
 ``[unknown-type]``, ``[newer-version]``, ``[other-major]``,
 ``[other-minor-line]``, ``[hash-needs-exact-version]``.
 
-``serialize_exact`` and ``deserialize_exact`` (runtime#54) write and read each
+``serialize`` and ``deserialize`` (3.0.0, runtime#54) write and read each
 integer and decimal value in its JSON form, as kanonak-protocol 4.11.0's
 ``numbers-in-json`` gives it, refusing what JSON may already have rounded
-(``[json-number-form]``). They replace ``serialize`` and ``deserialize``, which
-are deprecated.
+(``[json-number-form]``).
 """
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
@@ -75,12 +73,10 @@ __all__ = [
     "canonical_form",
     "content_hash",
     "deserialize",
-    "deserialize_exact",
     "embed",
     "enum_member",
     "ref",
     "serialize",
-    "serialize_exact",
     "to_node",
     "type_matches",
 ]
@@ -526,26 +522,7 @@ def content_hash(nodes: List[Dict[str, Any]], schema: Dict[str, Any], pkg: Dict[
     return _canonical_hash(build_package(nodes, schema, pkg))
 
 
-def serialize(node: Dict[str, Any]) -> Dict[str, Any]:
-    """Deprecated: use ``serialize_exact``, which writes integer and decimal
-    values in their JSON forms (runtime#54).
-
-    Serialize a typed node to its normalized-JSON wire form. ``$extra`` entries
-    ride as sibling fields after the modeled ones; a modeled field wins a name
-    collision (``[JsonExtensionData]`` semantics)."""
-    warnings.warn(
-        "serialize is deprecated: use serialize_exact, which writes integer and "
-        "decimal values in their JSON forms (runtime#54)",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _serialize(node)
-
-
-def _serialize(node: Dict[str, Any]) -> Dict[str, Any]:
-    # Producer-side $types validation, at every depth — fail closest to the bug.
-    _assert_types_envelopes(node, f"serialize {node.get('$id') or node.get('$type') or '(node)'}")
-    _assert_reference_values(node, f"serialize {node.get('$id') or node.get('$type') or '(node)'}")
+def _project_node(node: Dict[str, Any]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for key, value in node.items():
         if key == "$extra" or value is None:
@@ -559,28 +536,7 @@ def _serialize(node: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def deserialize(json_obj: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
-    """Deprecated: use ``deserialize_exact``, which reads integer and decimal
-    values exactly (runtime#54).
-
-    Parse normalized JSON into a typed node. ``$``-envelope keys and fields
-    modeled on the node's ``$type`` stay top-level; every other key is collected
-    into ``$extra`` so a strongly-typed consumer round-trips it losslessly.
-
-    Requires a class in the schema that can read ``$type``: the exact class, or
-    the same class at a compatible later version (runtime#28 — see
-    ``_class_for``). The node keeps the ``$type`` it was WRITTEN with; the
-    producer's bytes are the producer's."""
-    warnings.warn(
-        "deserialize is deprecated: use deserialize_exact, which reads integer "
-        "and decimal values exactly (runtime#54)",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _deserialize(json_obj, schema)
-
-
-def _deserialize(json_obj: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
+def _parse_node(json_obj: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
     type_uri = json_obj.get("$type")
     if not isinstance(type_uri, str):
         raise ValueError("Cannot deserialize: missing string $type")
@@ -630,8 +586,9 @@ def to_node(typed: Any, schema: Dict[str, Any]) -> Dict[str, Any]:
     native serde, not reflection: the instance dumps to its normalized-JSON
     wire form (envelope-as-data + ``ref``/``embed`` values), and the wire form
     maps onto the node contract through the SAME split ``deserialize`` defines
-    — the typed path and the dictionary path are one contract, not two."""
-    return _deserialize(_wire_dict(typed), schema)
+    — the typed path and the dictionary path are one contract, not two. Its
+    values stay as the typed object holds them."""
+    return _parse_node(_wire_dict(typed), schema)
 
 
 def ref(target: Any) -> Dict[str, Any]:
@@ -870,40 +827,54 @@ def _convert_value(prop: Dict[str, Any], value: Any, schema: Dict[str, Any], con
         if not isinstance(value, dict) or "$ref" in value:
             return value
         cls_uri = value["$type"] if isinstance(value.get("$type"), str) else prop.get("range")
+        # A value no class here types is carried as given, as $extra is; hashing refuses it where it must (runtime#37).
         if cls_uri is None:
-            raise ValueError(
-                f"Cannot convert the embedded value under {prop['predicate']}: it carries "
-                "no $type and the property declares no range."
-            )
-        cls = _class_or_raise(schema, cls_uri, f"the embedded value under {prop['predicate']}")
+            return value
+        try:
+            cls = _class_for(schema, cls_uri)
+        except _Unreadable:
+            return value
         return _convert_fields(value, cls, schema, convert)
     form = _json_number_form_of(prop)
     return value if form is None else convert(prop, form, value)
 
 
-def serialize_exact(node: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
-    """Serialize a typed node to its normalized-JSON wire form, as ``serialize``
-    does, writing each integer and decimal value in its JSON form
-    (``numbers-in-json``, runtime#54): a wide integer (an ``int``, a lexical
-    ``str``, or a whole ``float`` within ±(2^53 − 1)) and a decimal (a
-    ``Decimal`` or a lexical ``str``) as a string of canonical digits, a narrow
-    integer as an ``int``. Anything else, or a value outside its datatype's
-    range, is refused with a ``ValueError`` ending ``[json-number-form]``."""
+def serialize(node: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Serialize a typed node to its normalized-JSON wire form. ``$extra`` entries
+    ride as sibling fields after the modeled ones; a modeled field wins a name
+    collision (``[JsonExtensionData]`` semantics). Each integer and decimal value
+    is written in its JSON form (kanonak-protocol 4.11.0's ``numbers-in-json``,
+    runtime#54): a wide integer (an ``int``, a lexical ``str``, or a whole
+    ``float`` within ±(2^53 − 1)) and a decimal (a ``Decimal`` or a lexical
+    ``str``) as a string of canonical digits, a narrow integer as an ``int``.
+    Anything else, or a value outside its datatype's range, is refused with a
+    ``ValueError`` ending ``[json-number-form]``."""
+    # Producer-side $types validation, at every depth — fail closest to the bug.
+    _assert_types_envelopes(node, f"serialize {node.get('$id') or node.get('$type') or '(node)'}")
+    _assert_reference_values(node, f"serialize {node.get('$id') or node.get('$type') or '(node)'}")
     type_uri = node.get("$type")
     if not isinstance(type_uri, str):
         raise ValueError("Cannot serialize: missing string $type")
     cls = _class_or_raise(schema, type_uri, f"node {node.get('$id') or type_uri}")
-    return _serialize(_convert_fields(node, cls, schema, _write_json_number))
+    return _project_node(_convert_fields(node, cls, schema, _write_json_number))
 
 
-def deserialize_exact(json_obj: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
-    """Parse normalized JSON into a typed node, as ``deserialize`` does, reading
-    each integer and decimal value exactly (``numbers-in-json``, runtime#54): a
-    wide integer to an ``int``, from a string or a whole number within
-    ±(2^53 − 1); a decimal to a ``Decimal``, from a string only; a narrow integer
-    to an ``int``, from a whole number only. A value JSON may already have
-    rounded, or one outside its datatype's range, is refused with a
+def deserialize(json_obj: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse normalized JSON into a typed node. ``$``-envelope keys and fields
+    modeled on the node's ``$type`` stay top-level; every other key is collected
+    into ``$extra`` so a strongly-typed consumer round-trips it losslessly.
+
+    Requires a class in the schema that can read ``$type``: the exact class, or
+    the same class at a compatible later version (runtime#28 — see
+    ``_class_for``). The node keeps the ``$type`` it was WRITTEN with; the
+    producer's bytes are the producer's.
+
+    Each integer and decimal value is read exactly (``numbers-in-json``,
+    runtime#54): a wide integer to an ``int``, from a string or a whole number
+    within ±(2^53 − 1); a decimal to a ``Decimal``, from a string only; a narrow
+    integer to an ``int``, from a whole number only. A value JSON may already
+    have rounded, or one outside its datatype's range, is refused with a
     ``ValueError`` ending ``[json-number-form]``."""
-    node = _deserialize(json_obj, schema)
+    node = _parse_node(json_obj, schema)
     cls = _class_or_raise(schema, node["$type"], f"node {node.get('$id') or node['$type']}")
     return _convert_fields(node, cls, schema, _read_json_number)

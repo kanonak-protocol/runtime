@@ -93,7 +93,7 @@ function runFile(file) {
     }
 
     c.nodes.forEach((node, i) => {
-      const wire = tryCall("serialize", node);
+      const wire = tryCall("serialize", node, doc.schema);
       if (wire.err !== undefined) {
         fail(`[${c.id}] serialize[${i}] rejected: ${wire.err}`);
       } else if (!deepEqual(JSON.parse(wire.ok), c.expectedSerialize[i])) {
@@ -116,7 +116,7 @@ function runTypesFile(file) {
       if (tryCall("canonicalForm", c.nodes, doc.schema, c.pkg).err === undefined) {
         fail(`[${c.id}] expected canonicalize to reject, it did not`);
       }
-      if (c.nodes.every((n) => tryCall("serialize", n).err === undefined)) {
+      if (c.nodes.every((n) => tryCall("serialize", n, doc.schema).err === undefined)) {
         fail(`[${c.id}] expected serialize to reject, it did not`);
       }
       if (c.nodes.every((n) => tryCall("deserialize", n, doc.schema).err === undefined)) {
@@ -143,7 +143,7 @@ function runTypesFile(file) {
 
     const roundTripped = [];
     c.nodes.forEach((node, i) => {
-      const wire = tryCall("serialize", node);
+      const wire = tryCall("serialize", node, doc.schema);
       if (wire.err !== undefined) {
         fail(`[${c.id}] serialize[${i}] rejected: ${wire.err}`);
         return;
@@ -160,7 +160,7 @@ function runTypesFile(file) {
         return;
       }
       const backObj = JSON.parse(back.ok);
-      const reWire = tryCall("serialize", backObj);
+      const reWire = tryCall("serialize", backObj, doc.schema);
       if (
         reWire.err !== undefined ||
         !deepEqual(JSON.parse(reWire.ok), c.expectedSerialize[i])

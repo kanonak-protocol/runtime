@@ -3,6 +3,7 @@ package codec
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/big"
 	"os"
 	"reflect"
@@ -32,8 +33,8 @@ type jsonNumbersVectors struct {
 	} `json:"writeCases"`
 }
 
-// exactTypes is the Go type DeserializeExact gives a value of each datatype,
-// and SerializeExact takes (Paul's proxy, 2026-10-27).
+// exactTypes is the Go type Deserialize gives a value of each datatype,
+// and Serialize takes (Paul's proxy, 2026-10-27).
 var exactTypes = map[string]string{
 	"integer": "*big.Int", "nonNegativeInteger": "*big.Int", "positiveInteger": "*big.Int",
 	"nonPositiveInteger": "*big.Int", "negativeInteger": "*big.Int",
@@ -51,7 +52,7 @@ func exactTypeOf(t *testing.T, prop Prop) string {
 	return exactTypes[name]
 }
 
-// lexicalOf renders a value DeserializeExact gave back to its canonical lexical
+// lexicalOf renders a value Deserialize gave back to its canonical lexical
 // form, item by item and field by field, checking each is of its exact type.
 func lexicalOf(t *testing.T, id string, prop Prop, value interface{}, schema CodecSchema) interface{} {
 	t.Helper()
@@ -126,10 +127,11 @@ func asJSON(t *testing.T, v interface{}) interface{} {
 }
 
 // TestCodecVectorsJSONNumbers drives the JSON forms of integer and decimal
-// values (runtime#54) through SerializeExact and DeserializeExact. Each read
+// values (runtime#54) through Serialize and Deserialize. Each read
 // case runs twice, decoded with UseNumber and without it, since a number
-// reaches DeserializeExact as a json.Number or a float64. A value read back is
-// written again, so what DeserializeExact gives SerializeExact takes.
+// reaches Deserialize as a json.Number or a float64. A value read back is
+// written again, so what Deserialize gives Serialize takes, and hashed, so
+// ContentHash takes it too.
 func TestCodecVectorsJSONNumbers(t *testing.T) {
 	const path = "../vectors/codec-vectors-json-numbers.json"
 	data, err := os.ReadFile(path)
@@ -175,7 +177,7 @@ func TestCodecVectorsJSONNumbers(t *testing.T) {
 			fieldJSON, _ := json.Marshal(c.Field)
 			text := fmt.Sprintf(`{"$type": %s, %s: %s}`, classJSON, fieldJSON, c.JSON)
 
-			node, err := DeserializeExact(decode([]byte(text)), schema)
+			node, err := Deserialize(decode([]byte(text)), schema)
 			if c.ExpectError {
 				if !refused(err) {
 					t.Errorf("[%s] read: expected a [json-number-form] refusal, got %v (err %v)", id, node, err)
@@ -189,13 +191,16 @@ func TestCodecVectorsJSONNumbers(t *testing.T) {
 			if got := lexicalOf(t, id, prop, node[c.Field], schema); !reflect.DeepEqual(got, c.Expected) {
 				t.Errorf("[%s] read: expected %v, got %v", id, c.Expected, got)
 			}
+			if got, want := hashOf(t, node, schema), hashOf(t, map[string]interface{}{"$type": doc.Class, c.Field: c.Expected}, schema); got != want {
+				t.Errorf("[%s] what was read hashes as %s, its lexical forms as %s", id, got, want)
+			}
 
-			wire, err := SerializeExact(node, schema)
+			wire, err := Serialize(node, schema)
 			if err != nil {
 				t.Errorf("[%s] write what was read: %v", id, err)
 				continue
 			}
-			again, err := DeserializeExact(decode(mustMarshal(t, wire)), schema)
+			again, err := Deserialize(decode(mustMarshal(t, wire)), schema)
 			if err != nil {
 				t.Errorf("[%s] read what was written: %v", id, err)
 			} else if got := lexicalOf(t, id, prop, again[c.Field], schema); !reflect.DeepEqual(got, c.Expected) {
@@ -211,7 +216,7 @@ func TestCodecVectorsJSONNumbers(t *testing.T) {
 			t.Fatalf("[%s] field %s is not modeled on %s", c.ID, c.Field, doc.Class)
 		}
 		node := map[string]interface{}{"$type": doc.Class, c.Field: exactValue(t, prop, c.Value, schema)}
-		wire, err := SerializeExact(node, schema)
+		wire, err := Serialize(node, schema)
 		if c.ExpectError {
 			if !refused(err) {
 				t.Errorf("[%s] write: expected a [json-number-form] refusal, got %v (err %v)", c.ID, wire, err)
@@ -234,6 +239,19 @@ func TestCodecVectorsJSONNumbers(t *testing.T) {
 	}
 	t.Logf("codec-vectors-json-numbers.json: %d read cases (each decoded two ways), %d write cases, %d runs",
 		len(doc.ReadCases), len(doc.WriteCases), total)
+}
+
+// hashOf is the content hash of node, as the one subject of a probe package.
+func hashOf(t *testing.T, node map[string]interface{}, schema CodecSchema) string {
+	t.Helper()
+	subject := maps.Clone(node)
+	subject["$id"] = "probe.example.com/data@1.0.0/n"
+	hash, err := ContentHash([]map[string]interface{}{subject}, schema,
+		PackageContext{Publisher: "probe.example.com", PackageName: "data", Version: "1.0.0"})
+	if err != nil {
+		t.Fatalf("hash %v: %v", node, err)
+	}
+	return hash
 }
 
 func mustMarshal(t *testing.T, v interface{}) []byte {

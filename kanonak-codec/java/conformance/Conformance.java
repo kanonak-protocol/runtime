@@ -117,7 +117,7 @@ public final class Conformance {
                     ok = false;
                     System.out.println("FAIL [" + cid + "] expected canonicalize to reject, it did not");
                 }
-                if (!rejects(() -> nodes.forEach(Codec::serialize))) {
+                if (!rejects(() -> nodes.forEach(n -> Codec.serialize(n, schema)))) {
                     ok = false;
                     System.out.println("FAIL [" + cid + "] expected serialize to reject, it did not");
                 }
@@ -155,14 +155,14 @@ public final class Conformance {
             List<Map<String, Object>> roundTripped = new ArrayList<>();
             boolean serOk = true;
             for (int i = 0; i < nodes.size(); i++) {
-                Map<String, Object> wire = Codec.serialize(nodes.get(i));
+                Map<String, Object> wire = Codec.serialize(nodes.get(i), schema);
                 if (!deepEquals(wire, expSerialize.get(i))) {
                     serOk = false;
                     System.out.println("FAIL [" + cid + "] serialize[" + i + "]\n  got: " + wire
                         + "\n  exp: " + expSerialize.get(i));
                 }
                 Map<String, Object> back = Codec.deserialize(wire, schema);
-                if (!deepEquals(Codec.serialize(back), expSerialize.get(i))) {
+                if (!deepEquals(Codec.serialize(back, schema), expSerialize.get(i))) {
                     serOk = false;
                     System.out.println("FAIL [" + cid + "] round-trip serialize[" + i + "] mismatch");
                 }
@@ -248,7 +248,7 @@ public final class Conformance {
 
             List<Object> expSerialize = asList(caseObj.get("expectedSerialize"));
             for (int i = 0; i < nodes.size(); i++) {
-                Object got = Codec.serialize(nodes.get(i));
+                Object got = Codec.serialize(nodes.get(i), schema);
                 Object exp = expSerialize.get(i);
                 if (deepEquals(got, exp)) {
                     passed++;
@@ -331,9 +331,9 @@ public final class Conformance {
      * STANDS ALONE, with no `classes` twin; `enums` and an enum-ranged `range`
      * are canonicalization-INERT; and expectError cases are rejected at
      * CANONICALIZATION. Unlike the $types file's all-three-surfaces contract
-     * this violation is schema-DEPENDENT: serialize is schema-free and
-     * deserialize does not recurse into embedded values, so canonicalization is
-     * the only surface that can see it.
+     * this violation is schema-DEPENDENT: serialize and deserialize carry an
+     * embedded value whose class the schema lacks as it stands, so
+     * canonicalization is the only surface that refuses it.
      */
     static int[] runEnumsFile(String vectors) throws Exception {
         @SuppressWarnings("unchecked")
@@ -416,7 +416,7 @@ public final class Conformance {
             }
             List<Object> expectedSer = asList(caseObj.get("expectedSerialize"));
             for (int i = 0; i < nodes.size(); i++) {
-                if (!deepEquals(Codec.serialize(nodes.get(i)), expectedSer.get(i))) {
+                if (!deepEquals(Codec.serialize(nodes.get(i), schema), expectedSer.get(i))) {
                     ok = false;
                     System.out.println("FAIL [" + cid + "] serialize[" + i + "] mismatch");
                 }
@@ -546,7 +546,7 @@ public final class Conformance {
 
     /**
      * The JSON forms of integer and decimal values (runtime#54), through
-     * {@link Codec#deserializeExact} and {@link Codec#serializeExact}. A read
+     * {@link Codec#deserialize} and {@link Codec#serialize}. A read
      * case parses {@code {"$type": class, field: json}} with this runner's
      * reader, whose numbers keep their tokens, and compares the field's value,
      * each scalar of its datatype's type here, as its canonical lexical form.
@@ -571,17 +571,17 @@ public final class Conformance {
                 "{\"$type\": " + toJson(typeUri) + ", " + toJson(field) + ": " + c.get("json") + "}"));
             boolean ok;
             if (Boolean.TRUE.equals(c.get("expectError"))) {
-                ok = rejectsWithKind(() -> Codec.deserializeExact(json, schema), "json-number-form", cid);
+                ok = rejectsWithKind(() -> Codec.deserialize(json, schema), "json-number-form", cid);
             } else {
                 try {
-                    Object got = lexicalOf(cls.props().get(field), Codec.deserializeExact(json, schema).get(field), schema);
+                    Object got = lexicalOf(cls.props().get(field), Codec.deserialize(json, schema).get(field), schema);
                     ok = deepEquals(got, c.get("expected"));
                     if (!ok) {
-                        System.out.println("FAIL [" + cid + "] deserializeExact\n  got: " + got + "\n  exp: " + c.get("expected"));
+                        System.out.println("FAIL [" + cid + "] deserialize\n  got: " + got + "\n  exp: " + c.get("expected"));
                     }
                 } catch (RuntimeException err) {
                     ok = false;
-                    System.out.println("FAIL [" + cid + "] deserializeExact threw: " + err.getMessage());
+                    System.out.println("FAIL [" + cid + "] deserialize threw: " + err.getMessage());
                 }
             }
             if (ok) passed++; else failed++;
@@ -596,18 +596,18 @@ public final class Conformance {
             node.put(field, exactOf(cls.props().get(field), c.get("value"), schema));
             boolean ok;
             if (Boolean.TRUE.equals(c.get("expectError"))) {
-                ok = rejectsWithKind(() -> Codec.serializeExact(node, schema), "json-number-form", cid);
+                ok = rejectsWithKind(() -> Codec.serialize(node, schema), "json-number-form", cid);
             } else {
                 Object exp = Json.parse((String) c.get("json"));
                 try {
-                    Object got = Codec.serializeExact(node, schema).get(field);
+                    Object got = Codec.serialize(node, schema).get(field);
                     ok = deepEquals(got, exp) && numbersAreLongs(got);
                     if (!ok) {
-                        System.out.println("FAIL [" + cid + "] serializeExact\n  got: " + got + "\n  exp: " + exp);
+                        System.out.println("FAIL [" + cid + "] serialize\n  got: " + got + "\n  exp: " + exp);
                     }
                 } catch (RuntimeException err) {
                     ok = false;
-                    System.out.println("FAIL [" + cid + "] serializeExact threw: " + err.getMessage());
+                    System.out.println("FAIL [" + cid + "] serialize threw: " + err.getMessage());
                 }
             }
             if (ok) passed++; else failed++;
@@ -617,7 +617,7 @@ public final class Conformance {
     }
 
     /**
-     * A value {@link Codec#deserializeExact} gave, as its canonical lexical
+     * A value {@link Codec#deserialize} gave, as its canonical lexical
      * form: a list item by item, an embedded value field by field. A scalar
      * that isn't of its datatype's type here renders as what it is instead.
      */
@@ -667,11 +667,11 @@ public final class Conformance {
             return new BigDecimal(text);
         }
         BigInteger n = new BigInteger(text);
-        // A value past a long's range, which serializeExact must refuse, can only be given as a BigInteger.
+        // A value past a long's range, which serialize must refuse, can only be given as a BigInteger.
         return type == BigInteger.class || n.bitLength() >= 64 ? n : (Object) n.longValue();
     }
 
-    /** Whether every number in a written value is a {@link Long}, as serializeExact writes a narrow integer. */
+    /** Whether every number in a written value is a {@link Long}, as serialize writes a narrow integer. */
     static boolean numbersAreLongs(Object value) {
         if (value instanceof List<?> list) {
             return list.stream().allMatch(Conformance::numbersAreLongs);

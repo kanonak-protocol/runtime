@@ -79,7 +79,7 @@ final class CodecVectorTests: XCTestCase {
 
             let expectedSerialize = c["expectedSerialize"] as! [[String: Any]]
             for (i, node) in nodes.enumerated() {
-                let got = try serialize(node)
+                let got = try serialize(node, schema: file.schema)
                 XCTAssertTrue(jsonEqual(got, expectedSerialize[i]),
                               "[\(cid)] serialize[\(i)]\n  got: \(got)\n  exp: \(expectedSerialize[i])")
                 // deserialize(serialize(node)) recovers the modeled + $extra split.
@@ -125,7 +125,7 @@ final class CodecVectorTests: XCTestCase {
             if c["expectError"] as? Bool == true {
                 XCTAssertThrowsError(try canonicalForm(nodes, schema: file.schema, pkg: pkg),
                                      "[\(cid)] expected canonicalize to reject")
-                XCTAssertThrowsError(try nodes.map { try serialize($0) },
+                XCTAssertThrowsError(try nodes.map { try serialize($0, schema: file.schema) },
                                      "[\(cid)] expected serialize to reject")
                 XCTAssertThrowsError(try nodes.map { try deserialize($0, schema: file.schema) },
                                      "[\(cid)] expected deserialize to reject")
@@ -138,11 +138,11 @@ final class CodecVectorTests: XCTestCase {
                            c["expectedHash"] as! String, "[\(cid)] hash")
 
             let expectedSerialize = c["expectedSerialize"] as! [[String: Any]]
-            let ser = try nodes.map { try serialize($0) }
+            let ser = try nodes.map { try serialize($0, schema: file.schema) }
             XCTAssertTrue(jsonEqual(ser, expectedSerialize), "[\(cid)] serialize")
 
             let roundTripped = try ser.map { try deserialize($0, schema: file.schema) }
-            let rtSer = try roundTripped.map { try serialize($0) }
+            let rtSer = try roundTripped.map { try serialize($0, schema: file.schema) }
             XCTAssertTrue(jsonEqual(rtSer, expectedSerialize), "[\(cid)] round-trip serialize")
             XCTAssertEqual(try contentHash(roundTripped, schema: file.schema, pkg: pkg),
                            c["expectedHash"] as! String, "[\(cid)] round-trip hash")
@@ -156,9 +156,9 @@ final class CodecVectorTests: XCTestCase {
     /// STANDS ALONE, with no `classes` twin; `enums` and an enum-ranged `range`
     /// are canonicalization-INERT; and expectError cases are rejected at
     /// CANONICALIZATION. Unlike the $types file's all-three-surfaces contract
-    /// this violation is schema-DEPENDENT: serialize is schema-free and
-    /// deserialize does not recurse into embedded values, so canonicalization
-    /// is the only surface that can see it.
+    /// this violation is schema-DEPENDENT: serialize and deserialize carry an
+    /// embedded value whose class the schema lacks as it stands, so
+    /// canonicalization is the only surface that can see it.
     func testEnumsVectors() throws {
         let file = try loadVectors("codec-vectors-enums.json")
         XCTAssertFalse(file.cases.isEmpty)
@@ -198,7 +198,7 @@ final class CodecVectorTests: XCTestCase {
                            c["expectedHash"] as! String, "[\(cid)] hash")
 
             let expectedSerialize = c["expectedSerialize"] as! [[String: Any]]
-            let ser = try nodes.map { try serialize($0) }
+            let ser = try nodes.map { try serialize($0, schema: file.schema) }
             XCTAssertTrue(jsonEqual(ser, expectedSerialize), "[\(cid)] serialize")
         }
     }
@@ -553,8 +553,8 @@ final class TypedSurfaceTests: XCTestCase {
     }
 }
 
-/// The JSON forms of integer and decimal values (runtime#54): serializeExact
-/// and deserializeExact against the shared vectors.
+/// The JSON forms of integer and decimal values (runtime#54): serialize and
+/// deserialize against the shared vectors.
 final class JSONNumberVectorTests: XCTestCase {
     private static let narrowFields: Set<String> = ["int", "short", "byte", "unsignedInt", "unsignedShort", "unsignedByte"]
 
@@ -607,10 +607,10 @@ final class JSONNumberVectorTests: XCTestCase {
             let text = "{\"$type\": \(try writeJSON(cls)), \(try writeJSON(field)): \(c["json"] as! String)}"
             let node = try parseJSON(text) as! [String: Any]
             if c["expectError"] as? Bool == true {
-                expectRefusal(id) { try deserializeExact(node, schema: schema) }
+                expectRefusal(id) { try deserialize(node, schema: schema) }
                 continue
             }
-            let got = try deserializeExact(node, schema: schema)
+            let got = try deserialize(node, schema: schema)
             XCTAssertTrue(jsonEqual(lexicalOf(got[field]!), c["expected"]!), "[\(id)] got \(got[field]!)")
         }
 
@@ -619,16 +619,16 @@ final class JSONNumberVectorTests: XCTestCase {
             let field = c["field"] as! String
             let node: [String: Any] = ["$type": cls, field: exactValue(field, c["value"]!)]
             if c["expectError"] as? Bool == true {
-                expectRefusal(id) { try serializeExact(node, schema: schema) }
+                expectRefusal(id) { try serialize(node, schema: schema) }
                 continue
             }
-            let got = try serializeExact(node, schema: schema)
+            let got = try serialize(node, schema: schema)
             let expected = try parseJSON(c["json"] as! String)
             XCTAssertTrue(jsonEqual(got[field]!, expected), "[\(id)] got \(got[field]!)")
         }
 
         // A JSON number is judged from its token, so one a double would round to a whole number isn't taken for it.
         let edge = try parseJSON("{\"$type\": \(try writeJSON(cls)), \"integer\": 1.0000000000000000001}") as! [String: Any]
-        expectRefusal("integer-number-not-whole-past-double-precision") { try deserializeExact(edge, schema: schema) }
+        expectRefusal("integer-number-not-whole-past-double-precision") { try deserialize(edge, schema: schema) }
     }
 }

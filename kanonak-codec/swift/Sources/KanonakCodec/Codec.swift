@@ -652,22 +652,16 @@ public func contentHash(_ nodes: [[String: Any]], schema: CodecSchema, pkg: Pack
 // Wire form
 // ---------------------------------------------------------------------------
 
-/// Render a typed node to its normalized-JSON wire form. $extra entries ride
-/// as sibling fields after the modeled ones; a modeled field wins a name
-/// collision. Null values are dropped. An invalid $types envelope (at any
-/// depth) is a producer bug and fails at emit time, as does a fragment
-/// reference (runtime#6).
-@available(*, deprecated, message: "Use serializeExact(_:schema:), which writes integer and decimal values in their JSON forms (runtime#54).")
-public func serialize(_ node: [String: Any]) throws -> [String: Any] {
-    try serializeNode(node)
-}
-
-func serializeNode(_ node: [String: Any]) throws -> [String: Any] {
+private func assertSerializable(_ node: [String: Any]) throws {
     var context = node["$id"] as? String ?? ""
     if context.isEmpty { context = node["$type"] as? String ?? "" }
     if context.isEmpty { context = "(node)" }
     try assertTypesEnvelopes(node, where: "serialize \(context)")
     try assertReferenceValues(node, where: "serialize \(context)")
+}
+
+func serializeNode(_ node: [String: Any]) throws -> [String: Any] {
+    try assertSerializable(node)
     var out: [String: Any] = [:]
     for (key, val) in node {
         if key == "$extra" || val is NSNull { continue }
@@ -680,18 +674,6 @@ func serializeNode(_ node: [String: Any]) throws -> [String: Any] {
         }
     }
     return out
-}
-
-/// Parse normalized JSON into a typed node. $-envelope keys and fields modeled
-/// on the node's $type stay top-level; every other key is collected into
-/// $extra so a strongly-typed consumer round-trips it losslessly. Requires
-/// $type (the one field that cannot be inferred) and a class in the schema
-/// that can read it: the exact class, or the same class at a compatible later
-/// version (runtime#28 — see `classFor`). The node keeps the $type it was
-/// WRITTEN with; the producer's bytes are the producer's.
-@available(*, deprecated, message: "Use deserializeExact(_:schema:), which reads integer and decimal values exactly (runtime#54).")
-public func deserialize(_ jsonObj: [String: Any], schema: CodecSchema) throws -> [String: Any] {
-    try deserializeNode(jsonObj, schema: schema)
 }
 
 func deserializeNode(_ jsonObj: [String: Any], schema: CodecSchema) throws -> [String: Any] {
@@ -954,18 +936,23 @@ private func convertValue(_ prop: CodecProp, _ value: Any, _ schema: CodecSchema
         return try convert(prop, form, value)
     }
     guard let map = value as? [String: Any], map["$ref"] == nil else { return value }
-    guard let clsUri = (map["$type"] as? String) ?? prop.range else {
-        throw CodecError("codec: cannot convert the embedded value under \(prop.predicate): it carries no $type and the property declares no range")
-    }
-    return try convertFields(map, try classOrThrow(schema, clsUri, "the embedded value under \(prop.predicate)"), schema, convert)
+    // A value no class here types is carried as given, as $extra is; hashing refuses it where it must (runtime#37).
+    guard let clsUri = (map["$type"] as? String) ?? prop.range,
+          case .success(let cls) = classFor(schema, clsUri) else { return value }
+    return try convertFields(map, cls, schema, convert)
 }
 
-/// Render a node to its normalized-JSON wire form, as `serialize` does, writing
-/// each integer and decimal value in its JSON form (kanonak-protocol 4.11.0's
-/// numbers-in-json, runtime#54): a wide integer and a decimal as a string of
-/// their canonical digits, a narrow integer as a number. A value outside its
-/// datatype's range is refused, ending `[json-number-form]`.
-public func serializeExact(_ node: [String: Any], schema: CodecSchema) throws -> [String: Any] {
+/// Render a node to its normalized-JSON wire form. $extra entries ride as
+/// sibling fields after the modeled ones; a modeled field wins a name
+/// collision. Null values are dropped. An invalid $types envelope (at any
+/// depth) is a producer bug and fails at emit time, as does a fragment
+/// reference (runtime#6). Each integer and decimal value is written in its JSON
+/// form (kanonak-protocol 4.11.0's numbers-in-json, runtime#54): a wide integer
+/// and a decimal as a string of their canonical digits, a narrow integer as a
+/// number. A value outside its datatype's range is refused, ending
+/// `[json-number-form]`.
+public func serialize(_ node: [String: Any], schema: CodecSchema) throws -> [String: Any] {
+    try assertSerializable(node)
     guard let typeUri = node["$type"] as? String else {
         throw CodecError("codec: cannot serialize: missing string $type")
     }
@@ -973,14 +960,20 @@ public func serializeExact(_ node: [String: Any], schema: CodecSchema) throws ->
     return try serializeNode(try convertFields(node, cls, schema, writeJSONNumber))
 }
 
-/// Parse normalized JSON into a node, as `deserialize` does, reading each
-/// integer and decimal value exactly: an unbounded wide integer to its
+/// Parse normalized JSON into a node. $-envelope keys and fields modeled on the
+/// node's $type stay top-level; every other key is collected into $extra so a
+/// strongly-typed consumer round-trips it losslessly. Requires $type (the one
+/// field that cannot be inferred) and a class in the schema that can read it:
+/// the exact class, or the same class at a compatible later version
+/// (runtime#28 — see `classFor`). The node keeps the $type it was WRITTEN
+/// with; the producer's bytes are the producer's. Each integer and decimal
+/// value is read exactly: an unbounded wide integer to its
 /// canonical digits, `long` to an Int64 and `unsignedLong` to a UInt64, from a
 /// string or a whole number within ±(2^53 − 1); a decimal to its canonical
 /// digits, from a string only; a narrow integer to an Int64, from a whole
 /// number only. A value JSON may already have rounded, or one outside its
 /// datatype's range, is refused, ending `[json-number-form]`.
-public func deserializeExact(_ jsonObj: [String: Any], schema: CodecSchema) throws -> [String: Any] {
+public func deserialize(_ jsonObj: [String: Any], schema: CodecSchema) throws -> [String: Any] {
     let node = try deserializeNode(jsonObj, schema: schema)
     let typeUri = node["$type"] as! String
     let cls = try classOrThrow(schema, typeUri, "node \(node["$id"] as? String ?? typeUri)")

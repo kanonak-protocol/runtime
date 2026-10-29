@@ -169,7 +169,8 @@ func (r *Ref[T]) UnmarshalJSON(data []byte) error {
 // bridge is native serde: the instance serializes to its normalized-JSON wire
 // form (envelope-as-data + Ref values), and the wire form maps onto the node
 // contract through the SAME split Deserialize defines — so the typed path and
-// the dictionary path are one contract, not two.
+// the dictionary path are one contract, not two. Its values stay as the wire
+// form gives them, a number as a json.Number.
 func ToNode(typed interface{}, schema CodecSchema) (map[string]interface{}, error) {
 	wire, err := json.Marshal(typed)
 	if err != nil {
@@ -182,7 +183,7 @@ func ToNode(typed interface{}, schema CodecSchema) (map[string]interface{}, erro
 		return nil, fmt.Errorf(
 			"codec: a typed instance must serialize to a JSON object (the wire node form): %v", err)
 	}
-	return Deserialize(obj, schema)
+	return parseNode(obj, schema)
 }
 
 // TypeMatches reports whether this instance is of the class classURI -

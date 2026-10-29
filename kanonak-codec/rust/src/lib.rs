@@ -819,22 +819,9 @@ pub fn content_hash(nodes: &[Node], schema: &Json, pkg: &Json) -> Result<String,
     Ok(canonical_hash_pkg(&build_package(nodes, schema, pkg)?)?)
 }
 
-/// Serialize a typed node to its normalized-JSON wire form. `$extra` entries ride
-/// as sibling fields after the modeled ones; a modeled field wins a name
-/// collision (`[JsonExtensionData]` semantics). No `$extra` key on the wire.
-/// Fallible since 0.4.0: an invalid `$types` envelope (at any depth) is a
-/// producer bug and fails at emit time, as does a fragment reference (runtime#6).
-#[deprecated(
-    note = "use serialize_exact, which also writes each integer and decimal value in its JSON form"
-)]
-pub fn serialize(node: &Node) -> Result<Node, CodecError> {
-    let where_ = node
-        .get("$id")
-        .or_else(|| node.get("$type"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("(node)");
-    assert_types_envelopes_map(node, &format!("serialize {}", where_))?;
-    assert_reference_values_map(node, &format!("serialize {}", where_))?;
+/// A node's normalized-JSON wire projection: `$extra` spread back to top
+/// level, nulls dropped.
+fn project_node(node: &Node) -> Node {
     let mut out = Map::new();
     for (key, value) in node.iter() {
         if key == "$extra" || value.is_null() {
@@ -849,21 +836,12 @@ pub fn serialize(node: &Node) -> Result<Node, CodecError> {
             }
         }
     }
-    Ok(out)
+    out
 }
 
-/// Parse normalized JSON into a typed node. `$`-envelope keys and fields modeled
-/// on the node's `$type` stay top-level; every other key is collected into
-/// `$extra` so a strongly-typed consumer round-trips it losslessly. Requires
-/// `$type` (the one field that cannot be inferred) and a class in the schema
-/// that can read it: the exact class, or the same class at a compatible later
-/// version (runtime#28 — see [`type_matches`] for the same rule). The node
-/// keeps the `$type` it was WRITTEN with; the producer's bytes are the
-/// producer's.
-#[deprecated(
-    note = "use deserialize_exact, which also reads each integer and decimal value exactly"
-)]
-pub fn deserialize(json_obj: &Node, schema: &Json) -> Result<Node, CodecError> {
+/// A node parsed from normalized JSON as [`deserialize`] parses it, its values
+/// as JSON gave them.
+pub(crate) fn parse_node(json_obj: &Node, schema: &Json) -> Result<Node, CodecError> {
     let type_uri = json_obj
         .get("$type")
         .and_then(|t| t.as_str())
@@ -1160,6 +1138,10 @@ fn props_to_convert<'a>(
 ) -> Result<&'a Map<String, Json>, CodecError> {
     let (cls_uri, cls) = class_for(classes_of(schema)?, type_uri)
         .map_err(|e| CodecError::Malformed(format!("Cannot convert {}: {}", what, e)))?;
+    props_of(cls_uri, cls)
+}
+
+fn props_of<'a>(cls_uri: &str, cls: &'a Json) -> Result<&'a Map<String, Json>, CodecError> {
     cls.get("props")
         .and_then(|p| p.as_object())
         .ok_or_else(|| CodecError::Malformed(format!("class {} is missing 'props'", cls_uri)))
@@ -1208,17 +1190,22 @@ fn convert_value(
             let cls_uri = map
                 .get("$type")
                 .and_then(|t| t.as_str())
-                .or_else(|| prop.get("range").and_then(|r| r.as_str()))
-                .ok_or_else(|| {
-                    CodecError::Malformed(format!(
-                        "Cannot convert the embedded value under {}: it carries no $type and \
-                         the property declares no range.",
-                        name
-                    ))
-                })?;
-            let props =
-                props_to_convert(schema, cls_uri, &format!("the embedded value under {}", name))?;
-            Ok(Json::Object(convert_fields(map, props, schema, convert)?))
+                .or_else(|| prop.get("range").and_then(|r| r.as_str()));
+            let found = match cls_uri {
+                Some(cls_uri) => class_for(classes_of(schema)?, cls_uri).ok(),
+                None => None,
+            };
+            // A value no class here types is carried as given, as `$extra` is;
+            // hashing refuses it where it must (runtime#37).
+            match found {
+                Some((cls_uri, cls)) => Ok(Json::Object(convert_fields(
+                    map,
+                    props_of(cls_uri, cls)?,
+                    schema,
+                    convert,
+                )?)),
+                None => Ok(value.clone()),
+            }
         }
         _ => Ok(value.clone()),
     }
@@ -1242,32 +1229,54 @@ fn convert_node(
     convert_fields(node, props_to_convert(schema, type_uri, &what)?, schema, convert)
 }
 
-/// Serialize a node to normalized JSON, as [`serialize`] does, writing each
-/// integer and decimal value in its JSON form (kanonak-protocol 4.11.0's
-/// `numbers-in-json`, runtime#54): a wide integer (`integer`, its four
-/// sign-restricted forms, `long`, `unsignedLong`) and a decimal as a string of
-/// its canonical digits, a narrow integer (`int` and narrower) as a number.
-/// Takes a wide integer as a string of digits, an `i64` or `u64` number, or a
-/// whole number within ±(2^53 − 1); a decimal as a string of digits; a narrow
-/// integer as a whole number. Anything else, or a value outside its datatype's
-/// range, is refused with an error ending `[json-number-form]`.
-#[allow(deprecated)]
-pub fn serialize_exact(node: &Node, schema: &Json) -> Result<Node, CodecError> {
-    serialize(&convert_node(node, schema, write_json_number)?)
+/// Serialize a node to its normalized-JSON wire form. `$extra` entries ride as
+/// sibling fields after the modeled ones; a modeled field wins a name
+/// collision (`[JsonExtensionData]` semantics). No `$extra` key on the wire.
+/// Each integer and decimal value is written in its JSON form
+/// (kanonak-protocol 4.11.0's `numbers-in-json`, runtime#54), through lists and
+/// embedded values: a wide integer (`integer`, its four sign-restricted forms,
+/// `long`, `unsignedLong`) and a decimal as a string of its canonical digits, a
+/// narrow integer (`int` and narrower) as a number. Takes a wide integer as a
+/// string of digits, an `i64` or `u64` number, or a whole number within
+/// ±(2^53 − 1); a decimal as a string of digits; a narrow integer as a whole
+/// number. Anything else, or a value outside its datatype's range, is refused
+/// with an error ending `[json-number-form]`. `$type` is required, and its
+/// class is found as [`deserialize`] finds it; an embedded value whose class
+/// the schema doesn't hold is carried as given. An invalid `$types` envelope
+/// (at any depth) is a producer bug and fails at emit time, as does a fragment
+/// reference (runtime#6).
+pub fn serialize(node: &Node, schema: &Json) -> Result<Node, CodecError> {
+    let where_ = node
+        .get("$id")
+        .or_else(|| node.get("$type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("(node)");
+    assert_types_envelopes_map(node, &format!("serialize {}", where_))?;
+    assert_reference_values_map(node, &format!("serialize {}", where_))?;
+    Ok(project_node(&convert_node(node, schema, write_json_number)?))
 }
 
-/// Parse normalized JSON into a node, as [`deserialize`] does, reading each
-/// integer and decimal value exactly (kanonak-protocol 4.11.0's
-/// `numbers-in-json`, runtime#54): a wide integer from a string, or from a
-/// whole JSON number within ±(2^53 − 1); a decimal from a string only; a
-/// narrow integer from a whole number only. The node holds `integer`, its four
-/// sign-restricted forms and `decimal` as a string of canonical digits, and
-/// `long`, `unsignedLong` and the narrow integers as a number. A value JSON may
-/// already have rounded, or one outside its datatype's range, is refused with
-/// an error ending `[json-number-form]`. It judges the `Value`s it's given:
-/// without serde_json's `arbitrary_precision`, `1.0000000000000000001` is
-/// already the `f64` `1.0`, so a caller that must refuse it parses with it.
-#[allow(deprecated)]
-pub fn deserialize_exact(json_obj: &Node, schema: &Json) -> Result<Node, CodecError> {
-    convert_node(&deserialize(json_obj, schema)?, schema, read_json_number)
+/// Parse normalized JSON into a typed node. `$`-envelope keys and fields modeled
+/// on the node's `$type` stay top-level; every other key is collected into
+/// `$extra` so a strongly-typed consumer round-trips it losslessly. Requires
+/// `$type` (the one field that cannot be inferred) and a class in the schema
+/// that can read it: the exact class, or the same class at a compatible later
+/// version (runtime#28 — see [`type_matches`] for the same rule). The node
+/// keeps the `$type` it was WRITTEN with; the producer's bytes are the
+/// producer's.
+///
+/// Each integer and decimal value is read exactly (kanonak-protocol 4.11.0's
+/// `numbers-in-json`, runtime#54), through lists and embedded values: a wide
+/// integer from a string, or from a whole JSON number within ±(2^53 − 1); a
+/// decimal from a string only; a narrow integer from a whole number only. The
+/// node holds `integer`, its four sign-restricted forms and `decimal` as a
+/// string of canonical digits, and `long`, `unsignedLong` and the narrow
+/// integers as a number. A value JSON may already have rounded, or one outside
+/// its datatype's range, is refused with an error ending `[json-number-form]`.
+/// An embedded value whose class the schema doesn't hold is carried as given.
+/// It judges the `Value`s it's given: without serde_json's
+/// `arbitrary_precision`, `1.0000000000000000001` is already the `f64` `1.0`,
+/// so a caller that must refuse it parses with it.
+pub fn deserialize(json_obj: &Node, schema: &Json) -> Result<Node, CodecError> {
+    convert_node(&parse_node(json_obj, schema)?, schema, read_json_number)
 }

@@ -152,7 +152,7 @@ class Program
                 bool ok = true;
                 if (!Rejects(() => Codec.CanonicalForm(nodes, schema, pkg)))
                 { ok = false; Console.WriteLine($"FAIL [{id}] expected canonicalize to reject, it did not"); }
-                if (!Rejects(() => { foreach (var n in nodes) Codec.Serialize(n); }))
+                if (!Rejects(() => { foreach (var n in nodes) Codec.Serialize(n, schema); }))
                 { ok = false; Console.WriteLine($"FAIL [{id}] expected serialize to reject, it did not"); }
                 if (!Rejects(() => { foreach (var n in nodes) Codec.Deserialize(n, schema); }))
                 { ok = false; Console.WriteLine($"FAIL [{id}] expected deserialize to reject, it did not"); }
@@ -175,13 +175,13 @@ class Program
             bool serOk = true;
             for (int i = 0; i < nodes.Count; i++)
             {
-                var wire = Codec.Serialize(nodes[i]);
+                var wire = Codec.Serialize(nodes[i], schema);
                 object exp = DecodeJson(expSer[i]);
                 if (!DeepEquals(wire, exp))
                 { serOk = false; Console.WriteLine($"FAIL [{id}] serialize[{i}]\n  got: {Show(wire)}\n  exp: {Show(exp)}"); }
 
                 var back = Codec.Deserialize(wire, schema);
-                if (!DeepEquals(Codec.Serialize(back), exp))
+                if (!DeepEquals(Codec.Serialize(back, schema), exp))
                 { serOk = false; Console.WriteLine($"FAIL [{id}] round-trip serialize[{i}] mismatch"); }
                 roundTripped.Add(back);
             }
@@ -241,7 +241,7 @@ class Program
             var expSer = c.GetProperty("expectedSerialize");
             for (int i = 0; i < nodes.Count; i++)
             {
-                var got = Codec.Serialize(nodes[i]);
+                var got = Codec.Serialize(nodes[i], schema);
                 object exp = DecodeJson(expSer[i]);
                 if (DeepEquals(got, exp)) passed++;
                 else { failed++; Console.WriteLine($"FAIL [{id}] serialize[{i}]\n  got: {Show(got)}\n  exp: {Show(exp)}"); }
@@ -324,7 +324,7 @@ class Program
             var expSer = c.GetProperty("expectedSerialize");
             for (int i = 0; i < nodes.Count; i++)
             {
-                if (!DeepEquals(Codec.Serialize(nodes[i]), DecodeJson(expSer[i])))
+                if (!DeepEquals(Codec.Serialize(nodes[i], schema), DecodeJson(expSer[i])))
                 { ok = false; Console.WriteLine($"FAIL [{id}] serialize[{i}] mismatch"); }
             }
             if (ok) passed++; else failed++;
@@ -419,8 +419,8 @@ class Program
     }
 
     /// <summary>
-    /// The JSON forms of integer and decimal values (runtime#54): <see cref="Codec.DeserializeExact"/> and
-    /// <see cref="Codec.SerializeExact"/> over one field of the file's class. A read case's value must come back in
+    /// The JSON forms of integer and decimal values (runtime#54): <see cref="Codec.Deserialize"/> and
+    /// <see cref="Codec.Serialize"/> over one field of the file's class. A read case's value must come back in
     /// the type this port gives its datatype, and render to the expected canonical lexical form, item by item and
     /// field by field; a write case's value is built in that type from its canonical lexical form, and its output
     /// compared with the expected JSON. A refusal must end in <c>[json-number-form]</c>.
@@ -447,13 +447,13 @@ class Program
             bool ok;
             if (c.TryGetProperty("expectError", out var expErr) && expErr.GetBoolean())
             {
-                ok = RejectsWithKind(() => Codec.DeserializeExact(json, schema), "json-number-form", id);
+                ok = RejectsWithKind(() => Codec.Deserialize(json, schema), "json-number-form", id);
             }
             else
             {
                 object exp = DecodeJson(c.GetProperty("expected"));
                 object got;
-                try { got = LexicalOf(Codec.DeserializeExact(json, schema)[field], cls.Props[field], schema); }
+                try { got = LexicalOf(Codec.Deserialize(json, schema)[field], cls.Props[field], schema); }
                 catch (Exception err) { got = "threw: " + err.Message; }
                 ok = DeepEquals(got, exp);
                 if (!ok) Console.WriteLine($"FAIL [{id}]\n  got: {Show(got)}\n  exp: {Show(exp)}");
@@ -474,14 +474,14 @@ class Program
             bool ok;
             if (c.TryGetProperty("expectError", out var expErr) && expErr.GetBoolean())
             {
-                ok = RejectsWithKind(() => Codec.SerializeExact(node, schema), "json-number-form", id);
+                ok = RejectsWithKind(() => Codec.Serialize(node, schema), "json-number-form", id);
             }
             else
             {
                 object exp;
                 using (var expected = JsonDocument.Parse(c.GetProperty("json").GetString())) exp = DecodeJson(expected.RootElement);
                 object got;
-                try { got = Codec.SerializeExact(node, schema)[field]; }
+                try { got = Codec.Serialize(node, schema)[field]; }
                 catch (Exception err) { got = "threw: " + err.Message; }
                 ok = DeepEquals(got, exp);
                 if (!ok) Console.WriteLine($"FAIL [{id}]\n  got: {Show(got)}\n  exp: {Show(exp)}");
@@ -540,7 +540,7 @@ class Program
 
     /// <summary>
     /// A write case's value in <see cref="PortType"/>, from its canonical lexical form. A value past a
-    /// <see cref="long"/> or a <see cref="ulong"/> is a <see cref="BigInteger"/>, which <see cref="Codec.SerializeExact"/>
+    /// <see cref="long"/> or a <see cref="ulong"/> is a <see cref="BigInteger"/>, which <see cref="Codec.Serialize"/>
     /// takes for any wide integer, so its range check is what refuses it.
     /// </summary>
     static object PortValue(JsonElement value, CodecProp prop, CodecSchema schema)

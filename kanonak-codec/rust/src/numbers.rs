@@ -1,7 +1,7 @@
 //! The serde binding of the JSON forms of integer and decimal values
 //! (kanonak-protocol 4.11.0's `numbers-in-json`, runtime#54): the types a
 //! generated struct's fields take, so serde_json reads and writes them as
-//! `serialize_exact` and `deserialize_exact` do. `int` and narrower take `i32`
+//! `serialize` and `deserialize` do. `int` and narrower take `i32`
 //! and the rest, since serde_json already refuses a string, a fraction, or a
 //! value past their width for those.
 

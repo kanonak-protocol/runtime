@@ -626,22 +626,9 @@ public final class Codec {
         return CanonicalForm.hash(buildPackage(nodes, schema, pkg));
     }
 
-    /**
-     * Serialize a typed node to its normalized-JSON wire form. {@code $extra}
-     * entries ride as sibling fields after the modeled ones; a modeled field wins
-     * a name collision ({@code [JsonExtensionData]} semantics). {@code null}
-     * values are dropped and no {@code $extra} key appears on the wire.
-     *
-     * @deprecated Use {@link #serializeExact(Map, CodecSchema)}, which writes
-     *     integer and decimal values in their JSON forms (runtime#54).
-     */
-    @Deprecated
+    /** A node's normalized-JSON wire projection, its values as the node holds them. */
     @SuppressWarnings("unchecked")
-    public static Map<String, Object> serialize(Map<String, Object> node) {
-        // Producer-side $types validation, at every depth — fail closest to the bug.
-        Object where = node.get("$id") instanceof String s && !s.isEmpty() ? s : node.get("$type");
-        assertTypesEnvelopes(node, "serialize " + (where != null ? where : "(node)"));
-        assertReferenceValues(node, "serialize " + (where != null ? where : "(node)"));
+    private static Map<String, Object> projectNode(Map<String, Object> node) {
         Map<String, Object> out = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : node.entrySet()) {
             if ("$extra".equals(entry.getKey()) || entry.getValue() == null) {
@@ -660,21 +647,8 @@ public final class Codec {
         return out;
     }
 
-    /**
-     * Parse normalized JSON into a typed node. {@code $}-envelope keys and the
-     * fields modeled on the node's {@code $type} stay top-level; every other key
-     * is an open-world assertion collected into {@code $extra}. Requires a string
-     * {@code $type} (the one field that cannot be inferred) and a class in the
-     * schema that can read it: the exact class, or the same class at a
-     * compatible later version (runtime#28 — the same lookup {@link #typeMatches}
-     * uses). The node keeps the {@code $type} it was WRITTEN with; the
-     * producer's bytes are the producer's.
-     *
-     * @deprecated Use {@link #deserializeExact(Map, CodecSchema)}, which reads
-     *     integer and decimal values exactly (runtime#54).
-     */
-    @Deprecated
-    public static Map<String, Object> deserialize(Map<String, Object> json, CodecSchema schema) {
+    /** A node parsed from normalized JSON, its values as JSON gave them. */
+    static Map<String, Object> parseNode(Map<String, Object> json, CodecSchema schema) {
         Object typeUri = json.get("$type");
         if (!(typeUri instanceof String)) {
             throw new IllegalArgumentException("Cannot deserialize: missing string $type");
@@ -898,20 +872,20 @@ public final class Codec {
             }
             case WIDE -> {
                 BigDecimal n = value instanceof String s ? integerOfLexical(prop, s)
-                    : value instanceof Double ? wholeNumber(value, MAX_SAFE_INTEGER)
+                    : value instanceof Double || value instanceof JsonNumber ? wholeNumber(value, MAX_SAFE_INTEGER)
                     : value instanceof BigInteger || value instanceof Long || value instanceof Integer
                         || value instanceof Short || value instanceof Byte ? numericValue(value)
                     : null;
                 if (n == null) {
                     throw jsonNumberError(prop, "pass a wide integer as a BigInteger, Long, Integer, Short, Byte, string, "
-                        + "or whole Double within ±(2^53 − 1); got " + describe(value));
+                        + "or whole Double or JsonNumber within ±(2^53 − 1); got " + describe(value));
                 }
                 yield inRange(prop, form, n).toBigIntegerExact().toString();
             }
             case NARROW -> {
-                BigDecimal n = value instanceof Number ? wholeNumber(value, null) : null;
+                BigDecimal n = value instanceof Number || value instanceof JsonNumber ? wholeNumber(value, null) : null;
                 if (n == null) {
-                    throw jsonNumberError(prop, "pass a narrow integer as a whole Number; got " + describe(value));
+                    throw jsonNumberError(prop, "pass a narrow integer as a whole Number or JsonNumber; got " + describe(value));
                 }
                 yield exactInteger(form, inRange(prop, form, n));
             }
@@ -963,49 +937,64 @@ public final class Codec {
         if (value instanceof Map<?, ?> m && !m.containsKey("$ref")) {
             Map<String, Object> map = (Map<String, Object>) m;
             String clsUri = map.get("$type") instanceof String t ? t : prop.range();
-            if (clsUri == null) {
-                throw new IllegalArgumentException("Cannot convert the embedded value under " + prop.predicate()
-                    + ": it carries no $type and the property declares no range.");
+            ClassMatch match = clsUri == null ? null : classFor(schema, clsUri);
+            // A value no class here types is carried as given, as $extra is; hashing refuses it where it must (runtime#37).
+            if (match == null || match.cls() == null) {
+                return value;
             }
-            CodecClass cls = classOrThrow(schema, clsUri, "the embedded value under " + prop.predicate());
-            return convertFields(map, cls, schema, convert);
+            return convertFields(map, match.cls(), schema, convert);
         }
         return value;
     }
 
     /**
-     * Serialize a node to normalized JSON, as {@link #serialize} does, writing
-     * each integer and decimal value in its JSON form (kanonak-protocol
+     * Serialize a node to its normalized-JSON wire form. {@code $extra}
+     * entries ride as sibling fields after the modeled ones; a modeled field wins
+     * a name collision ({@code [JsonExtensionData]} semantics). {@code null}
+     * values are dropped and no {@code $extra} key appears on the wire. Each
+     * integer and decimal value is written in its JSON form (kanonak-protocol
      * 4.11.0's {@code numbers-in-json}, runtime#54). A wide integer, given as
      * a {@link BigInteger}, {@link Long}, {@link Integer}, {@link Short},
-     * {@link Byte}, lexical {@link String} or whole {@link Double} within
-     * ±(2^53 − 1), and a decimal, given as a {@link BigDecimal} or lexical
-     * {@link String}, are written as the string of their canonical lexical
-     * form; a narrow integer, given as a whole {@link Number}, as a
-     * {@link Long}. Any other value, or one outside its datatype's range, is
-     * refused with a message ending {@code [json-number-form]}.
+     * {@link Byte}, lexical {@link String}, or whole {@link Double} or
+     * {@link JsonNumber} within ±(2^53 − 1), and a decimal, given as a
+     * {@link BigDecimal} or lexical {@link String}, are written as the string
+     * of their canonical lexical form; a narrow integer, given as a whole
+     * {@link Number} or {@link JsonNumber}, as a {@link Long}. Any other value,
+     * or one outside its datatype's range, is refused with a message ending
+     * {@code [json-number-form]}.
      */
-    public static Map<String, Object> serializeExact(Map<String, Object> node, CodecSchema schema) {
+    public static Map<String, Object> serialize(Map<String, Object> node, CodecSchema schema) {
+        // Producer-side $types validation, at every depth — fail closest to the bug.
+        Object where = node.get("$id") instanceof String s && !s.isEmpty() ? s : node.get("$type");
+        assertTypesEnvelopes(node, "serialize " + (where != null ? where : "(node)"));
+        assertReferenceValues(node, "serialize " + (where != null ? where : "(node)"));
         if (!(node.get("$type") instanceof String typeUri)) {
             throw new IllegalArgumentException("Cannot serialize: missing string $type");
         }
         String what = "node " + (node.get("$id") instanceof String id ? id : typeUri);
-        return serialize(convertFields(node, classOrThrow(schema, typeUri, what), schema, Codec::writeJsonNumber));
+        return projectNode(convertFields(node, classOrThrow(schema, typeUri, what), schema, Codec::writeJsonNumber));
     }
 
     /**
-     * Parse normalized JSON into a node, as {@link #deserialize} does, reading
-     * each integer and decimal value exactly (kanonak-protocol 4.11.0's
-     * {@code numbers-in-json}, runtime#54): a wide integer from a string or a
-     * whole number within ±(2^53 − 1), to a {@link Long} for {@code xsd:long}
-     * and a {@link BigInteger} for the others; a decimal from a string only,
-     * to a {@link BigDecimal}; a narrow integer from a whole number only, to a
+     * Parse normalized JSON into a node. {@code $}-envelope keys and the
+     * fields modeled on the node's {@code $type} stay top-level; every other key
+     * is an open-world assertion collected into {@code $extra}. Requires a string
+     * {@code $type} (the one field that cannot be inferred) and a class in the
+     * schema that can read it: the exact class, or the same class at a
+     * compatible later version (runtime#28 — the same lookup {@link #typeMatches}
+     * uses). The node keeps the {@code $type} it was WRITTEN with; the
+     * producer's bytes are the producer's. Each integer and decimal value is
+     * read exactly (kanonak-protocol 4.11.0's {@code numbers-in-json},
+     * runtime#54): a wide integer from a string or a whole number within
+     * ±(2^53 − 1), to a {@link Long} for {@code xsd:long} and a
+     * {@link BigInteger} for the others; a decimal from a string only, to a
+     * {@link BigDecimal}; a narrow integer from a whole number only, to a
      * {@link Long}. A number JSON may already have rounded, or a value outside
      * its datatype's range, is refused with a message ending
      * {@code [json-number-form]}.
      */
-    public static Map<String, Object> deserializeExact(Map<String, Object> json, CodecSchema schema) {
-        Map<String, Object> node = deserialize(json, schema);
+    public static Map<String, Object> deserialize(Map<String, Object> json, CodecSchema schema) {
+        Map<String, Object> node = parseNode(json, schema);
         String typeUri = (String) node.get("$type");
         String what = "node " + (node.get("$id") instanceof String id ? id : typeUri);
         return convertFields(node, classOrThrow(schema, typeUri, what), schema, Codec::readJsonNumber);

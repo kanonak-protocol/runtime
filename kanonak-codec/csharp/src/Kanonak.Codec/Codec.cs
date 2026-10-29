@@ -602,22 +602,31 @@ namespace Kanonak.Codec
         // -- Wire (de)serialization ---------------------------------------------
 
         /// <summary>
-        /// Serialize a typed node to its normalized-JSON wire form. The modeled fields
-        /// (drop null) come first in node order; then <c>$extra</c> entries spread as
-        /// sibling fields AFTER — a modeled field wins a name collision, and no
-        /// <c>$extra</c> key rides on the wire (<c>[JsonExtensionData]</c> semantics).
+        /// Serialize a node to its normalized-JSON wire form. The modeled fields (drop null) come first in node
+        /// order; then <c>$extra</c> entries spread as sibling fields AFTER — a modeled field wins a name collision,
+        /// and no <c>$extra</c> key rides on the wire (<c>[JsonExtensionData]</c> semantics). Each integer and
+        /// decimal value is written in its JSON form (kanonak-protocol 4.11.0's <c>numbers-in-json</c>), through
+        /// lists and embedded values: a wide integer and a decimal as a string of their canonical digits, a narrow
+        /// integer as a <see cref="long"/>. A wide integer is passed as a <see cref="BigInteger"/>, any integer type,
+        /// a lexical string or a whole <see cref="double"/> within ±(2^53 − 1); a decimal as a lexical string or a
+        /// <see cref="decimal"/>; a narrow integer as any integer type or a whole <see cref="double"/>. Anything
+        /// else, or a value outside its datatype's range, is refused with a message ending
+        /// <c>[json-number-form]</c>.
         /// </summary>
-        [Obsolete("Use SerializeExact, which writes each integer and decimal value in its JSON form (numbers-in-json), " +
-            "so a reader in any language gets it exactly.")]
-        public static Dictionary<string, object> Serialize(IReadOnlyDictionary<string, object> node)
-            => SerializeWire(node);
-
-        private static Dictionary<string, object> SerializeWire(IReadOnlyDictionary<string, object> node)
+        public static Dictionary<string, object> Serialize(IReadOnlyDictionary<string, object> node, CodecSchema schema)
         {
             // Producer-side $types validation, at every depth — fail closest to the bug.
             string where = GetString(node, "$id") ?? GetString(node, "$type") ?? "(node)";
             AssertTypesEnvelopes(node, "serialize " + where);
             AssertReferenceValues(node, "serialize " + where);
+            string typeUri = GetString(node, "$type");
+            if (typeUri == null) throw new ArgumentException("Cannot serialize: missing string $type");
+            CodecClass cls = ClassOrThrow(schema, typeUri, "node " + (GetString(node, "$id") ?? typeUri));
+            return ProjectNode(ConvertFields(node, cls, schema, WriteJsonNumber));
+        }
+
+        private static Dictionary<string, object> ProjectNode(IReadOnlyDictionary<string, object> node)
+        {
             var outMap = new Dictionary<string, object>();
             foreach (var kv in node)
             {
@@ -634,22 +643,29 @@ namespace Kanonak.Codec
         }
 
         /// <summary>
-        /// Parse normalized JSON into a typed node. <c>$</c>-envelope keys and the fields
-        /// modeled on the node's <c>$type</c> stay top-level; every other key is an
-        /// open-world assertion collected into <c>$extra</c> so a strongly-typed consumer
-        /// round-trips it losslessly. Requires a string <c>$type</c> (the one field that
-        /// cannot be inferred) and a class in the schema that can read it: the exact
-        /// class, or the same class at a compatible later version (runtime#28 — the
-        /// same lookup <see cref="TypeMatches(IReadOnlyDictionary{string, object}, string, CodecSchema)"/>
-        /// uses). The node keeps the <c>$type</c> it was WRITTEN with; the producer's
-        /// bytes are the producer's.
+        /// Parse normalized JSON into a node. <c>$</c>-envelope keys and the fields modeled on the node's
+        /// <c>$type</c> stay top-level; every other key is an open-world assertion collected into <c>$extra</c> so a
+        /// strongly-typed consumer round-trips it losslessly. Requires a string <c>$type</c> (the one field that
+        /// cannot be inferred) and a class in the schema that can read it: the exact class, or the same class at a
+        /// compatible later version (runtime#28 — the same lookup
+        /// <see cref="TypeMatches(IReadOnlyDictionary{string, object}, string, CodecSchema)"/> uses). The node keeps
+        /// the <c>$type</c> it was WRITTEN with; the producer's bytes are the producer's. Each integer and decimal
+        /// value is read exactly (kanonak-protocol 4.11.0's <c>numbers-in-json</c>), through lists and embedded
+        /// values: <c>integer</c> and its four sign-restricted forms to a <see cref="BigInteger"/>, <c>long</c> to a
+        /// <see cref="long"/> and <c>unsignedLong</c> to a <see cref="ulong"/>, each from a string or a whole JSON
+        /// number within ±(2^53 − 1); a decimal to a string of its canonical digits, from a string only; a narrow
+        /// integer to a <see cref="long"/>, from a whole JSON number only. A value JSON may already have rounded, or
+        /// one outside its datatype's range, is refused with a message ending <c>[json-number-form]</c>.
         /// </summary>
-        [Obsolete("Use DeserializeExact, which reads each integer and decimal value exactly and refuses a JSON number " +
-            "that may have been rounded (numbers-in-json).")]
         public static Dictionary<string, object> Deserialize(IReadOnlyDictionary<string, object> json, CodecSchema schema)
-            => DeserializeWire(json, schema);
+        {
+            Dictionary<string, object> node = ParseNode(json, schema);
+            string typeUri = (string)node["$type"];
+            CodecClass cls = ClassOrThrow(schema, typeUri, "node " + (GetString(node, "$id") ?? typeUri));
+            return ConvertFields(node, cls, schema, ReadJsonNumber);
+        }
 
-        internal static Dictionary<string, object> DeserializeWire(IReadOnlyDictionary<string, object> json, CodecSchema schema)
+        internal static Dictionary<string, object> ParseNode(IReadOnlyDictionary<string, object> json, CodecSchema schema)
         {
             if (!json.TryGetValue("$type", out var typeObj) || !(typeObj is string typeUri))
                 throw new ArgumentException("Cannot deserialize: missing string $type");
@@ -683,40 +699,6 @@ namespace Kanonak.Codec
         // integer or decimal exactly in every language, so a wide integer and a
         // decimal travel as a string of their digits, and a reader refuses a number
         // that may already have been rounded.
-
-        /// <summary>
-        /// Serialize a node to normalized JSON, as <see cref="Serialize"/> does, writing each integer and decimal
-        /// value in its JSON form (kanonak-protocol 4.11.0's <c>numbers-in-json</c>): a wide integer and a decimal
-        /// as a string of their canonical digits, a narrow integer as a <see cref="long"/>. A wide integer is passed
-        /// as a <see cref="BigInteger"/>, any integer type, a lexical string or a whole <see cref="double"/> within
-        /// ±(2^53 − 1); a decimal as a lexical string or a <see cref="decimal"/>; a narrow integer as any integer
-        /// type or a whole <see cref="double"/>. Anything else, or a value outside its datatype's range, is refused
-        /// with a message ending <c>[json-number-form]</c>.
-        /// </summary>
-        public static Dictionary<string, object> SerializeExact(IReadOnlyDictionary<string, object> node, CodecSchema schema)
-        {
-            string typeUri = GetString(node, "$type");
-            if (typeUri == null) throw new ArgumentException("Cannot serialize: missing string $type");
-            CodecClass cls = ClassOrThrow(schema, typeUri, "node " + (GetString(node, "$id") ?? typeUri));
-            return SerializeWire(ConvertFields(node, cls, schema, WriteJsonNumber));
-        }
-
-        /// <summary>
-        /// Parse normalized JSON into a node, as <see cref="Deserialize"/> does, reading each integer and decimal
-        /// value exactly (kanonak-protocol 4.11.0's <c>numbers-in-json</c>): <c>integer</c> and its four
-        /// sign-restricted forms to a <see cref="BigInteger"/>, <c>long</c> to a <see cref="long"/> and
-        /// <c>unsignedLong</c> to a <see cref="ulong"/>, each from a string or a whole JSON number within
-        /// ±(2^53 − 1); a decimal to a string of its canonical digits, from a string only; a narrow integer to a
-        /// <see cref="long"/>, from a whole JSON number only. A value JSON may already have rounded, or one outside
-        /// its datatype's range, is refused with a message ending <c>[json-number-form]</c>.
-        /// </summary>
-        public static Dictionary<string, object> DeserializeExact(IReadOnlyDictionary<string, object> json, CodecSchema schema)
-        {
-            Dictionary<string, object> node = DeserializeWire(json, schema);
-            string typeUri = (string)node["$type"];
-            CodecClass cls = ClassOrThrow(schema, typeUri, "node " + (GetString(node, "$id") ?? typeUri));
-            return ConvertFields(node, cls, schema, ReadJsonNumber);
-        }
 
         private enum JsonNumberKind { Wide, Decimal, Narrow }
 
@@ -948,11 +930,9 @@ namespace Kanonak.Codec
             if (value is IReadOnlyDictionary<string, object> map && !map.ContainsKey("$ref"))
             {
                 string clsUri = GetString(map, "$type") ?? prop.Range;
-                if (clsUri == null)
-                    throw new ArgumentException(
-                        "Cannot convert the embedded value under " + prop.Predicate + ": it carries no $type and the " +
-                        "property declares no range.");
-                return ConvertFields(map, ClassOrThrow(schema, clsUri, "the embedded value under " + prop.Predicate), schema, convert);
+                CodecClass cls = clsUri == null ? null : ClassFor(schema, clsUri, out _);
+                // A value no class here types is carried as given, as $extra is; hashing refuses it where it must (runtime#37).
+                return cls == null ? value : ConvertFields(map, cls, schema, convert);
             }
             return value;
         }

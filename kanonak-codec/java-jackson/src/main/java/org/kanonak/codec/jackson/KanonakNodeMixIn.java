@@ -9,8 +9,8 @@ import java.util.Map;
 /**
  * {@link org.kanonak.codec.KanonakNode}'s accessors, each named by its envelope
  * key. An envelope key that's absent is left out on write, as
- * {@code Codec.serialize} leaves it out; the generated class's own fields keep
- * whatever inclusion it gives them.
+ * {@code Codec.serialize(node, schema)} leaves it out; the generated class's
+ * own fields keep whatever inclusion it gives them.
  */
 abstract class KanonakNodeMixIn {
     @JsonProperty("$id") @JsonInclude(JsonInclude.Include.NON_NULL) abstract String getId();

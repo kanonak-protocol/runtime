@@ -112,7 +112,7 @@ func runVectorFile(t *testing.T, path string) {
 			continue
 		}
 		for i, node := range c.Nodes {
-			wire, err := Serialize(node)
+			wire, err := Serialize(node, schema)
 			if err != nil {
 				t.Errorf("[%s] serialize[%d] error: %v", c.ID, i, err)
 				continue
@@ -181,7 +181,7 @@ func runTypesVectorFile(t *testing.T, path string) {
 			serializeRejected := false
 			deserializeRejected := false
 			for _, node := range c.Nodes {
-				if _, err := Serialize(node); err != nil {
+				if _, err := Serialize(node, schema); err != nil {
 					serializeRejected = true
 				}
 				if _, err := Deserialize(node, schema); err != nil {
@@ -217,7 +217,7 @@ func runTypesVectorFile(t *testing.T, path string) {
 
 		roundTripped := make([]map[string]interface{}, 0, len(c.Nodes))
 		for i, node := range c.Nodes {
-			wire, err := Serialize(node)
+			wire, err := Serialize(node, schema)
 			if err != nil {
 				t.Errorf("[%s] serialize[%d] error: %v", c.ID, i, err)
 				continue
@@ -232,7 +232,7 @@ func runTypesVectorFile(t *testing.T, path string) {
 				t.Errorf("[%s] round-trip deserialize[%d] error: %v", c.ID, i, err)
 				continue
 			}
-			rtWire, err := Serialize(back)
+			rtWire, err := Serialize(back, schema)
 			if err != nil {
 				t.Errorf("[%s] round-trip serialize[%d] error: %v", c.ID, i, err)
 				continue
