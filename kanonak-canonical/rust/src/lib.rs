@@ -129,7 +129,7 @@ macro_rules! re {
 
 pub fn canonical_integer(raw: &str) -> Result<String, CanonError> {
     let t = raw.trim();
-    if !re!(r"^[+-]?\d+$").is_match(t) {
+    if !re!(r"^[+-]?[0-9]+$").is_match(t) {
         return Err(CanonError(format!("canonicalInteger: '{}' invalid", raw)));
     }
     let (sign, digits) = if let Some(r) = t.strip_prefix('-') {
@@ -150,7 +150,7 @@ pub fn canonical_integer(raw: &str) -> Result<String, CanonError> {
 
 pub fn canonical_decimal(raw: &str) -> Result<String, CanonError> {
     let t = raw.trim();
-    let caps = re!(r"^([+-]?)(\d*)(?:\.(\d*))?$")
+    let caps = re!(r"^([+-]?)([0-9]*)(?:\.([0-9]*))?$")
         .captures(t)
         .ok_or_else(|| CanonError(format!("canonicalDecimal: '{}' invalid", raw)))?;
     let int_raw = caps.get(2).map(|m| m.as_str()).unwrap_or("");
@@ -195,7 +195,7 @@ fn canonical_ieee(raw: &str, single: bool, label: &str) -> Result<String, CanonE
     if t == "-INF" {
         return Ok("-INF".to_string());
     }
-    if !re!(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$").is_match(t) {
+    if !re!(r"^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$").is_match(t) {
         return Err(CanonError(format!("canonical{}: '{}' invalid", label, raw)));
     }
     let n: f64 = t
@@ -534,7 +534,7 @@ fn canonical_tz(tz: &str) -> String {
 pub fn canonical_date_time(raw: &str) -> Result<String, CanonError> {
     let what = "canonicalDateTime";
     let caps =
-        re!(r"^(-?\d{4,})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$")
+        re!(r"^(-?[0-9]{4,})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})?$")
             .captures(raw.trim())
             .ok_or_else(|| CanonError(format!("{}: '{}' invalid", what, raw)))?;
     let g = |i: usize| caps.get(i).map(|m| m.as_str()).unwrap_or("");
@@ -565,7 +565,7 @@ pub fn canonical_date_time(raw: &str) -> Result<String, CanonError> {
 
 pub fn canonical_date(raw: &str) -> Result<String, CanonError> {
     let what = "canonicalDate";
-    let caps = re!(r"^(-?\d{4,})-(\d{2})-(\d{2})(Z|[+-]\d{2}:\d{2})?$")
+    let caps = re!(r"^(-?[0-9]{4,})-([0-9]{2})-([0-9]{2})(Z|[+-][0-9]{2}:[0-9]{2})?$")
         .captures(raw.trim())
         .ok_or_else(|| CanonError(format!("{}: '{}' invalid", what, raw)))?;
     let g = |i: usize| caps.get(i).map(|m| m.as_str()).unwrap_or("");
@@ -576,7 +576,7 @@ pub fn canonical_date(raw: &str) -> Result<String, CanonError> {
 
 pub fn canonical_time(raw: &str) -> Result<String, CanonError> {
     let what = "canonicalTime";
-    let caps = re!(r"^(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$")
+    let caps = re!(r"^([0-9]{2}):([0-9]{2}):([0-9]{2})(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})?$")
         .captures(raw.trim())
         .ok_or_else(|| CanonError(format!("{}: '{}' invalid", what, raw)))?;
     let g = |i: usize| caps.get(i).map(|m| m.as_str()).unwrap_or("");

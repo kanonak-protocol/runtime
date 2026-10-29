@@ -65,7 +65,7 @@ namespace Kanonak.Canonical
         }
 
         /// <summary>Exactly <c>0</c> or a digit run with no leading zero — one version part.</summary>
-        private static readonly Regex VersionPartRe = new Regex(@"^(0|[1-9]\d*)$", RegexOptions.Compiled);
+        private static readonly Regex VersionPartRe = new Regex(@"^(0|[1-9][0-9]*)$", RegexOptions.Compiled);
         internal static readonly Regex WhitespaceRe = new Regex(@"\s", RegexOptions.Compiled);
 
         /// <summary><c>major.minor.patch</c>, each part a <see cref="VersionPartRe"/> match, or <c>null</c>.</summary>
