@@ -30,7 +30,7 @@ meta:
   # and re-run the workflow; existing tags are never touched or moved.
   go_module_versions:
     canonical: "1.2.0"
-    codec: "3.0.0"
+    codec: "3.0.1"
     expression: "1.1.0"
     wire: "1.0.0"
   # Swift package version — the ROOT `v<ver>` tag (SwiftPM resolves ONLY root
@@ -58,7 +58,9 @@ meta:
   # and decimal values in their JSON forms (runtime#54), and canonical 1.2.0,
   # whose TypeScript port exports canonicalInteger and canonicalDecimal as every
   # other port's does.
-  swift_package_version: "3.0.0"
+  # 3.0.1: codec 3.0.1, whose TypeScript port reads and writes only the fields a
+  # node holds, never a member every object inherits, such as valueOf (runtime#61).
+  swift_package_version: "3.0.1"
   # GitHub Actions OIDC (no stored token) is preferred where supported. A workflow
   # using OIDC needs:  permissions: { id-token: write, contents: read, attestations: write }
   # All PUBLISH jobs run in the `production` GitHub environment (required by NuGet trusted

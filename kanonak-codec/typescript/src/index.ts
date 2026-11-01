@@ -638,7 +638,7 @@ function fieldStatements(
   for (const [key, raw] of Object.entries(source)) {
     if (ENVELOPE_KEYS.has(key)) continue;
     if (raw === undefined || raw === null) continue;
-    const prop = cls.props[key];
+    const prop = ownField(cls.props, key);
     if (!prop) throw undeclaredStatement(cls, `"${key}"`);
     if (Array.isArray(raw)) {
       // An empty list contributes NO statement — absent and empty are identical
@@ -761,14 +761,27 @@ function projectNode(node: CodecNode): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(node)) {
     if (k === '$extra') continue;
-    if (v !== undefined) out[k] = v;
+    if (v !== undefined) setOwnField(out, k, v);
   }
   if (node.$extra) {
     for (const [k, v] of Object.entries(node.$extra)) {
-      if (v !== undefined && !(k in out)) out[k] = v;
+      if (v !== undefined && !Object.hasOwn(out, k)) setOwnField(out, k, v);
     }
   }
   return out;
+}
+
+/**
+ * A field of a node or a class is only ever its own. A name such as `valueOf` or `constructor` is also a member every
+ * object inherits, so reading it from a node that leaves the field out found a function (runtime#61).
+ */
+function ownField<T>(record: Readonly<Record<string, T>>, name: string): T | undefined {
+  return Object.hasOwn(record, name) ? record[name] : undefined;
+}
+
+/** Sets a field as the record's own, so a field named `__proto__` is a field, never the record's prototype (runtime#61). */
+function setOwnField(record: Record<string, unknown>, name: string, value: unknown): void {
+  Object.defineProperty(record, name, { value, writable: true, enumerable: true, configurable: true });
 }
 
 /**
@@ -799,10 +812,10 @@ function parseNode(json: Record<string, unknown>, schema: CodecSchema): CodecNod
   let extra: Record<string, unknown> | undefined;
   for (const [k, v] of Object.entries(json)) {
     if (k === '$type') continue;
-    if (k.startsWith('$') || k in cls.props) {
-      fields[k] = v;
+    if (k.startsWith('$') || Object.hasOwn(cls.props, k)) {
+      setOwnField(fields, k, v);
     } else {
-      (extra ??= {})[k] = v;
+      setOwnField((extra ??= {}), k, v);
     }
   }
   if (extra) node.$extra = extra;
@@ -951,8 +964,8 @@ function convertFields(
 ): Record<string, unknown> {
   const out: Record<string, unknown> = { ...fields };
   for (const [name, prop] of Object.entries(cls.props)) {
-    const value = out[name];
-    if (value !== undefined && value !== null) out[name] = convertValue(prop, value, schema, convert);
+    const value = ownField(out, name);
+    if (value !== undefined && value !== null) setOwnField(out, name, convertValue(prop, value, schema, convert));
   }
   return out;
 }
