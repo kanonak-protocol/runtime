@@ -33,7 +33,11 @@ namespace Kanonak.Codec
             switch (reader.TokenType)
             {
                 case JsonTokenType.String: json = reader.GetString(); break;
-                case JsonTokenType.Number: json = NumberToken(TokenText(ref reader)); break;
+                case JsonTokenType.Number:
+                    string token = TokenText(ref reader);
+                    json = NumberToken(token) ?? throw new JsonException(
+                        "xsd:" + _localName + ": the JSON number " + token + " isn't whole, though a double would round it to one [json-number-form]");
+                    break;
                 case JsonTokenType.True: json = true; break;
                 case JsonTokenType.False: json = false; break;
                 default: throw new JsonException("xsd:" + _localName + ": a JSON " + reader.TokenType + " isn't a value of it [json-number-form]");
@@ -84,35 +88,49 @@ namespace Kanonak.Codec
         /// <summary>
         /// A JSON number token, judged exactly from its digits: a whole number as a <see cref="long"/> when it
         /// fits, and otherwise the <see cref="double"/> JSON's readers would take it for, which the forms refuse.
-        /// A <see cref="decimal"/> would round past 28 digits, taking 1.00000000000000000000000000001 for 1.
+        /// Null when the token has a fraction its double rounds away, as 1.0000000000000000001's and 1e-500's do,
+        /// since the codec would take that double for a whole number. A <see cref="decimal"/> would round past
+        /// 28 digits the same way.
         /// </summary>
         private static object NumberToken(string text)
         {
             double asDouble = double.Parse(text, NumberStyles.Float, CultureInfo.InvariantCulture);
+            BigInteger? whole = WholeOfToken(text);
+            if (whole is BigInteger n && n >= long.MinValue && n <= long.MaxValue) return (long)n;
+            bool doubleIsWhole = !double.IsInfinity(asDouble) && Math.Floor(asDouble) == asDouble;
+            return whole == null && doubleIsWhole ? null : (object)asDouble;
+        }
+
+        /// <summary>
+        /// A number token's value when it is whole, and null when it has a fraction. Past 10^400 its magnitude
+        /// stops growing, since every such value is outside every form's range already.
+        /// </summary>
+        private static BigInteger? WholeOfToken(string text)
+        {
             int e = text.IndexOfAny(new[] { 'e', 'E' });
             string mantissa = e < 0 ? text : text.Substring(0, e);
-            int exponent = 0;
-            if (e >= 0 && !int.TryParse(text.Substring(e + 1), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out exponent))
-                return asDouble;
             bool negative = mantissa.StartsWith("-", StringComparison.Ordinal);
             if (negative) mantissa = mantissa.Substring(1);
             int dot = mantissa.IndexOf('.');
-            string digits = dot < 0 ? mantissa : mantissa.Remove(dot, 1);
-            int scale = (dot < 0 ? 0 : mantissa.Length - dot - 1) - exponent;
-            if (Math.Abs(scale) > 400) return asDouble;
+            string digits = (dot < 0 ? mantissa : mantissa.Remove(dot, 1)).TrimStart('0');
+            if (digits.Length == 0) return BigInteger.Zero;
+            long exponent = 0;
+            if (e >= 0 && !long.TryParse(text.Substring(e + 1), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out exponent))
+                exponent = text[e + 1] == '-' ? long.MinValue / 2 : long.MaxValue / 2;
+            long scale = (dot < 0 ? 0 : mantissa.Length - dot - 1) - exponent;
             BigInteger n = BigInteger.Parse(digits, CultureInfo.InvariantCulture);
             if (scale > 0)
             {
-                BigInteger unit = BigInteger.Pow(10, scale);
-                if (!(n % unit).IsZero) return asDouble;
+                if (scale >= digits.Length) return null;
+                BigInteger unit = BigInteger.Pow(10, (int)scale);
+                if (!(n % unit).IsZero) return null;
                 n /= unit;
             }
             else if (scale < 0)
             {
-                n *= BigInteger.Pow(10, -scale);
+                n *= BigInteger.Pow(10, (int)Math.Min(-scale, 400));
             }
-            if (negative) n = -n;
-            return n >= long.MinValue && n <= long.MaxValue ? (object)(long)n : asDouble;
+            return negative ? -n : n;
         }
     }
 

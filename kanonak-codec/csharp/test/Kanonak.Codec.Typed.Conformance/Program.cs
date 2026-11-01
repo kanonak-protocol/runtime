@@ -495,6 +495,27 @@ static class Program
         total++;
         var restriction = JsonSerializer.Deserialize<BindingRestriction>("{\"cardinality\": \"1\"}");
         if (restriction.Cardinality != BigInteger.One) Fail("binding cardinality", "\"1\" read as " + restriction.Cardinality);
+        // A number token is judged by its digits, so a fraction its double rounds away is still refused.
+        foreach (var (field, json, expected) in new (string, string, string)[]
+        {
+            ("integer", "1.0000000000000000001", null),
+            ("integer", "1.00000000000000000000000000001", null),
+            ("integer", "1e-500", null),
+            ("int", "1e-500", null),
+            ("integer", "0e-500", "\"0\""),
+            ("integer", "-0.0", "\"0\""),
+        })
+        {
+            total++;
+            string id = "binding read edge " + field + " " + json;
+            string got = null, error = null;
+            try { got = ReadAs(field, json); }
+            catch (JsonException ex) { error = ex.Message; }
+            if (expected == null && error == null) Fail(id, "expected a refusal, got " + got);
+            else if (expected == null && !error.Contains("[json-number-form]")) Fail(id, "refused without [json-number-form]: " + error);
+            else if (expected != null && error != null) Fail(id, "refused: " + error);
+            else if (expected != null && Normal(got) != Normal(expected)) Fail(id, "expected " + expected + ", got " + got);
+        }
         Console.WriteLine("codec-vectors-json-numbers.json (System.Text.Json binding): " + (total - (_fails - failedBefore)) + "/" + total + " pass");
     }
 

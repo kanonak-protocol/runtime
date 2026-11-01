@@ -762,10 +762,13 @@ final class JSONFormBindingTests: XCTestCase {
         }
     }
 
-    func testANumberIsReadExactly() {
-        expectRefusal("integer-number-not-whole-past-double-precision", ours: true) {
-            try read(KanonakInteger<XsdInteger>.self, "1.0000000000000000001")
+    func testANumberIsReadExactly() throws {
+        for json in ["1.0000000000000000001", "1.00000000000000000000000000001", "1e-500"] {
+            expectRefusal("integer-number-not-whole \(json)", ours: true) {
+                try read(KanonakInteger<XsdInteger>.self, json)
+            }
         }
+        XCTAssertEqual(try read(KanonakInteger<XsdInteger>.self, "-0.0").digits, "0")
     }
 
     func testTheCaseThatAskedForIt() throws {

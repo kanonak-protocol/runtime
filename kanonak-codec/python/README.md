@@ -18,7 +18,9 @@ From 3.1.0, `kanonak-codec[pydantic]` gives a generated model's fields the pydan
 `NegativeInteger`, `Long`, `UnsignedLong` and `Decimal`, and `Int`, `Short`, `Byte`, `UnsignedInt`, `UnsignedShort`
 and `UnsignedByte`, since pydantic's own `int` reads `"5"`. Each is an annotated type named for its datatype, which
 reads JSON as `deserialize` does, writes it as `serialize` does, and refuses what the forms refuse, ending
-`[json-number-form]`. A value given from Python is taken when it holds the datatype's value exactly. The same vectors
-gate it, through pydantic.
+`[json-number-form]`. A value given from Python is taken when it holds the datatype's value exactly. pydantic's JSON
+parser reads a number with a fraction or an exponent as a float before any validator sees it, so, as with `json.loads`,
+`1.0000000000000000001` and `1e-500` read as whole numbers there; a caller that must refuse them reads with
+`deserialize`, as above. The same vectors gate it, through pydantic.
 
 Source & issues: https://github.com/kanonak-protocol/runtime

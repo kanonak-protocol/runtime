@@ -330,6 +330,27 @@ public final class JacksonConformance {
         checked++;
         Restriction r = PLAIN.readValue("{\"cardinality\": \"1\"}", Restriction.class);
         if (!BigInteger.ONE.equals(r.cardinality)) failures.add("binding cardinality: \"1\" read as " + r.cardinality);
+        // A number token is judged by its digits, so a fraction its double rounds away is still refused.
+        String[][] edges = {
+            {"integer", "1.0000000000000000001", null},
+            {"integer", "1.00000000000000000000000000001", null},
+            {"integer", "1e-500", null},
+            {"int", "1e-500", null},
+            {"integer", "0e-500", "0"},
+            {"integer", "-0.0", "0"},
+        };
+        for (String[] edge : edges) {
+            checked++;
+            String id = "binding read edge " + edge[0] + " " + edge[1];
+            try {
+                Object got = lexical(readAs(edge[0], edge[1]));
+                if (edge[2] == null) failures.add(id + ": expected a refusal, got " + got);
+                else if (!edge[2].equals(got)) failures.add(id + ": expected " + edge[2] + ", got " + got);
+            } catch (JsonProcessingException e) {
+                if (edge[2] != null) failures.add(id + ": refused: " + e.getOriginalMessage());
+                else if (!refusedByForm(e)) failures.add(id + ": refused without [json-number-form]: " + e.getOriginalMessage());
+            }
+        }
         failures.forEach(f -> System.out.println("  FAIL " + f));
         System.out.println("codec-vectors-json-numbers.json (Jackson binding): " + (checked - failures.size()) + "/" + checked + " pass");
         return failures;
