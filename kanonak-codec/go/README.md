@@ -55,6 +55,17 @@ number for a decimal, a string for a narrow integer, or a value outside its
 datatype's range is refused with an error ending in `[json-number-form]`, gated
 by `codec-vectors-json-numbers.json`.
 
+From 3.1.0, a generated struct's fields take the `encoding/json` binding of the
+same forms, so `json.Marshal` and `json.Unmarshal` read and write them as
+`Serialize` and `Deserialize` do: `Integer[D]`, with `D` one of `XsdInteger`,
+`NonNegativeInteger`, `PositiveInteger`, `NonPositiveInteger` and
+`NegativeInteger`; `Long`; `UnsignedLong`; and `Decimal`. Each refuses what the
+forms refuse, with an error ending in `[json-number-form]`, and `int` and
+narrower take `int32` and the rest, which `encoding/json` already holds to the
+forms. `ParseInteger[D]`, `ParseLong`, `ParseUnsignedLong` and `ParseDecimal`
+take a lexical form, `Integer[D].Int` gives a `*big.Int`, and `String` gives
+the canonical digits. The same vectors gate it, through `encoding/json`.
+
 A reference value (`{"$ref": uri}`) must address a named resource
 (`publisher/package[@version]/name`): a `$ref` carrying a URI fragment (`#`), at
 any depth, is rejected by canonicalization, `Serialize` and `Deserialize` alike,
