@@ -901,6 +901,26 @@ private func writeJSONNumber(_ prop: CodecProp, _ form: JSONNumberForm, _ value:
     }
 }
 
+/// One datatype's form, by its local name in core-xsd, for the `Codable`
+/// types, which hold a value with no schema to read its datatype from.
+private func jsonFormOf(_ localName: String) throws -> (CodecProp, JSONNumberForm) {
+    let datatype = "\(xsd)/\(localName)"
+    guard let form = jsonNumberForms[datatype] else {
+        throw CodecError("codec: xsd:\(localName) has no JSON form; only integer and decimal datatypes have one [json-number-form]")
+    }
+    return (CodecProp(predicate: "xsd:\(localName)", kind: "datatype", datatype: datatype), form)
+}
+
+func readJSONForm(_ localName: String, _ value: Any) throws -> Any {
+    let (prop, form) = try jsonFormOf(localName)
+    return try readJSONNumber(prop, form, value)
+}
+
+func writeJSONForm(_ localName: String, _ value: Any) throws -> Any {
+    let (prop, form) = try jsonFormOf(localName)
+    return try writeJSONNumber(prop, form, value)
+}
+
 private func jsonNumberForm(_ prop: CodecProp) -> JSONNumberForm? {
     guard prop.kind == "datatype", let datatype = prop.datatype,
           let key = lenientVersionlessKey(datatype) else { return nil }

@@ -632,3 +632,160 @@ final class JSONNumberVectorTests: XCTestCase {
         expectRefusal("integer-number-not-whole-past-double-precision") { try deserialize(edge, schema: schema) }
     }
 }
+
+// The Codable binding of the JSON forms (runtime#54): each read and write case
+// of the shared vectors through JSONDecoder and JSONEncoder, with each field
+// typed as a generated struct types it. Our types refuse with
+// [json-number-form]; Int32 and the rest refuse with Codable's own error,
+// which the forms ask for.
+final class JSONFormBindingTests: XCTestCase {
+    private struct Field<T: Codable>: Codable { let v: T }
+
+    private struct Amount: Codable { let value: KanonakDecimal }
+
+    private struct Unit: Error, CustomStringConvertible {
+        let description: String
+    }
+
+    private func read<T: Codable>(_ type: T.Type, _ json: String) throws -> T {
+        try JSONDecoder().decode(Field<T>.self, from: Data("{\"v\": \(json)}".utf8)).v
+    }
+
+    private func written<T: Codable>(_ value: T) throws -> Any {
+        (try parseJSON(try JSONEncoder().encode(Field(v: value))) as! [String: Any])["v"]!
+    }
+
+    private func narrow<T: FixedWidthInteger>(_ type: T.Type, _ text: String) throws -> T {
+        guard let n = T(text) else { throw Unit(description: "\(text) does not fit \(T.self)") }
+        return n
+    }
+
+    /// A field's JSON read into the type a generated struct gives it, as each
+    /// value's canonical lexical form, and whether the type is one of ours.
+    private func readCase(_ field: String, _ json: String) throws -> (lexical: Any, ours: Bool) {
+        switch field {
+        case "integer": return (try read(KanonakInteger<XsdInteger>.self, json).description, true)
+        case "nonNegativeInteger": return (try read(KanonakInteger<NonNegativeInteger>.self, json).description, true)
+        case "positiveInteger": return (try read(KanonakInteger<PositiveInteger>.self, json).description, true)
+        case "nonPositiveInteger": return (try read(KanonakInteger<NonPositiveInteger>.self, json).description, true)
+        case "negativeInteger": return (try read(KanonakInteger<NegativeInteger>.self, json).description, true)
+        case "long": return (try read(KanonakLong.self, json).description, true)
+        case "unsignedLong": return (try read(KanonakUnsignedLong.self, json).description, true)
+        case "decimal": return (try read(KanonakDecimal.self, json).description, true)
+        case "int": return (String(try read(Int32.self, json)), false)
+        case "short": return (String(try read(Int16.self, json)), false)
+        case "byte": return (String(try read(Int8.self, json)), false)
+        case "unsignedInt": return (String(try read(UInt32.self, json)), false)
+        case "unsignedShort": return (String(try read(UInt16.self, json)), false)
+        case "unsignedByte": return (String(try read(UInt8.self, json)), false)
+        case "counts": return (try read([KanonakInteger<XsdInteger>].self, json).map { $0.digits }, true)
+        case "amount": return (["value": try read(Amount.self, json).value.digits], true)
+        default: throw Unit(description: "no binding type for field \(field)")
+        }
+    }
+
+    /// A write case's value, made from its canonical lexical form into the
+    /// field's type, as JSONEncoder writes it; or the refusal when the type
+    /// can't hold it.
+    private func writeCase(_ field: String, _ value: Any) throws -> (json: Any, ours: Bool) {
+        let text = value as? String ?? ""
+        switch field {
+        case "integer": return (try written(try KanonakInteger<XsdInteger>(text)), true)
+        case "nonNegativeInteger": return (try written(try KanonakInteger<NonNegativeInteger>(text)), true)
+        case "positiveInteger": return (try written(try KanonakInteger<PositiveInteger>(text)), true)
+        case "long": return (try written(try KanonakLong(text)), true)
+        case "unsignedLong": return (try written(try KanonakUnsignedLong(text)), true)
+        case "decimal": return (try written(try KanonakDecimal(text)), true)
+        case "int": return (try written(try narrow(Int32.self, text)), false)
+        case "byte": return (try written(try narrow(Int8.self, text)), false)
+        case "unsignedShort": return (try written(try narrow(UInt16.self, text)), false)
+        case "counts":
+            return (try written(try (value as! [Any]).map { try KanonakInteger<XsdInteger>($0 as! String) }), true)
+        case "amount":
+            let lexical = (value as! [String: Any])["value"] as! String
+            return (try written(Amount(value: try KanonakDecimal(lexical))), true)
+        default: throw Unit(description: "no binding type for field \(field)")
+        }
+    }
+
+    private func expectRefusal(_ id: String, ours: Bool, _ body: () throws -> Any) {
+        XCTAssertThrowsError(try body(), "[\(id)] expected a refusal") { error in
+            if ours {
+                XCTAssertTrue("\(error)".contains("[json-number-form]"), "[\(id)] refused for another reason: \(error)")
+            }
+        }
+    }
+
+    private func isOurs(_ field: String) -> Bool {
+        !["int", "short", "byte", "unsignedInt", "unsignedShort", "unsignedByte"].contains(field)
+    }
+
+    func testJSONFormBindingVectors() throws {
+        let data = try Data(contentsOf: vectorsURL("codec-vectors-json-numbers.json"))
+        guard let doc = try parseJSON(data) as? [String: Any],
+              let reads = doc["readCases"] as? [[String: Any]],
+              let writes = doc["writeCases"] as? [[String: Any]] else {
+            throw CodecError("vectors codec-vectors-json-numbers.json: unexpected shape")
+        }
+        XCTAssertFalse(reads.isEmpty)
+        XCTAssertFalse(writes.isEmpty)
+
+        for c in reads {
+            let id = c["id"] as! String
+            let field = c["field"] as! String
+            let json = c["json"] as! String
+            if c["expectError"] as? Bool == true {
+                expectRefusal(id, ours: isOurs(field)) { try readCase(field, json).lexical }
+                continue
+            }
+            do {
+                let got = try readCase(field, json).lexical
+                XCTAssertTrue(jsonEqual(got, c["expected"]!), "[\(id)] got \(got)")
+            } catch {
+                XCTFail("[\(id)] refused: \(error)")
+            }
+        }
+
+        for c in writes {
+            let id = c["id"] as! String
+            let field = c["field"] as! String
+            if c["expectError"] as? Bool == true {
+                expectRefusal(id, ours: isOurs(field)) { try writeCase(field, c["value"]!).json }
+                continue
+            }
+            do {
+                let got = try writeCase(field, c["value"]!).json
+                XCTAssertTrue(jsonEqual(got, try parseJSON(c["json"] as! String)), "[\(id)] got \(got)")
+            } catch {
+                XCTFail("[\(id)] refused: \(error)")
+            }
+        }
+    }
+
+    func testANumberIsReadExactly() {
+        expectRefusal("integer-number-not-whole-past-double-precision", ours: true) {
+            try read(KanonakInteger<XsdInteger>.self, "1.0000000000000000001")
+        }
+    }
+
+    func testTheCaseThatAskedForIt() throws {
+        struct Restriction: Codable { let cardinality: KanonakInteger<NonNegativeInteger> }
+        let got = try JSONDecoder().decode(Restriction.self, from: Data("{\"cardinality\": \"1\"}".utf8))
+        XCTAssertEqual(got.cardinality.digits, "1")
+        XCTAssertEqual(String(decoding: try JSONEncoder().encode(got), as: UTF8.self), "{\"cardinality\":\"1\"}")
+    }
+
+    func testAnOptionalFieldReadsNullAndAbsenceAsNil() throws {
+        struct Holder: Codable { let count: KanonakInteger<XsdInteger>? }
+        XCTAssertNil(try JSONDecoder().decode(Holder.self, from: Data("{\"count\": null}".utf8)).count)
+        XCTAssertNil(try JSONDecoder().decode(Holder.self, from: Data("{}".utf8)).count)
+    }
+
+    func testAnIntegerIsMadeFromAnyBinaryIntegerInsideItsRange() throws {
+        XCTAssertEqual(try KanonakInteger<XsdInteger>(UInt64.max).digits, "18446744073709551615")
+        XCTAssertEqual(try written(try KanonakInteger<NonNegativeInteger>(0)) as? String, "0")
+        expectRefusal("positiveInteger-zero-from-an-Int", ours: true) { try KanonakInteger<PositiveInteger>(0) }
+        XCTAssertEqual(try KanonakInteger<XsdInteger>("+007"), try KanonakInteger<XsdInteger>(7))
+        XCTAssertEqual(try written(KanonakLong(Int64.min)) as? String, "-9223372036854775808")
+    }
+}

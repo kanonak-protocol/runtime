@@ -61,6 +61,8 @@ jobs:
       - run: |
           python kanonak-canonical/python/conformance.py
           python kanonak-codec/python/conformance.py
+          python -m pip install --quiet pydantic==2.14.2
+          python kanonak-codec/python/binding_conformance.py
           python kanonak-expression/python/conformance.py kanonak-expression/vectors
           python kanonak-wire/python/conformance.py kanonak-wire/vectors
       # THE 1.x COMPATIBILITY GATE (runtime#29), Python half: within a major,

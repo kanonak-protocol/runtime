@@ -737,6 +737,37 @@ public final class Codec {
     }
 
     /** One value's conversion between its exact type here and its JSON form. */
+    /**
+     * A value of an xsd datatype, named by its local name, as JSON carries it, to the exact type
+     * {@link #deserialize} gives it, by the same rules: what a JSON library's binding reads through, so it refuses
+     * what {@code deserialize} refuses (runtime#54). Pass a JSON number as a {@link JsonNumber} of its token, so it
+     * is judged exactly. A refusal is an {@link IllegalArgumentException} ending {@code [json-number-form]}.
+     */
+    public static Object readJsonForm(String xsdLocalName, Object json) {
+        return readJsonNumber(datatypeProp(xsdLocalName), jsonFormOf(xsdLocalName), json);
+    }
+
+    /**
+     * A value of an xsd datatype, named by its local name, to its JSON form, as {@link #serialize} writes it: the
+     * {@link String} of a wide integer's or a decimal's canonical lexical form, or a {@link Long} for a narrow
+     * integer. A refusal is an {@link IllegalArgumentException} ending {@code [json-number-form]}.
+     */
+    public static Object writeJsonForm(String xsdLocalName, Object value) {
+        return writeJsonNumber(datatypeProp(xsdLocalName), jsonFormOf(xsdLocalName), value);
+    }
+
+    private static CodecProp datatypeProp(String xsdLocalName) {
+        return new CodecProp("xsd:" + xsdLocalName, "datatype", XSD + xsdLocalName);
+    }
+
+    private static JsonNumberForm jsonFormOf(String xsdLocalName) {
+        JsonNumberForm form = JSON_NUMBER_FORMS.get(XSD + xsdLocalName);
+        if (form == null) {
+            throw new IllegalArgumentException("xsd:" + xsdLocalName + " has no JSON form: it isn't an integer or decimal datatype");
+        }
+        return form;
+    }
+
     @FunctionalInterface
     private interface NumberConversion {
         Object apply(CodecProp prop, JsonNumberForm form, Object value);

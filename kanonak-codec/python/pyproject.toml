@@ -12,6 +12,10 @@ license = "Apache-2.0"
 authors = [{ name = "Kanonak Maintainers" }]
 dependencies = ["kanonak-canonical>=1.0.0,<2"]
 
+[project.optional-dependencies]
+# kanonak_codec.pydantic: the annotated types a generated pydantic model's fields take (runtime#54).
+pydantic = ["pydantic>=2.14.2,<3"]
+
 [project.urls]
 Homepage = "https://kanonak.org"
 Repository = "https://github.com/kanonak-protocol/runtime"

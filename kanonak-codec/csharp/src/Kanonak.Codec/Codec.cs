@@ -756,6 +756,20 @@ namespace Kanonak.Codec
 
         private delegate object NumberConversion(CodecProp prop, JsonNumberForm form, object value);
 
+        /// <summary>
+        /// A value as JSON carries it, for an xsd datatype by its local name, to the exact type this port gives it:
+        /// what the System.Text.Json converters read (runtime#54), by the same rules as <see cref="Deserialize"/>.
+        /// </summary>
+        internal static object ReadJsonNumberOf(string localName, object value)
+            => ReadJsonNumber(DatatypeProp(localName), JsonNumberForms[Xsd + localName], value);
+
+        /// <summary>A value, for an xsd datatype by its local name, to its JSON form, as <see cref="Serialize"/> writes it.</summary>
+        internal static object WriteJsonNumberOf(string localName, object value)
+            => WriteJsonNumber(DatatypeProp(localName), JsonNumberForms[Xsd + localName], value);
+
+        private static CodecProp DatatypeProp(string localName)
+            => new CodecProp { Predicate = "xsd:" + localName, Kind = "datatype", Datatype = Xsd + localName };
+
         private static ArgumentException JsonNumberError(CodecProp prop, string why)
             => new ArgumentException(prop.Predicate + ": " + why + " [json-number-form]");
 

@@ -29,6 +29,17 @@ for the same canonical form + content hash the `kanonak hash` CLI produces.
   a decimal as a string of their canonical digits, and a narrow integer as a
   `long`. An embedded value whose class the schema doesn't hold is carried as
   given. A JSON number past ±(2^53 − 1) for a wide integer, a number for a decimal, a string for a narrow integer, or a value outside its datatype's range is refused, ending `[json-number-form]`, as `codec-vectors-json-numbers.json` pins in every port. Hashing refuses a statement the schema doesn't declare, an `$extra` entry or a key the class doesn't model, with `[hash-undeclared-statement]`: a codec holds one package's schema and can't type another package's predicate, so such a node is hashed with the SDK, over the graph. Serializing and deserializing still carry it (codec 2.0.0, runtime#37).
+- **The `System.Text.Json` binding (3.1.0)** — a converter for each datatype,
+  named on a generated class's property, so `JsonSerializer` reads and writes the
+  same forms: `[JsonConverter(typeof(NonNegativeIntegerJsonConverter))]` on a
+  `BigInteger`, and likewise `IntegerJsonConverter`,
+  `PositiveIntegerJsonConverter`, `NonPositiveIntegerJsonConverter` and
+  `NegativeIntegerJsonConverter`; `LongJsonConverter` on a `long`;
+  `UnsignedLongJsonConverter` on a `ulong`; `DecimalJsonConverter` on a string of
+  the digits; and `IntJsonConverter` and the rest on `int` and narrower, which
+  holds them to the forms whatever the serializer's number handling. Each refuses
+  what the forms refuse, with a `JsonException` ending `[json-number-form]`. The
+  same vectors gate it, through `JsonSerializer`.
 - **`Codec.TypeMatches(node, classUri, schema)`** — what a generated type guard
   asks: is this node (a map or a `KanonakNode`) an instance of `classUri`?
 - **`Codec.EnumMember(schema, reference)` → `EnumMemberMatch`** (`EnumType`,
