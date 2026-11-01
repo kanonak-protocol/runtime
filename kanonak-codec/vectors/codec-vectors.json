@@ -135,6 +135,34 @@
           "sec.example.com/policy@1.0.0/classification": "PII"
         }
       ]
+    },
+    {
+      "id": "open-world-extra-inherited-name",
+      "pkg": {
+        "publisher": "probe.example.com",
+        "packageName": "data",
+        "version": "1.0.0"
+      },
+      "nodes": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Account",
+          "$id": "probe.example.com/data@1.0.0/a3",
+          "accountCode": "acme",
+          "$extra": {
+            "toString": "written by a later minor"
+          }
+        }
+      ],
+      "why": "A field a later minor of the class adds, here named toString, which every object also inherits, rides through $extra and is written back, though the class at hand doesn't model it (runtime#61). Hashing refuses it, as for any other extra (runtime#37)",
+      "expectHashError": "hash-undeclared-statement",
+      "expectedSerialize": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Account",
+          "$id": "probe.example.com/data@1.0.0/a3",
+          "accountCode": "acme",
+          "toString": "written by a later minor"
+        }
+      ]
     }
   ]
 }

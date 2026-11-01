@@ -72,14 +72,16 @@ interface Ctx {
 const resolve = (node: ExprNode, ctx: Ctx, evaluate: (n: ExprNode, c: Ctx) => Value): Value => {
   if (node.type === VARREF) {
     const name = node.varName as string;
-    if (!(name in ctx.env)) throw new ExpressionError(`Unbound variable "${name}"`);
+    if (!Object.hasOwn(ctx.env, name)) throw new ExpressionError(`Unbound variable "${name}"`);
     return ctx.env[name]!;
   }
   if (node.type === PROPERTY_READ) {
     const source = evaluate(node.readSource as ExprNode, ctx);
     if (!isRef(source)) throw new ExpressionError(`PropertyRead over a non-ref: ${JSON.stringify(source)}`);
     const prop = node.readProp as string;
-    const values = ctx.graph[source.ref]?.[prop];
+    // Own fields only: a property named `valueOf`, as transformations declares, is otherwise every object's (runtime#61).
+    const subject = Object.hasOwn(ctx.graph, source.ref) ? ctx.graph[source.ref] : undefined;
+    const values = subject !== undefined && Object.hasOwn(subject, prop) ? subject[prop] : undefined;
     return values === undefined ? [] : values;
   }
   throw new ExpressionError(`No resolver for leaf '${node.type}'`);
@@ -90,7 +92,7 @@ const resolve = (node: ExprNode, ctx: Ctx, evaluate: (n: ExprNode, c: Ctx) => Va
 const resolveRef = (node: ExprNode, ctx: Ctx): string => {
   if (node.type === VARREF) {
     const name = node.varName as string;
-    if (!(name in ctx.refEnv)) throw new ExpressionError(`Unbound reference "${name}"`);
+    if (!Object.hasOwn(ctx.refEnv, name)) throw new ExpressionError(`Unbound reference "${name}"`);
     return ctx.refEnv[name]!;
   }
   throw new ExpressionError(`No reference resolver for leaf '${node.type}'`);

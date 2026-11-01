@@ -1585,6 +1585,48 @@
           }
         ]
       }
+    },
+    {
+      "id": "property-read-of-an-inherited-name-reads-only-the-node",
+      "description": "runtime#61: a property named after a member every object inherits, such as valueOf, as transformations declares, reads only what the node holds. A node without it reads as absent, the empty list, never the inherited member",
+      "expr": {
+        "type": "kanonak.org/transformations/ForEach",
+        "source": {
+          "type": "kanonak.org/transformations/VarRef",
+          "varName": "items"
+        },
+        "loopVar": "it",
+        "emit": {
+          "type": "kanonak.org/transformations/PropertyRead",
+          "readSource": {
+            "type": "kanonak.org/transformations/VarRef",
+            "varName": "it"
+          },
+          "readProp": "valueOf"
+        }
+      },
+      "env": {
+        "items": [
+          {
+            "ref": "example.org/inv/item-1"
+          },
+          {
+            "ref": "example.org/inv/item-2"
+          }
+        ]
+      },
+      "graph": {
+        "example.org/inv/item-1": {
+          "size": 10
+        },
+        "example.org/inv/item-2": {
+          "size": 20,
+          "valueOf": "own value"
+        }
+      },
+      "expected": [
+        "own value"
+      ]
     }
   ]
 }
