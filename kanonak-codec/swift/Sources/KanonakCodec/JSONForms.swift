@@ -34,9 +34,10 @@ public enum NegativeInteger: IntegerDatatype {
 }
 
 /// A JSON value as the forms read it: a string, a boolean, or a number as its
-/// exact digits. JSONDecoder gives no number's token, so it is read as a
-/// `Decimal`, which holds 38 digits exactly, where a `Double` would round
-/// `1.0000000000000000001` to a whole number.
+/// digits. JSONDecoder gives no number's token, so it is read as a `Decimal`,
+/// which holds 38 significant digits exactly, where a `Double` would round
+/// `1.0000000000000000001` to a whole number. A number with more is read as
+/// `Decimal` rounds it; `deserialize` judges the token itself.
 private func jsonFormValue(_ decoder: Decoder, _ localName: String) throws -> Any {
     let container = try decoder.singleValueContainer()
     if let text = try? container.decode(String.self) { return text }
