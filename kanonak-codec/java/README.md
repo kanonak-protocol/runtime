@@ -111,6 +111,11 @@ class read or written by Jackson takes its envelope from
 artifact at its version: `KanonakModule` names `$id`, `$type`, `$types`,
 `$name`, `$contentHash` and `$version`, and leaves `extra` out (runtime#56).
 
+From 3.1.0, the same module gives a generated class's integer and decimal fields
+the JSON forms `Codec.serialize` and `Codec.deserialize` use: a serializer and a
+deserializer for each datatype in `JsonForms`, named on the field, such as
+`JsonForms.XsdNonNegativeIntegerDeserializer`.
+
 ## Conformance
 
 JDK-only — mirrors the `kanonak-canonical` port: compile the canonical sources,

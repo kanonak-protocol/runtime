@@ -7,10 +7,27 @@
 // wire names ride [JsonPropertyName].
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
+using System.Linq;
+using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Kanonak.Codec;
+
+// -- Generated-style properties for the JSON forms (runtime#54) ---------------
+
+// The embedded Amount of codec-vectors-json-numbers.json, its decimal named with its datatype's converter.
+sealed class BindingAmount
+{
+    [JsonPropertyName("value"), JsonConverter(typeof(DecimalJsonConverter))] public string Value { get; set; }
+}
+
+// core-owl's cardinality, an xsd:nonNegativeInteger, the field that asked for the binding.
+sealed class BindingRestriction
+{
+    [JsonPropertyName("cardinality"), JsonConverter(typeof(NonNegativeIntegerJsonConverter))] public BigInteger Cardinality { get; set; }
+}
 
 // -- Generated-style model for probe.example.com/schema@1.0.0 ----------------
 
@@ -324,6 +341,8 @@ static class Program
             NewDoc(null, new Section { Heading = "Intro", Cites = Ref<Doc>.To(DATA + "/d2#intro") }),
         });
 
+        RunJsonFormBinding(vectorsDir);
+
         Console.WriteLine();
         if (_fails > 0) { Console.Error.WriteLine(_fails + " TYPED CHECK(S) FAILED"); return 1; }
         Console.WriteLine("ALL TYPED CHECKS PASS");
@@ -380,6 +399,124 @@ static class Program
             if (ex.Message.EndsWith("[" + kind + "]", StringComparison.Ordinal)) Console.WriteLine("PASS  " + label);
             else Fail(label, "expected [" + kind + "], got: " + ex.Message);
         }
+    }
+
+    // -- The System.Text.Json binding of the JSON forms (runtime#54) ---------------
+    // Each read and write case of codec-vectors-json-numbers.json through JsonSerializer, each value through its
+    // datatype's converter. Every refusal names [json-number-form]; a write case whose value its CLR type can't
+    // hold, such as a long past 64 bits, is refused by the type itself.
+
+    static JsonSerializerOptions With(JsonConverter converter) => new JsonSerializerOptions { Converters = { converter } };
+
+    static string Lexical(object value) =>
+        JsonSerializer.Serialize(Convert.ToString(value, CultureInfo.InvariantCulture));
+
+    static string ReadAs(string field, string json)
+    {
+        switch (field)
+        {
+            case "integer": return Lexical(JsonSerializer.Deserialize<BigInteger>(json, With(new IntegerJsonConverter())));
+            case "nonNegativeInteger": return Lexical(JsonSerializer.Deserialize<BigInteger>(json, With(new NonNegativeIntegerJsonConverter())));
+            case "positiveInteger": return Lexical(JsonSerializer.Deserialize<BigInteger>(json, With(new PositiveIntegerJsonConverter())));
+            case "nonPositiveInteger": return Lexical(JsonSerializer.Deserialize<BigInteger>(json, With(new NonPositiveIntegerJsonConverter())));
+            case "negativeInteger": return Lexical(JsonSerializer.Deserialize<BigInteger>(json, With(new NegativeIntegerJsonConverter())));
+            case "long": return Lexical(JsonSerializer.Deserialize<long>(json, With(new LongJsonConverter())));
+            case "unsignedLong": return Lexical(JsonSerializer.Deserialize<ulong>(json, With(new UnsignedLongJsonConverter())));
+            case "decimal": return Lexical(JsonSerializer.Deserialize<string>(json, With(new DecimalJsonConverter())));
+            case "int": return Lexical(JsonSerializer.Deserialize<int>(json, With(new IntJsonConverter())));
+            case "short": return Lexical(JsonSerializer.Deserialize<short>(json, With(new ShortJsonConverter())));
+            case "byte": return Lexical(JsonSerializer.Deserialize<sbyte>(json, With(new ByteJsonConverter())));
+            case "unsignedInt": return Lexical(JsonSerializer.Deserialize<uint>(json, With(new UnsignedIntJsonConverter())));
+            case "unsignedShort": return Lexical(JsonSerializer.Deserialize<ushort>(json, With(new UnsignedShortJsonConverter())));
+            case "unsignedByte": return Lexical(JsonSerializer.Deserialize<byte>(json, With(new UnsignedByteJsonConverter())));
+            case "counts":
+                return JsonSerializer.Serialize(JsonSerializer.Deserialize<List<BigInteger>>(json, With(new IntegerJsonConverter()))
+                    .Select(n => n.ToString(CultureInfo.InvariantCulture)).ToList());
+            case "amount":
+                return JsonSerializer.Serialize(new Dictionary<string, string> { ["value"] = JsonSerializer.Deserialize<BindingAmount>(json).Value });
+            default: throw new InvalidOperationException("no binding type for field " + field);
+        }
+    }
+
+    static string WriteAs(string field, JsonElement value)
+    {
+        string text = value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+        switch (field)
+        {
+            case "integer": return JsonSerializer.Serialize(BigInteger.Parse(text, CultureInfo.InvariantCulture), With(new IntegerJsonConverter()));
+            case "nonNegativeInteger": return JsonSerializer.Serialize(BigInteger.Parse(text, CultureInfo.InvariantCulture), With(new NonNegativeIntegerJsonConverter()));
+            case "positiveInteger": return JsonSerializer.Serialize(BigInteger.Parse(text, CultureInfo.InvariantCulture), With(new PositiveIntegerJsonConverter()));
+            case "long": return JsonSerializer.Serialize(long.Parse(text, CultureInfo.InvariantCulture), With(new LongJsonConverter()));
+            case "unsignedLong": return JsonSerializer.Serialize(ulong.Parse(text, CultureInfo.InvariantCulture), With(new UnsignedLongJsonConverter()));
+            case "decimal": return JsonSerializer.Serialize(text, With(new DecimalJsonConverter()));
+            case "int": return JsonSerializer.Serialize(int.Parse(text, CultureInfo.InvariantCulture), With(new IntJsonConverter()));
+            case "byte": return JsonSerializer.Serialize(sbyte.Parse(text, CultureInfo.InvariantCulture), With(new ByteJsonConverter()));
+            case "unsignedShort": return JsonSerializer.Serialize(ushort.Parse(text, CultureInfo.InvariantCulture), With(new UnsignedShortJsonConverter()));
+            case "counts":
+                return JsonSerializer.Serialize(value.EnumerateArray().Select(v => BigInteger.Parse(v.GetString(), CultureInfo.InvariantCulture)).ToList(),
+                    With(new IntegerJsonConverter()));
+            case "amount": return JsonSerializer.Serialize(new BindingAmount { Value = value.GetProperty("value").GetString() });
+            default: throw new InvalidOperationException("no binding type for field " + field);
+        }
+    }
+
+    static string Normal(string json) => JsonSerializer.Serialize(JsonDocument.Parse(json).RootElement);
+
+    static void RunJsonFormBinding(string vectorsDir)
+    {
+        var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(vectorsDir, "codec-vectors-json-numbers.json")));
+        int total = 0, failedBefore = _fails;
+        foreach (var c in doc.RootElement.GetProperty("readCases").EnumerateArray())
+        {
+            total++;
+            string id = "binding read " + c.GetProperty("id").GetString();
+            bool expectError = c.TryGetProperty("expectError", out var e) && e.GetBoolean();
+            string got = null, error = null;
+            try { got = ReadAs(c.GetProperty("field").GetString(), c.GetProperty("json").GetString()); }
+            catch (JsonException ex) { error = ex.Message; }
+            if (expectError && error == null) Fail(id, "expected a refusal, got " + got);
+            else if (expectError && !error.Contains("[json-number-form]")) Fail(id, "refused without [json-number-form]: " + error);
+            else if (!expectError && error != null) Fail(id, "refused: " + error);
+            else if (!expectError && Normal(got) != Normal(c.GetProperty("expected").GetRawText()))
+                Fail(id, "expected " + c.GetProperty("expected").GetRawText() + ", got " + got);
+        }
+        foreach (var c in doc.RootElement.GetProperty("writeCases").EnumerateArray())
+        {
+            total++;
+            string id = "binding write " + c.GetProperty("id").GetString();
+            string want = c.TryGetProperty("json", out var j) ? j.GetString() : null;
+            string written = null, error = null;
+            try { written = WriteAs(c.GetProperty("field").GetString(), c.GetProperty("value")); }
+            catch (Exception ex) when (ex is JsonException || ex is OverflowException) { error = ex.Message; }
+            if (want == null && error == null) Fail(id, "expected a refusal, wrote " + written);
+            else if (want != null && error != null) Fail(id, "refused: " + error);
+            else if (want != null && Normal(written) != Normal(want)) Fail(id, "expected " + want + ", got " + written);
+        }
+        total++;
+        var restriction = JsonSerializer.Deserialize<BindingRestriction>("{\"cardinality\": \"1\"}");
+        if (restriction.Cardinality != BigInteger.One) Fail("binding cardinality", "\"1\" read as " + restriction.Cardinality);
+        // A number token is judged by its digits, so a fraction its double rounds away is still refused.
+        foreach (var (field, json, expected) in new (string, string, string)[]
+        {
+            ("integer", "1.0000000000000000001", null),
+            ("integer", "1.00000000000000000000000000001", null),
+            ("integer", "1e-500", null),
+            ("int", "1e-500", null),
+            ("integer", "0e-500", "\"0\""),
+            ("integer", "-0.0", "\"0\""),
+        })
+        {
+            total++;
+            string id = "binding read edge " + field + " " + json;
+            string got = null, error = null;
+            try { got = ReadAs(field, json); }
+            catch (JsonException ex) { error = ex.Message; }
+            if (expected == null && error == null) Fail(id, "expected a refusal, got " + got);
+            else if (expected == null && !error.Contains("[json-number-form]")) Fail(id, "refused without [json-number-form]: " + error);
+            else if (expected != null && error != null) Fail(id, "refused: " + error);
+            else if (expected != null && Normal(got) != Normal(expected)) Fail(id, "expected " + expected + ", got " + got);
+        }
+        Console.WriteLine("codec-vectors-json-numbers.json (System.Text.Json binding): " + (total - (_fails - failedBefore)) + "/" + total + " pass");
     }
 
     static void Fail(string caseId, string message)
