@@ -277,6 +277,11 @@ jobs:
           if [ "$(pomVersion pom.xml)" != "$(pomVersion ../java/pom.xml)" ]; then
             echo "::error::kanonak-codec-jackson is $(pomVersion pom.xml) but kanonak-codec is $(pomVersion ../java/pom.xml): it releases with codec, at its version (runtime#56)"; exit 1
           fi
+          # It compiles here from ../java's source, so only this check sees the codec its pom builds against when released.
+          codecDependency=$(grep -A1 '<artifactId>kanonak-codec</artifactId>' pom.xml | sed -nE 's/.*<version>(.*)<\/version>.*/\1/p')
+          if [ "$codecDependency" != "$(pomVersion ../java/pom.xml)" ]; then
+            echo "::error::kanonak-codec-jackson depends on kanonak-codec '$codecDependency' but releases with $(pomVersion ../java/pom.xml): Maven compiles it against the codec its pom names, so its dependency moves with codec's version"; exit 1
+          fi
           jars="$RUNNER_TEMP/jackson"; mkdir -p "$jars"
           fetch() {  # fetch <path under com/fasterxml/jackson/core> <sha256>
             curl -sfL -o "$jars/${1##*/}" "https://repo1.maven.org/maven2/com/fasterxml/jackson/core/$1"
