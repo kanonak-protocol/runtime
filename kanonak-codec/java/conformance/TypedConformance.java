@@ -10,6 +10,7 @@ import org.kanonak.codec.CodecSchema;
 import org.kanonak.codec.KanonakNode;
 import org.kanonak.codec.PackageContext;
 import org.kanonak.codec.Ref;
+import org.kanonak.codec.Reference;
 import org.kanonak.codec.TypedNodes;
 import org.kanonak.codec.WireName;
 
@@ -107,6 +108,27 @@ public final class TypedConformance {
         @WireName("tags") List<String> tags;
     }
 
+    /** A reference held in a class of its own (runtime#66), as generated code holds an enumeration's member. */
+    record PersonReference(String uri) implements Reference {}
+
+    record DocReference(String uri) implements Reference {}
+
+    /** {@link Account}, with its owner as a {@link Reference} rather than a {@link Ref}. */
+    static final class AccountByReference extends KanonakNode {
+        @WireName("accountCode") String accountCode;
+        @WireName("seats") Long seats;
+        @WireName("rate") Double rate;
+        @WireName("active") Boolean active;
+        @WireName("owner") PersonReference owner;
+        @WireName("tags") List<String> tags;
+    }
+
+    /** {@link Doc}, citing through a {@link Reference}. */
+    static final class DocByReference extends KanonakNode {
+        @WireName("title") String title;
+        @WireName("cites") DocReference cites;
+    }
+
     static int passed;
     static int failed;
 
@@ -179,6 +201,10 @@ public final class TypedConformance {
         check(basic, "basic-scalars-ref-list (Ref.to instance)", "basic-scalars-ref-list",
             basicSchema, List.of(alice, account(Ref.to(alice))));
 
+        // A Reference (runtime#66) is written as {"$ref": uri}, as Ref.to(uri) is, so it hashes the same.
+        check(basic, "basic-scalars-ref-list (Reference)", "basic-scalars-ref-list",
+            basicSchema, List.of(alice(), accountByReference(new PersonReference(DATA + "/p1"))));
+
         // The 0.4.0 $types cases (runtime#10) through the typed path.
         Map<String, Object> types = load("../vectors/codec-vectors-types.json");
         CodecSchema typesSchema = Conformance.parseSchema(Conformance.asMap(types.get("schema")));
@@ -224,6 +250,19 @@ public final class TypedConformance {
             doc(Ref.to(DATA + "/d2#sections[0]"), null));
         checkRejects("fragment-reference-in-embedded-rejected", refsSchema, "fragment-reference",
             doc(null, section(Ref.to(DATA + "/d2#intro"))));
+        checkRejects("fragment-reference-rejected (Reference)", refsSchema, "fragment-reference",
+            docByReference(new DocReference(DATA + "/d2#sections[0]")));
+        try {
+            TypedNodes.toNode(docByReference(new DocReference("")), refsSchema);
+            fail("empty-reference-rejected", "expected an IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            if (e.getMessage().contains("DocReference is a Reference whose uri() is empty")) {
+                passed++;
+                System.out.println("PASS  empty-reference-rejected");
+            } else {
+                fail("empty-reference-rejected", "wrong message: " + e.getMessage());
+            }
+        }
 
         System.out.println("\n" + passed + " passed, " + failed + " failed");
         System.exit(failed == 0 ? 0 : 1);
@@ -285,6 +324,28 @@ public final class TypedConformance {
         p.setTypeUri(SCHEMA + "/Person");
         p.name = "Alice";
         return p;
+    }
+
+    static AccountByReference accountByReference(PersonReference owner) {
+        AccountByReference a = new AccountByReference();
+        a.setId(DATA + "/a1");
+        a.setTypeUri(SCHEMA + "/Account");
+        a.accountCode = "paul";
+        a.seats = 5L;
+        a.rate = 1.5;
+        a.active = Boolean.TRUE;
+        a.owner = owner;
+        a.tags = List.of("x", "y");
+        return a;
+    }
+
+    static DocByReference docByReference(DocReference cites) {
+        DocByReference d = new DocByReference();
+        d.setId(DATA + "/d1");
+        d.setTypeUri(SCHEMA + "/Doc");
+        d.title = "One";
+        d.cites = cites;
+        return d;
     }
 
     static Account account(Ref<Person> owner) {

@@ -99,6 +99,16 @@ public final class TypedNodes {
             || raw instanceof Number || raw instanceof JsonNumber) {
             return raw;
         }
+        if (raw instanceof Reference reference) {
+            String uri = reference.uri();
+            if (uri == null || uri.isEmpty()) {
+                throw new IllegalArgumentException(
+                    raw.getClass().getName() + " is a Reference whose uri() is empty: a reference needs a canonical URI.");
+            }
+            Map<String, Object> wire = new LinkedHashMap<>();
+            wire.put("$ref", uri);
+            return wire;
+        }
         if (raw instanceof Ref<?> ref) {
             if (ref.isReference()) {
                 Map<String, Object> reference = new LinkedHashMap<>();
@@ -139,7 +149,7 @@ public final class TypedNodes {
         }
         throw new IllegalArgumentException(
             "Unsupported typed value " + raw.getClass().getName()
-                + " — expected String/Boolean/Number/JsonNumber, Ref, List, KanonakNode, or Map.");
+                + " — expected String/Boolean/Number/JsonNumber, Reference, Ref, List, KanonakNode, or Map.");
     }
 
     private static void putEnvelope(Map<String, Object> wire, String key, String value) {
