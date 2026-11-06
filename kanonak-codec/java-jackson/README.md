@@ -21,6 +21,20 @@ Order order = json.readValue(text, Order.class);   // Order extends KanonakNode
 `$name`, `$contentHash` and `$version`. An envelope key that's absent is left out
 on write, as `Codec.serialize(node, schema)` leaves it out.
 
+It binds `Ref<T>` too, the codec's type for a field ranged over a class, which
+holds a reference or a node embedded in place (3.2.1, runtime#68). It's written
+as the codec's typed path writes it, a reference as `{"$ref": uri}` and an
+embedded node as Jackson writes its class, and read back the same way:
+
+```java
+public Ref<Part> part;   // {"$ref": "example.org/parts@1.0.0/wheel"} or {"label": "spoke"}
+```
+
+An embedded node is read as the field's declared `T`, so a field typed a raw
+`Ref` is refused. So are a `$ref` with any key beside it, a `$ref` that isn't a
+non-empty string, an embedded node carrying `$id`, and a value that isn't a JSON
+object, each with a `JsonMappingException` naming what it found.
+
 What the module leaves to others:
 - **The fields.** A generated class binds its own fields, and names on each
   integer or decimal field its datatype's serializer and deserializer, below.
@@ -64,4 +78,5 @@ carries, then be written with exactly those keys and nothing of `extra`. The
 command to run it is in `pom.xml`, and CI's `test-java` job runs it against the
 Jackson jars the pom names, each pinned by digest. Each read and write case of
 `codec-vectors-json-numbers.json` is run through `JsonForms` too, with each field
-typed as a generated class types it.
+typed as a generated class types it, and `Ref<T>` both ways, alone and in a
+list, with each refusal above.

@@ -8,8 +8,10 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
@@ -17,6 +19,7 @@ import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.kanonak.codec.KanonakNode;
+import org.kanonak.codec.Ref;
 import org.kanonak.codec.jackson.JsonForms;
 import org.kanonak.codec.jackson.KanonakModule;
 
@@ -72,6 +75,7 @@ public final class JacksonConformance {
         System.out.println("jackson-envelope: " + (checked - failed) + "/" + checked + " nodes pass");
         if (checked == 0) throw new IllegalStateException("the codec vectors gave no node to check");
         failures.addAll(bindingFailures(vectors));
+        failures.addAll(refFailures(mapper));
         if (!failures.isEmpty()) System.exit(1);
         System.out.println("\nALL VECTORS PASS");
     }
@@ -353,6 +357,113 @@ public final class JacksonConformance {
         }
         failures.forEach(f -> System.out.println("  FAIL " + f));
         System.out.println("codec-vectors-json-numbers.json (Jackson binding): " + (checked - failures.size()) + "/" + checked + " pass");
+        return failures;
+    }
+
+    // -- The Jackson binding of Ref (runtime#68) -------------------------------------
+    // A field ranged over a class holds a reference, {"$ref": uri}, or a node embedded in place, typed Ref<T> as
+    // generated code types it. Each read case is read into Holder and written back unchanged; each refusal names
+    // what it found.
+
+    /** A node a Ref embeds. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static final class Part extends KanonakNode {
+        public String label;
+    }
+
+    /** A generated class with a reference-or-embedded field, alone and in a list. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static final class Holder extends KanonakNode {
+        public Ref<Part> part;
+        public List<Ref<Part>> parts;
+    }
+
+    /** A field that doesn't say what it embeds. */
+    @SuppressWarnings("rawtypes")
+    public static final class RawHolder {
+        public Ref part;
+    }
+
+    static final String URI = "example.org/parts@1.0.0/wheel";
+
+    static List<String> refFailures(ObjectMapper mapper) throws Exception {
+        List<String> failures = new ArrayList<>();
+        int checked = 0;
+
+        String[][] roundTrips = {
+            {"a reference", "{\"part\":{\"$ref\":\"" + URI + "\"}}"},
+            {"an embedded node", "{\"part\":{\"label\":\"spoke\"}}"},
+            {"an embedded node with its name", "{\"part\":{\"$name\":\"front\",\"label\":\"spoke\"}}"},
+            {"a list of both", "{\"parts\":[{\"$ref\":\"" + URI + "\"},{\"label\":\"rim\"}]}"},
+        };
+        for (String[] c : roundTrips) {
+            checked++;
+            try {
+                Holder read = mapper.readValue(c[1], Holder.class);
+                JsonNode written = mapper.valueToTree(read);
+                if (!written.equals(PLAIN.readTree(c[1]))) failures.add("ref " + c[0] + ": read " + c[1] + ", wrote " + written);
+            } catch (Exception e) {
+                failures.add("ref " + c[0] + ": refused " + c[1] + ": " + e.getMessage());
+            }
+        }
+
+        checked++;
+        Holder arms = mapper.readValue("{\"parts\":[{\"$ref\":\"" + URI + "\"},{\"$name\":\"rear\",\"label\":\"rim\"}]}", Holder.class);
+        Ref<Part> reference = arms.parts.get(0);
+        Ref<Part> embedded = arms.parts.get(1);
+        if (!reference.isReference() || !URI.equals(reference.getUri())) failures.add("ref: {\"$ref\": uri} read as " + reference.getUri() + ", not Ref.to(uri)");
+        if (embedded.isReference() || !"rim".equals(embedded.getValue().label) || !"rear".equals(embedded.getValue().getName())) {
+            failures.add("ref: an embedded node read as " + (embedded.isReference() ? "a reference" : embedded.getValue().label + " named " + embedded.getValue().getName()));
+        }
+
+        checked++;
+        Holder built = new Holder();
+        built.part = Ref.to(URI);
+        Part rim = new Part();
+        rim.label = "rim";
+        built.parts = List.of(Ref.embed(rim));
+        JsonNode wire = mapper.valueToTree(built);
+        JsonNode expected = PLAIN.readTree("{\"part\":{\"$ref\":\"" + URI + "\"},\"parts\":[{\"label\":\"rim\"}]}");
+        if (!wire.equals(expected)) failures.add("ref: Ref.to and Ref.embed wrote " + wire + ", expected " + expected);
+
+        String[][] refusals = {
+            {"$ref with a key beside it", "{\"part\":{\"$ref\":\"" + URI + "\",\"label\":\"spoke\"}}", "beside"},
+            {"$ref that isn't a URI", "{\"part\":{\"$ref\":\"\"}}", "non-empty string"},
+            {"an embedded node with $id", "{\"part\":{\"$id\":\"" + URI + "\",\"label\":\"spoke\"}}", "must not carry an id"},
+            {"a string", "{\"part\":\"" + URI + "\"}", "never a JSON string"},
+        };
+        for (String[] c : refusals) {
+            checked++;
+            try {
+                mapper.readValue(c[1], Holder.class);
+                failures.add("ref " + c[0] + ": read " + c[1] + ", expected a refusal");
+            } catch (JsonMappingException e) {
+                if (!e.getOriginalMessage().contains(c[2])) failures.add("ref " + c[0] + ": refused without saying \"" + c[2] + "\": " + e.getOriginalMessage());
+            }
+        }
+
+        checked++;
+        try {
+            mapper.readValue("{\"part\":{\"$ref\":\"" + URI + "\"}}", RawHolder.class);
+            failures.add("ref: a raw Ref field was read, though nothing says what it embeds");
+        } catch (JsonMappingException e) {
+            if (!e.getOriginalMessage().contains("declared Ref<T>")) failures.add("ref: a raw Ref field refused without naming Ref<T>: " + e.getOriginalMessage());
+        }
+
+        checked++;
+        Holder named = new Holder();
+        Part withId = new Part();
+        withId.setId(URI);
+        named.part = Ref.embed(withId);
+        try {
+            mapper.writeValueAsString(named);
+            failures.add("ref: an embedded node with $id was written");
+        } catch (JsonMappingException e) {
+            if (!e.getOriginalMessage().contains("must not carry an id")) failures.add("ref: an embedded node with $id refused without saying so: " + e.getOriginalMessage());
+        }
+
+        failures.forEach(f -> System.out.println("  FAIL " + f));
+        System.out.println("Ref<T> (Jackson binding): " + (checked - failures.size()) + "/" + checked + " pass");
         return failures;
     }
 }
