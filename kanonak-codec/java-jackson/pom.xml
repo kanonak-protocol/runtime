@@ -6,11 +6,11 @@
 
     <groupId>org.kanonak</groupId>
     <artifactId>kanonak-codec-jackson</artifactId>
-    <version>3.2.0</version>
+    <version>3.2.1</version>
     <packaging>jar</packaging>
 
     <name>kanonak-codec-jackson</name>
-    <description>Jackson binding of the Kanonak codec's $-envelope: KanonakModule names KanonakNode's $id, $type, $types, $name, $contentHash and $version, so a generated class read or written by Jackson keeps its identity. In an artifact of its own, so kanonak-codec stays JDK-only.</description>
+    <description>Jackson binding of the Kanonak codec's $-envelope and Ref: KanonakModule names KanonakNode's $id, $type, $types, $name, $contentHash and $version, so a generated class read or written by Jackson keeps its identity, and binds Ref as a reference or an embedded node. In an artifact of its own, so kanonak-codec stays JDK-only.</description>
 
     <url>https://kanonak.org</url>
     <licenses>
@@ -47,7 +47,7 @@
         <dependency>
             <groupId>org.kanonak</groupId>
             <artifactId>kanonak-codec</artifactId>
-            <version>3.2.0</version>
+            <version>3.2.1</version>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
