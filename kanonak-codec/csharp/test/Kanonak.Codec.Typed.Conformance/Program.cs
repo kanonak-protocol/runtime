@@ -29,6 +29,18 @@ sealed class BindingRestriction
     [JsonPropertyName("cardinality"), JsonConverter(typeof(NonNegativeIntegerJsonConverter))] public BigInteger Cardinality { get; set; }
 }
 
+// A list of xsd:integer, and of xsd:positiveInteger, each named with the list converter of its datatype's converter,
+// as a generated class names a list property (runtime#70).
+sealed class BindingCounts
+{
+    [JsonPropertyName("counts"), JsonConverter(typeof(JsonFormListConverter<IntegerJsonConverter, BigInteger>))] public List<BigInteger> Counts { get; set; }
+}
+
+sealed class BindingPositives
+{
+    [JsonPropertyName("values"), JsonConverter(typeof(JsonFormListConverter<PositiveIntegerJsonConverter, BigInteger>))] public List<BigInteger> Values { get; set; }
+}
+
 // -- Generated-style model for probe.example.com/schema@1.0.0 ----------------
 
 sealed class Order : KanonakNode
@@ -430,7 +442,7 @@ static class Program
             case "unsignedShort": return Lexical(JsonSerializer.Deserialize<ushort>(json, With(new UnsignedShortJsonConverter())));
             case "unsignedByte": return Lexical(JsonSerializer.Deserialize<byte>(json, With(new UnsignedByteJsonConverter())));
             case "counts":
-                return JsonSerializer.Serialize(JsonSerializer.Deserialize<List<BigInteger>>(json, With(new IntegerJsonConverter()))
+                return JsonSerializer.Serialize(JsonSerializer.Deserialize<BindingCounts>("{\"counts\": " + json + "}").Counts
                     .Select(n => n.ToString(CultureInfo.InvariantCulture)).ToList());
             case "amount":
                 return JsonSerializer.Serialize(new Dictionary<string, string> { ["value"] = JsonSerializer.Deserialize<BindingAmount>(json).Value });
@@ -453,8 +465,10 @@ static class Program
             case "byte": return JsonSerializer.Serialize(sbyte.Parse(text, CultureInfo.InvariantCulture), With(new ByteJsonConverter()));
             case "unsignedShort": return JsonSerializer.Serialize(ushort.Parse(text, CultureInfo.InvariantCulture), With(new UnsignedShortJsonConverter()));
             case "counts":
-                return JsonSerializer.Serialize(value.EnumerateArray().Select(v => BigInteger.Parse(v.GetString(), CultureInfo.InvariantCulture)).ToList(),
-                    With(new IntegerJsonConverter()));
+                return JsonDocument.Parse(JsonSerializer.Serialize(new BindingCounts
+                {
+                    Counts = value.EnumerateArray().Select(v => BigInteger.Parse(v.GetString(), CultureInfo.InvariantCulture)).ToList(),
+                })).RootElement.GetProperty("counts").GetRawText();
             case "amount": return JsonSerializer.Serialize(new BindingAmount { Value = value.GetProperty("value").GetString() });
             default: throw new InvalidOperationException("no binding type for field " + field);
         }
@@ -492,6 +506,25 @@ static class Program
             else if (want != null && error != null) Fail(id, "refused: " + error);
             else if (want != null && Normal(written) != Normal(want)) Fail(id, "expected " + want + ", got " + written);
         }
+        // A list property's converter reads each item at its own datatype, and refuses what isn't a list of it.
+        foreach (var (id, read) in new (string, Func<object>)[]
+        {
+            ("binding list: an item outside its datatype", () => JsonSerializer.Deserialize<BindingPositives>("{\"values\": [\"1\", \"0\"]}")),
+            ("binding list: a value that isn't an array", () => JsonSerializer.Deserialize<BindingCounts>("{\"counts\": \"5\"}")),
+            ("binding list: a null item", () => JsonSerializer.Deserialize<BindingCounts>("{\"counts\": [\"1\", null]}")),
+        })
+        {
+            total++;
+            try { read(); Fail(id, "expected a refusal"); }
+            catch (JsonException ex) { if (!ex.Message.Contains("[json-number-form]")) Fail(id, "refused without [json-number-form]: " + ex.Message); }
+        }
+        total++;
+        var positives = JsonSerializer.Deserialize<BindingPositives>("{\"values\": [\"1\", \"9007199254740993\"]}");
+        if (positives.Values.Count != 2 || positives.Values[1] != BigInteger.Parse("9007199254740993", CultureInfo.InvariantCulture))
+            Fail("binding list: positiveInteger", "read as " + string.Join(", ", positives.Values));
+        total++;
+        try { JsonSerializer.Serialize(new BindingPositives { Values = new List<BigInteger> { BigInteger.One, BigInteger.Zero } }); Fail("binding list: writing an item outside its datatype", "expected a refusal"); }
+        catch (JsonException ex) { if (!ex.Message.Contains("[json-number-form]")) Fail("binding list: writing an item outside its datatype", "refused without [json-number-form]: " + ex.Message); }
         total++;
         var restriction = JsonSerializer.Deserialize<BindingRestriction>("{\"cardinality\": \"1\"}");
         if (restriction.Cardinality != BigInteger.One) Fail("binding cardinality", "\"1\" read as " + restriction.Cardinality);
