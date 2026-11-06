@@ -2,6 +2,7 @@
 // numbers-in-json, runtime#54): a converter for each datatype, named on a generated class's property with
 // [JsonConverter(typeof(...))], so System.Text.Json reads and writes it as Codec.Serialize and Codec.Deserialize do.
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Numerics;
 using System.Text;
@@ -23,6 +24,9 @@ namespace Kanonak.Codec
         {
             _localName = localName;
         }
+
+        /// <summary>The datatype's local name in core-xsd, for a refusal's message.</summary>
+        internal string LocalName => _localName;
 
         /// <summary>The exact value <see cref="Codec"/> reads, as this converter's type.</summary>
         protected abstract T FromExact(object exact);
@@ -131,6 +135,44 @@ namespace Kanonak.Codec
                 n *= BigInteger.Pow(10, (int)Math.Min(-scale, 400));
             }
             return negative ? -n : n;
+        }
+    }
+
+    /// <summary>
+    /// A list of one datatype's values, each item read and written through that datatype's converter (runtime#70):
+    /// System.Text.Json applies a property's <c>[JsonConverter]</c> to its whole value, so a list property names this
+    /// with its item converter, as <c>JsonFormListConverter&lt;IntegerJsonConverter, BigInteger&gt;</c>. Anything but
+    /// a JSON array, and a null item, are refused, each with a message ending <c>[json-number-form]</c>.
+    /// </summary>
+    public sealed class JsonFormListConverter<TConverter, T> : JsonConverter<List<T>>
+        where TConverter : JsonFormConverter<T>, new()
+    {
+        private readonly TConverter _item = new TConverter();
+
+        public override List<T> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            if (reader.TokenType != JsonTokenType.StartArray)
+                throw new JsonException("a list of xsd:" + _item.LocalName + " is a JSON array, not a JSON " + reader.TokenType + " [json-number-form]");
+            var items = new List<T>();
+            while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+            {
+                if (reader.TokenType == JsonTokenType.Null)
+                    throw new JsonException("a list of xsd:" + _item.LocalName + " holds no null item: item " + items.Count + " is null [json-number-form]");
+                items.Add(_item.Read(ref reader, typeof(T), options));
+            }
+            return items;
+        }
+
+        public override void Write(Utf8JsonWriter writer, List<T> value, JsonSerializerOptions options)
+        {
+            writer.WriteStartArray();
+            foreach (T item in value)
+            {
+                if (item == null)
+                    throw new JsonException("a list of xsd:" + _item.LocalName + " holds no null item [json-number-form]");
+                _item.Write(writer, item, options);
+            }
+            writer.WriteEndArray();
         }
     }
 

@@ -39,7 +39,13 @@ for the same canonical form + content hash the `kanonak hash` CLI produces.
   the digits; and `IntJsonConverter` and the rest on `int` and narrower, which
   holds them to the forms whatever the serializer's number handling. Each refuses
   what the forms refuse, with a `JsonException` ending `[json-number-form]`. The
-  same vectors gate it, through `JsonSerializer`.
+  same vectors gate it, through `JsonSerializer`. A list property names
+  `JsonFormListConverter<TConverter, T>` with its datatype's converter (3.3.0,
+  runtime#70), as
+  `[JsonConverter(typeof(JsonFormListConverter<IntegerJsonConverter, BigInteger>))]`
+  on a `List<BigInteger>`, since `System.Text.Json` applies a property's converter
+  to its whole value. Each item is read and written at its datatype, and anything
+  but a JSON array, or a null item, is refused the same way.
 - **`Codec.TypeMatches(node, classUri, schema)`** — what a generated type guard
   asks: is this node (a map or a `KanonakNode`) an instance of `classUri`?
 - **`Codec.EnumMember(schema, reference)` → `EnumMemberMatch`** (`EnumType`,
