@@ -181,6 +181,10 @@ def _lexical(value: Any) -> str:
         return "true" if value else "false"
     if isinstance(value, str):
         return value
+    if isinstance(value, Decimal):
+        # str writes a decimal past six zeros after the point, or with a large
+        # exponent, as -1E-21, which the canonical form refuses (runtime#74).
+        return format(value, "f")
     return str(value)
 
 
