@@ -6,7 +6,7 @@
 
     <groupId>org.kanonak</groupId>
     <artifactId>kanonak-codec-jackson</artifactId>
-    <version>3.3.1</version>
+    <version>3.3.2</version>
     <packaging>jar</packaging>
 
     <name>kanonak-codec-jackson</name>
@@ -47,7 +47,7 @@
         <dependency>
             <groupId>org.kanonak</groupId>
             <artifactId>kanonak-codec</artifactId>
-            <version>3.3.1</version>
+            <version>3.3.2</version>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
@@ -78,7 +78,7 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-source-plugin</artifactId>
-                        <version>3.3.1</version>
+                        <version>3.3.2</version>
                         <executions>
                             <execution><id>attach-sources</id><goals><goal>jar-no-fork</goal></goals></execution>
                         </executions>

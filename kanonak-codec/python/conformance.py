@@ -572,6 +572,42 @@ def run_typed() -> "tuple[int, int]":
     return passed, failed
 
 
+def run_typed_decimals(vectors: str) -> "tuple[int, int]":
+    """A decimal a typed value holds as a decimal.Decimal hashes as its digits do,
+    however str would write it: past six zeros after the point, and with a large
+    exponent, str writes exponent notation, which the canonical form refuses
+    (runtime#74)."""
+    with io.open(vectors, encoding="utf-8") as fh:
+        data = json.load(fh)
+    schema = data["schema"]
+    cls = data["class"]
+    with io.open(VECTOR_FILES[0], encoding="utf-8") as fh:
+        pkg = json.load(fh)["cases"][0]["pkg"]
+    passed = 0
+    failed = 0
+    for held, digits in (
+        (Decimal("-1E-21"), "-0.000000000000000000001"),
+        (Decimal("1E-7"), "0.0000001"),
+        (Decimal("1E+25"), "10000000000000000000000000"),
+        (Decimal("0.5"), "0.5"),
+    ):
+        node = {"$id": "probe.example.com/data@1.0.0/n", "$type": cls}
+        try:
+            got = canonical_form([to_node({**node, "decimal": held}, schema)], schema, pkg)
+            want = canonical_form([to_node({**node, "decimal": digits}, schema)], schema, pkg)
+        except ValueError as e:
+            failed += 1
+            print(f"FAIL [typed decimal {held!r}] refused: {e}")
+            continue
+        if got != want:
+            failed += 1
+            print(f"FAIL [typed decimal {held!r}]\n  got: {got}\n  exp: {want}")
+        else:
+            passed += 1
+    print(f"typed decimal.Decimal values: {passed} passed, {failed} failed")
+    return passed, failed
+
+
 def main() -> int:
     passed = 0
     failed = 0
@@ -605,6 +641,10 @@ def main() -> int:
     failed += f
 
     p, f = run_json_numbers_file(JSON_NUMBERS_VECTOR_FILE)
+    passed += p
+    failed += f
+
+    p, f = run_typed_decimals(JSON_NUMBERS_VECTOR_FILE)
     passed += p
     failed += f
 
