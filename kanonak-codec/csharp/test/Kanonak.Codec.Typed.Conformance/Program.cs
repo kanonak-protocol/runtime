@@ -41,6 +41,54 @@ sealed class BindingPositives
     [JsonPropertyName("values"), JsonConverter(typeof(JsonFormListConverter<PositiveIntegerJsonConverter, BigInteger>))] public List<BigInteger> Values { get; set; }
 }
 
+// -- An embedded value into an interface (runtime#72) -------------------------
+// Generated code types an object property Ref<IShape> when it may hold any class that implements IShape. The
+// interface's own converter chooses the class by the node's $type, as code that knows the classes does.
+
+[JsonConverter(typeof(ShapeJsonConverter))]
+interface IShape { }
+
+sealed class Circle : KanonakNode, IShape
+{
+    [JsonPropertyName("radius")] public long Radius { get; set; }
+}
+
+sealed class Square : KanonakNode, IShape
+{
+    [JsonPropertyName("side")] public long Side { get; set; }
+}
+
+sealed class ShapeJsonConverter : JsonConverter<IShape>
+{
+    public const string SquareType = "probe.example.com/shapes@1.0.0/Square";
+
+    public override IShape Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        using var doc = JsonDocument.ParseValue(ref reader);
+        bool square = doc.RootElement.TryGetProperty("$type", out var type) && type.GetString() == SquareType;
+        return square ? doc.RootElement.Deserialize<Square>(options) : doc.RootElement.Deserialize<Circle>(options);
+    }
+
+    public override void Write(Utf8JsonWriter writer, IShape value, JsonSerializerOptions options)
+        => JsonSerializer.Serialize(writer, (object)value, value.GetType(), options);
+}
+
+sealed class Drawing
+{
+    [JsonPropertyName("shape")] public Ref<IShape> Shape { get; set; }
+    [JsonPropertyName("shapes")] public List<Ref<IShape>> Shapes { get; set; }
+}
+
+interface IUnconverted { }
+
+abstract class AbstractUnconverted { }
+
+sealed class Sketch
+{
+    [JsonPropertyName("thing")] public Ref<IUnconverted> Thing { get; set; }
+    [JsonPropertyName("other")] public Ref<AbstractUnconverted> Other { get; set; }
+}
+
 // -- Generated-style model for probe.example.com/schema@1.0.0 ----------------
 
 sealed class Order : KanonakNode
@@ -354,6 +402,7 @@ static class Program
         });
 
         RunJsonFormBinding(vectorsDir);
+        RunRefIntoInterface();
 
         Console.WriteLine();
         if (_fails > 0) { Console.Error.WriteLine(_fails + " TYPED CHECK(S) FAILED"); return 1; }
@@ -550,6 +599,37 @@ static class Program
             else if (expected != null && Normal(got) != Normal(expected)) Fail(id, "expected " + expected + ", got " + got);
         }
         Console.WriteLine("codec-vectors-json-numbers.json (System.Text.Json binding): " + (total - (_fails - failedBefore)) + "/" + total + " pass");
+    }
+
+    // An embedded value into an interface or abstract T is read through T's own converter, and refused when T has none.
+    static void RunRefIntoInterface()
+    {
+        int failedBefore = _fails;
+        string json = "{\"shape\": {\"$type\": \"" + ShapeJsonConverter.SquareType + "\", \"side\": 3},"
+            + " \"shapes\": [{\"$ref\": \"probe.example.com/shapes@1.0.0/c1\"}, {\"radius\": 2}]}";
+        var drawing = JsonSerializer.Deserialize<Drawing>(json);
+        if (!(drawing.Shape.Value is Square square) || square.Side != 3)
+            Fail("ref into interface: one", "read as " + drawing.Shape.Value?.GetType().Name);
+        if (!drawing.Shapes[0].IsReference || drawing.Shapes[0].Uri != "probe.example.com/shapes@1.0.0/c1")
+            Fail("ref into interface: a reference in a list", "read as " + drawing.Shapes[0].Uri);
+        if (!(drawing.Shapes[1].Value is Circle circle) || circle.Radius != 2)
+            Fail("ref into interface: an embedded value in a list", "read as " + drawing.Shapes[1].Value?.GetType().Name);
+        var written = JsonDocument.Parse(JsonSerializer.Serialize(drawing)).RootElement;
+        if (written.GetProperty("shape").GetProperty("side").GetInt64() != 3)
+            Fail("ref into interface: written", "wrote " + written.GetRawText());
+        foreach (var (id, sketch, named) in new[]
+        {
+            ("ref into an interface with no converter", "{\"thing\": {\"a\": 1}}", "IUnconverted"),
+            ("ref into an abstract class with no converter", "{\"other\": {\"a\": 1}}", "AbstractUnconverted"),
+        })
+        {
+            try { JsonSerializer.Deserialize<Sketch>(sketch); Fail(id, "expected a refusal"); }
+            catch (JsonException e)
+            {
+                if (!e.Message.Contains(named) || !e.Message.Contains("[JsonConverter]")) Fail(id, "refused without naming the type and the way out: " + e.Message);
+            }
+        }
+        Console.WriteLine("Ref<T> into an interface or abstract T: " + (6 - (_fails - failedBefore)) + "/6 pass");
     }
 
     static void Fail(string caseId, string message)

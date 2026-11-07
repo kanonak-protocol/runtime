@@ -79,9 +79,10 @@ namespace Kanonak.Codec
     /// (De)serializes <see cref="Ref{T}"/>: the reference arm as
     /// <c>{"$ref": uri}</c>, the embedded arm as the value's own wire form —
     /// serialized by its RUNTIME type, so an interface-typed <c>T</c> still
-    /// carries the concrete class's full contract. Reading the embedded arm
-    /// requires a concrete <c>T</c> (deserializing into an interface needs a
-    /// type registry — fail-loud until that exists).
+    /// carries the concrete class's full contract. The embedded arm is read
+    /// as <c>T</c>: an interface or abstract <c>T</c> through its own
+    /// converter, which chooses the class by the node's <c>$type</c>, and one
+    /// with none is refused (runtime#72).
     /// </summary>
     public sealed class RefJsonConverterFactory : JsonConverterFactory
     {
@@ -120,14 +121,18 @@ namespace Kanonak.Codec
                     {
                         return Ref<T>.To(uri.GetString());
                     }
-                    if (typeof(T).IsInterface || typeof(T).IsAbstract)
+                    T value;
+                    try
+                    {
+                        value = (T)JsonSerializer.Deserialize(doc.RootElement.GetRawText(), typeof(T), options);
+                    }
+                    catch (NotSupportedException e) when (typeof(T).IsInterface || typeof(T).IsAbstract)
                     {
                         throw new JsonException(
-                            "Cannot deserialize an embedded value into the interface/abstract type " +
-                            typeof(T).Name + " — a concrete type registry keyed by $type is required " +
-                            "and not yet part of the codec runtime.");
+                            "Cannot deserialize an embedded value into the interface/abstract type " + typeof(T).Name
+                            + ", which has no converter of its own: name one on it with [JsonConverter], choosing the "
+                            + "class by the node's $type, as Codec.TypeMatches does.", e);
                     }
-                    var value = (T)JsonSerializer.Deserialize(doc.RootElement.GetRawText(), typeof(T), options);
                     return Ref<T>.Embed(value);
                 }
             }
