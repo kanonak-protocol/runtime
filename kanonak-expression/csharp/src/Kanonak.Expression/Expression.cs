@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -45,6 +46,13 @@ namespace Kanonak.Expression
     public sealed class ExpressionError : Exception
     {
         public ExpressionError(string message) : base(message) { }
+    }
+
+    /// <summary>The text forms <c>tx.UuidFormat</c> names: <c>canonical-uuid</c> and <c>hex-uuid</c>.</summary>
+    public enum UuidFormat
+    {
+        Canonical,
+        Hex,
     }
 
     /// <summary>
@@ -309,6 +317,7 @@ namespace Kanonak.Expression
         const string IS_SET = TX + "/IsSet";
         const string LIST_ITEM_AT = TX + "/ListItemAt";
         const string MATCHES = TX + "/Matches";
+        const string NAME_BASED_UUID = TX + "/NameBasedUuid";
 
         // The literal classes the kernel answers itself (see LiteralValue).
         const string INTEGER_LITERAL = TX + "/IntegerLiteral";
@@ -700,6 +709,93 @@ namespace Kanonak.Expression
             return MatchesPattern(input, pattern);
         }
 
+        // -- NameBasedUuid: the RFC 9562 version 5 UUID of a name under a namespace
+
+        static readonly Dictionary<string, UuidFormat> UuidFormats = new Dictionary<string, UuidFormat>
+        {
+            [TX + "/canonical-uuid"] = UuidFormat.Canonical,
+            [TX + "/hex-uuid"] = UuidFormat.Hex,
+        };
+
+        static readonly Regex CanonicalUuidText =
+            new Regex(@"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\z");
+
+        /// <summary>
+        /// The RFC 9562 version 5 UUID of <paramref name="uuidName"/> under
+        /// <paramref name="uuidNamespace"/>: SHA-1 over the namespace's 16 bytes and the name's
+        /// UTF-8 bytes, with the version and variant bits set (section 5.5), as lower-case text in
+        /// <paramref name="format"/>. The namespace is a UUID in canonical text, in either case;
+        /// anything else is an <see cref="ExpressionError"/>, as is a name holding a lone
+        /// surrogate, which has no UTF-8 form every port would agree on.
+        /// </summary>
+        /// <remarks>For a host engine that evaluates <c>NameBasedUuid</c> over its own value
+        /// domain: it calls this rather than hash a name itself.</remarks>
+        /// <exception cref="ExpressionError">The namespace is not a UUID in canonical text, or the
+        /// name holds a lone surrogate.</exception>
+        /// <exception cref="ArgumentNullException"><paramref name="uuidNamespace"/> or
+        /// <paramref name="uuidName"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="format"/> is not a
+        /// <see cref="UuidFormat"/> member.</exception>
+        public static string NameBasedUuid(string uuidNamespace, string uuidName, UuidFormat format = UuidFormat.Canonical)
+        {
+            if (uuidNamespace == null) throw new ArgumentNullException(nameof(uuidNamespace));
+            if (uuidName == null) throw new ArgumentNullException(nameof(uuidName));
+            if (format != UuidFormat.Canonical && format != UuidFormat.Hex)
+                throw new ArgumentOutOfRangeException(nameof(format), format, "NameBasedUuid format must be UuidFormat.Canonical or UuidFormat.Hex");
+            if (!CanonicalUuidText.IsMatch(uuidNamespace))
+                throw Err("NameBasedUuid requires uuidNamespace to be a UUID in canonical text, got \"" + uuidNamespace + "\"");
+            if (!IsWellFormedUnicode(uuidName))
+                throw Err("NameBasedUuid requires uuidName to be well-formed Unicode, and it holds a lone surrogate");
+            string namespaceHex = uuidNamespace.Replace("-", "");
+            byte[] nameBytes = Encoding.UTF8.GetBytes(uuidName);
+            var input = new byte[16 + nameBytes.Length];
+            for (int i = 0; i < 16; i++) input[i] = Convert.ToByte(namespaceHex.Substring(i * 2, 2), 16);
+            Buffer.BlockCopy(nameBytes, 0, input, 16, nameBytes.Length);
+            // SHA1.HashData is .NET 5+, and this package also targets netstandard2.0.
+            byte[] uuid;
+            using (var sha1 = SHA1.Create()) uuid = sha1.ComputeHash(input);
+            uuid[6] = (byte)((uuid[6] & 0x0f) | 0x50);
+            uuid[8] = (byte)((uuid[8] & 0x3f) | 0x80);
+            var hex = new StringBuilder(32);
+            for (int i = 0; i < 16; i++) hex.Append(uuid[i].ToString("x2"));
+            string h = hex.ToString();
+            if (format == UuidFormat.Hex) return h;
+            return h.Substring(0, 8) + "-" + h.Substring(8, 4) + "-" + h.Substring(12, 4) + "-" + h.Substring(16, 4) + "-" + h.Substring(20);
+        }
+
+        static bool IsWellFormedUnicode(string s)
+        {
+            for (int i = 0; i < s.Length; i++)
+            {
+                char unit = s[i];
+                if (char.IsLowSurrogate(unit)) return false;
+                if (char.IsHighSurrogate(unit))
+                {
+                    if (i + 1 >= s.Length || !char.IsLowSurrogate(s[i + 1])) return false;
+                    i++;
+                }
+            }
+            return true;
+        }
+
+        /// <summary>The form a <c>NameBasedUuid</c> node's <c>uuidFormat</c> names: canonical where it's absent.</summary>
+        static UuidFormat UuidFormatOf(ExprNode node)
+        {
+            if (node.Fields == null || !node.Fields.TryGetValue("uuidFormat", out var named)) return UuidFormat.Canonical;
+            if (named is string s && UuidFormats.TryGetValue(s, out var format)) return format;
+            throw Err("NameBasedUuid uuidFormat must be " + TX + "/canonical-uuid or " + TX + "/hex-uuid, got "
+                + (named is string str ? "\"" + str + "\"" : named == null ? "null" : named.ToString()));
+        }
+
+        static string FoldNameBasedUuid(ExprNode node, object uuidNamespace, object uuidName)
+        {
+            if (!(uuidNamespace is string ns))
+                throw Err("NameBasedUuid requires a string uuidNamespace, got " + KindOf(uuidNamespace));
+            if (!(uuidName is string name))
+                throw Err("NameBasedUuid requires a string uuidName, got " + KindOf(uuidName));
+            return NameBasedUuid(ns, name, UuidFormatOf(node));
+        }
+
         // -- ordered comparisons (unchanged from v1) ---------------------------
 
         static string IdentityOf(ExprNode node, object ctx, EvalOptions opts)
@@ -750,7 +846,7 @@ namespace Kanonak.Expression
             set.UnionWith(KindPredicates);
             set.UnionWith(new[]
             {
-                NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES,
+                NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES, NAME_BASED_UUID,
                 INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL,
             });
             return set;
@@ -944,6 +1040,13 @@ namespace Kanonak.Expression
                 return Bool(MatchesPattern(s, pattern));
             }
 
+            if (typ == NAME_BASED_UUID)
+            {
+                var uuidNamespace = Go(Operand(node, "uuidNamespace"), ctx, resolve, options, frames);
+                var uuidName = Go(Operand(node, "uuidName"), ctx, resolve, options, frames);
+                return FoldNameBasedUuid(node, uuidNamespace, uuidName);
+            }
+
             if (IsKindPredicate(typ))
             {
                 var x = Go(Operand(node, "kindCheck"), ctx, resolve, options, frames);
@@ -995,6 +1098,7 @@ namespace Kanonak.Expression
                 case CONTAINS: return new[] { "haystack", "needle" };
                 case IS_SET: return new[] { "checkExpr" };
                 case MATCHES: return new[] { "matchSource" };
+                case NAME_BASED_UUID: return new[] { "uuidNamespace", "uuidName" };
                 case TX + "/Count": case TX + "/Sum": case TX + "/Min": case TX + "/Max": case TX + "/Average":
                 case TX + "/Join": case TX + "/Reverse":
                     return new[] { "source" };
@@ -1242,6 +1346,13 @@ namespace Kanonak.Expression
                 if (!(node.Get("pattern") is string pattern))
                     throw Err("Matches is missing pattern");
                 return Parent(typ, Bool(MatchesPattern(s, pattern)), src);
+            }
+
+            if (typ == NAME_BASED_UUID)
+            {
+                var uuidNamespace = Trace(Operand(node, "uuidNamespace"), ctx, resolve, options, frames);
+                var uuidName = Trace(Operand(node, "uuidName"), ctx, resolve, options, frames);
+                return Parent(typ, FoldNameBasedUuid(node, uuidNamespace.Value, uuidName.Value), uuidNamespace, uuidName);
             }
 
             if (IsKindPredicate(typ))

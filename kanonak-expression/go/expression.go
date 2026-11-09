@@ -34,11 +34,14 @@
 package expression
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // ExpressionRuntimeVersion freezes the determinism contract. Not hashed.
@@ -146,13 +149,14 @@ func isListFold(typ string) bool {
 
 // The operators the fold dispatches by name, beside its dispatch tables.
 const (
-	opNot        = tx + "/Not"
-	opIsAtLeast  = tx + "/IsAtLeast"
-	opDominates  = tx + "/Dominates"
-	opContains   = tx + "/Contains"
-	opIsSet      = tx + "/IsSet"
-	opListItemAt = tx + "/ListItemAt"
-	opMatches    = tx + "/Matches"
+	opNot           = tx + "/Not"
+	opIsAtLeast     = tx + "/IsAtLeast"
+	opDominates     = tx + "/Dominates"
+	opContains      = tx + "/Contains"
+	opIsSet         = tx + "/IsSet"
+	opListItemAt    = tx + "/ListItemAt"
+	opMatches       = tx + "/Matches"
+	opNameBasedUUID = tx + "/NameBasedUuid"
 )
 
 // The literal classes the kernel answers itself (see literalValue).
@@ -738,6 +742,100 @@ func Matches(input, pattern string) (matched bool, err error) {
 	return matchesPattern(input, pattern), nil
 }
 
+// --- NameBasedUuid: the RFC 9562 version 5 UUID of a name under a namespace (1.2.0)
+
+// UUIDFormat is a text form tx.UuidFormat names: canonical-uuid or hex-uuid.
+type UUIDFormat int
+
+const (
+	// CanonicalUUID is the 8-4-4-4-12 form, 36 characters with hyphens. It is
+	// UUIDFormat's zero value.
+	CanonicalUUID UUIDFormat = iota
+	// HexUUID is the same 32 hex digits, without hyphens.
+	HexUUID
+)
+
+var uuidFormats = map[string]UUIDFormat{
+	tx + "/canonical-uuid": CanonicalUUID,
+	tx + "/hex-uuid":       HexUUID,
+}
+
+var canonicalUUIDText = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
+
+// NameBasedUUID returns the RFC 9562 version 5 UUID of name under namespace:
+// SHA-1 over the namespace's 16 bytes and the name's UTF-8 bytes, with the
+// version and variant bits set (section 5.5), as lower-case text in format.
+// The namespace is a UUID in canonical text, in either case; anything else is
+// an *Error, as is a name that isn't valid UTF-8, and a format other than
+// CanonicalUUID or HexUUID.
+//
+// For a host engine that evaluates NameBasedUuid over its own value domain: it
+// calls this rather than hash a name itself.
+func NameBasedUUID(namespace, name string, format UUIDFormat) (uuid string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if e, ok := r.(*Error); ok {
+				err = e
+				return
+			}
+			panic(r)
+		}
+	}()
+	return nameBasedUUID(namespace, name, format), nil
+}
+
+func nameBasedUUID(namespace, name string, format UUIDFormat) string {
+	if format != CanonicalUUID && format != HexUUID {
+		raise("NameBasedUuid format must be CanonicalUUID or HexUUID, got UUIDFormat(%d)", int(format))
+	}
+	if !canonicalUUIDText.MatchString(namespace) {
+		raise("NameBasedUuid requires uuidNamespace to be a UUID in canonical text, got %q", namespace)
+	}
+	if !utf8.ValidString(name) {
+		raise("NameBasedUuid requires uuidName to be valid UTF-8, and it holds an ill-formed byte sequence")
+	}
+	namespaceBytes, err := hex.DecodeString(strings.ReplaceAll(namespace, "-", ""))
+	if err != nil {
+		raise("NameBasedUuid could not read uuidNamespace %q as hex: %v", namespace, err)
+	}
+	digest := sha1.Sum(append(namespaceBytes, name...))
+	uuid := digest[:16]
+	uuid[6] = uuid[6]&0x0f | 0x50
+	uuid[8] = uuid[8]&0x3f | 0x80
+	digits := hex.EncodeToString(uuid)
+	if format == HexUUID {
+		return digits
+	}
+	return digits[:8] + "-" + digits[8:12] + "-" + digits[12:16] + "-" + digits[16:20] + "-" + digits[20:]
+}
+
+// uuidFormatOf is the form a NameBasedUuid node's uuidFormat names: canonical
+// where it's absent.
+func uuidFormatOf(node Node) UUIDFormat {
+	named, present := node["uuidFormat"]
+	if !present {
+		return CanonicalUUID
+	}
+	s, isString := named.(string)
+	format, known := uuidFormats[s]
+	if !isString || !known {
+		raise("NameBasedUuid uuidFormat must be %s/canonical-uuid or %s/hex-uuid, got %#v", tx, tx, named)
+	}
+	return format
+}
+
+func foldNameBasedUUID(node Node, namespace, name Value) string {
+	ns, ok := namespace.(string)
+	if !ok {
+		raise("NameBasedUuid requires a string uuidNamespace, got %s", kindOf(namespace))
+	}
+	n, ok := name.(string)
+	if !ok {
+		raise("NameBasedUuid requires a string uuidName, got %s", kindOf(name))
+	}
+	return nameBasedUUID(ns, n, uuidFormatOf(node))
+}
+
 func isHex(c rune) bool {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
@@ -798,7 +896,7 @@ func foldOrdered(node Node, ctx interface{}, opts *Options) (value float64, left
 // through a dispatch table: the by-name operators and the literals.
 var kernelByName = map[string]bool{
 	opNot: true, opIsAtLeast: true, opDominates: true, opContains: true,
-	opIsSet: true, opListItemAt: true, opMatches: true,
+	opIsSet: true, opListItemAt: true, opMatches: true, opNameBasedUUID: true,
 	integerLiteral: true, decimalLiteral: true, booleanLiteral: true,
 	stringLiteral: true, uriLiteral: true,
 }
@@ -1001,6 +1099,12 @@ func evalNode(node Node, ctx interface{}, resolve Resolve, opts *Options, frames
 			raise("Matches is missing pattern")
 		}
 		return boolNum(matchesPattern(s, pattern))
+	}
+
+	if typ == opNameBasedUUID {
+		namespace := evalNode(operand(node, "uuidNamespace"), ctx, resolve, opts, frames)
+		name := evalNode(operand(node, "uuidName"), ctx, resolve, opts, frames)
+		return foldNameBasedUUID(node, namespace, name)
 	}
 
 	if v, ok := kindPredicate(typ, nil); ok {
@@ -1239,6 +1343,12 @@ func explainPanic(node Node, ctx interface{}, resolve Resolve, opts *Options, fr
 		return &TraceNode{Type: typ, Value: boolNum(matchesPattern(s, pattern)), Children: []*TraceNode{src}}
 	}
 
+	if typ == opNameBasedUUID {
+		namespace := explainPanic(operand(node, "uuidNamespace"), ctx, resolve, opts, frames)
+		name := explainPanic(operand(node, "uuidName"), ctx, resolve, opts, frames)
+		return &TraceNode{Type: typ, Value: foldNameBasedUUID(node, namespace.Value, name.Value), Children: []*TraceNode{namespace, name}}
+	}
+
 	if _, ok := kindPredicate(typ, nil); ok {
 		x := explainPanic(operand(node, "kindCheck"), ctx, resolve, opts, frames)
 		v, _ := kindPredicate(typ, x.Value)
@@ -1279,7 +1389,6 @@ func Explain(node Node, ctx interface{}, resolve Resolve, opts *Options) (trace 
 	return explainPanic(node, ctx, resolve, opts, nil), nil
 }
 
-
 // ---------------------------------------------------------------------------
 // align — the trace↔expression walk (runtime#26). A trace carries verdicts,
 // not labels, and it does not mirror the expression node-for-node: its shape
@@ -1317,13 +1426,15 @@ type AlignedNode struct {
 var orderedComparison = map[string]bool{opIsAtLeast: true, opDominates: true}
 
 // Trace-child order for the direct and list operators — the order Explain
-// visits them. Data operands (Join's separator, Matches' pattern) are not children.
+// visits them. Data operands (Join's separator, Matches' pattern, NameBasedUuid's
+// uuidFormat) are not children.
 var directChildren = map[string][]string{
 	opNot:               {"operand"},
 	opListItemAt:        {"source", "itemIndex"},
 	opContains:          {"haystack", "needle"},
 	opIsSet:             {"checkExpr"},
 	opMatches:           {"matchSource"},
+	opNameBasedUUID:     {"uuidNamespace", "uuidName"},
 	tx + "/Count":       {"source"},
 	tx + "/Sum":         {"source"},
 	tx + "/Min":         {"source"},

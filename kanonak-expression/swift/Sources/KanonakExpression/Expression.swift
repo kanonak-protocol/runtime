@@ -37,6 +37,7 @@
 // the codec port uses, so a node decoded with `JSONSerialization` feeds
 // straight in.
 
+import Crypto
 import Foundation
 
 /// The frozen expression-runtime version (determinism contract). Not hashed.
@@ -59,6 +60,7 @@ private let containsType = "\(tx)/Contains"
 private let isSetType = "\(tx)/IsSet"
 private let listItemAtType = "\(tx)/ListItemAt"
 private let matchesType = "\(tx)/Matches"
+private let nameBasedUuidType = "\(tx)/NameBasedUuid"
 
 // The literal classes the kernel answers itself (see `literalValue`).
 private let integerLiteralType = "\(tx)/IntegerLiteral"
@@ -602,6 +604,96 @@ public func matches(_ input: String, _ pattern: String) throws -> Bool {
     try matchesPattern(input, pattern)
 }
 
+// MARK: - NameBasedUuid: the RFC 9562 version 5 UUID of a name under a namespace
+
+/// The text forms `tx.UuidFormat` names: `canonical-uuid` and `hex-uuid`.
+public enum UuidFormat {
+    case canonical
+    case hex
+}
+
+private let uuidFormats: [String: UuidFormat] = [
+    "\(tx)/canonical-uuid": .canonical,
+    "\(tx)/hex-uuid": .hex,
+]
+
+// Bytes, never Character.hexDigitValue, which also reads fullwidth digits.
+private func asciiHexValue(_ c: UInt8) -> UInt8? {
+    switch c {
+    case UInt8(ascii: "0")...UInt8(ascii: "9"): return c - UInt8(ascii: "0")
+    case UInt8(ascii: "a")...UInt8(ascii: "f"): return c - UInt8(ascii: "a") + 10
+    case UInt8(ascii: "A")...UInt8(ascii: "F"): return c - UInt8(ascii: "A") + 10
+    default: return nil
+    }
+}
+
+/// The 16 bytes of a UUID in canonical text (`8-4-4-4-12` ASCII hex digits, in
+/// either case), or nil for any other text: braced, `urn:uuid:` and hyphenless
+/// forms included.
+private func canonicalUuidBytes(_ text: String) -> [UInt8]? {
+    let chars = Array(text.utf8)
+    guard chars.count == 36 else { return nil }
+    var out = [UInt8](repeating: 0, count: 16)
+    var nibble = 0
+    for (i, c) in chars.enumerated() {
+        if i == 8 || i == 13 || i == 18 || i == 23 {
+            guard c == UInt8(ascii: "-") else { return nil }
+            continue
+        }
+        guard let digit = asciiHexValue(c) else { return nil }
+        out[nibble / 2] |= nibble % 2 == 0 ? digit << 4 : digit
+        nibble += 1
+    }
+    return out
+}
+
+/// The RFC 9562 version 5 UUID of `name` under `namespace`: SHA-1 over the
+/// namespace's 16 bytes and the name's UTF-8 bytes, with the version and variant
+/// bits set (section 5.5), as lower-case text in `format`. The namespace is a
+/// UUID in canonical text, in either case; anything else throws
+/// `ExpressionError`.
+///
+/// For a host engine that evaluates `NameBasedUuid` over its own value domain:
+/// it calls this rather than hash a name itself.
+public func nameBasedUuid(_ namespace: String, _ name: String, format: UuidFormat = .canonical) throws -> String {
+    guard let namespaceBytes = canonicalUuidBytes(namespace) else {
+        throw ExpressionError("NameBasedUuid requires uuidNamespace to be a UUID in canonical text, got \"\(namespace)\"")
+    }
+    var input = Data(namespaceBytes)
+    input.append(contentsOf: Array(name.utf8))
+    var uuid = Array(Insecure.SHA1.hash(data: input).prefix(16))
+    uuid[6] = (uuid[6] & 0x0f) | 0x50
+    uuid[8] = (uuid[8] & 0x3f) | 0x80
+    let hex = uuid.map { String(format: "%02x", $0) }
+    switch format {
+    case .hex:
+        return hex.joined()
+    case .canonical:
+        return [hex[0..<4], hex[4..<6], hex[6..<8], hex[8..<10], hex[10..<16]]
+            .map { $0.joined() }
+            .joined(separator: "-")
+    }
+}
+
+/// The form a `NameBasedUuid` node's `uuidFormat` names: canonical where it's absent.
+private func uuidFormatOf(_ node: ExprNode) throws -> UuidFormat {
+    guard let named = node["uuidFormat"] else { return .canonical }
+    guard let s = named as? String, let format = uuidFormats[s] else {
+        throw ExpressionError("NameBasedUuid uuidFormat must be \(tx)/canonical-uuid or \(tx)/hex-uuid, got \(named)")
+    }
+    return format
+}
+
+private func foldNameBasedUuid(_ node: ExprNode, _ namespace: EvalValue, _ name: EvalValue) throws -> EvalValue {
+    guard case let .str(ns) = namespace else {
+        throw ExpressionError("NameBasedUuid requires a string uuidNamespace, got \(namespace.kind)")
+    }
+    guard case let .str(n) = name else {
+        throw ExpressionError("NameBasedUuid requires a string uuidName, got \(name.kind)")
+    }
+    return .str(try nameBasedUuid(ns, n, format: try uuidFormatOf(node)))
+}
+
 // MARK: - Ordered comparisons (unchanged from v1)
 
 private func identityOf<C>(_ node: ExprNode, _ ctx: C, _ options: EvalOptions<C>?) throws -> String {
@@ -643,6 +735,7 @@ private func foldOrdered<C>(
 /// The operators the fold dispatches by name, and the literals it answers.
 private let byNameOperators: Set<String> = [
     notType, isAtLeastType, dominatesType, containsType, isSetType, listItemAtType, matchesType,
+    nameBasedUuidType,
 ]
 private let literalTypes: Set<String> = [
     integerLiteralType, decimalLiteralType, booleanLiteralType, stringLiteralType, uriLiteralType,
@@ -810,6 +903,12 @@ private func go<C>(
             throw ExpressionError("Matches is missing pattern")
         }
         return .num(boolNum(try matchesPattern(s, pattern)))
+    }
+
+    if typ == nameBasedUuidType {
+        let namespace = try go(try operand(node, typ, "uuidNamespace"), ctx, resolve, options, &frames)
+        let name = try go(try operand(node, typ, "uuidName"), ctx, resolve, options, &frames)
+        return try foldNameBasedUuid(node, namespace, name)
     }
 
     if let v = try kindPredicateValue(typ, node, ctx, resolve, options, &frames) {
@@ -1001,6 +1100,12 @@ private func trace<C>(
         return TraceNode(typ, .num(boolNum(try matchesPattern(s, pattern))), [src])
     }
 
+    if typ == nameBasedUuidType {
+        let namespace = try trace(try operand(node, typ, "uuidNamespace"), ctx, resolve, options, &frames)
+        let name = try trace(try operand(node, typ, "uuidName"), ctx, resolve, options, &frames)
+        return TraceNode(typ, try foldNameBasedUuid(node, namespace.value, name.value), [namespace, name])
+    }
+
     if kindPredicate(typ, .num(0)) != nil {
         let x = try trace(try operand(node, typ, "kindCheck"), ctx, resolve, options, &frames)
         return TraceNode(typ, .num(kindPredicate(typ, x.value)!), [x])
@@ -1061,7 +1166,8 @@ private func isOrderedComparison(_ typ: String) -> Bool {
 }
 
 /// Trace-child order for the direct and list operators — the order `explain`
-/// visits them. Data operands (Join's separator, Matches' pattern) are not children.
+/// visits them. Data operands (Join's separator, Matches' pattern, NameBasedUuid's
+/// uuidFormat) are not children.
 private func directChildren(_ typ: String) -> [String]? {
     switch typ {
     case notType: return ["operand"]
@@ -1069,6 +1175,7 @@ private func directChildren(_ typ: String) -> [String]? {
     case containsType: return ["haystack", "needle"]
     case isSetType: return ["checkExpr"]
     case matchesType: return ["matchSource"]
+    case nameBasedUuidType: return ["uuidNamespace", "uuidName"]
     case "\(tx)/Count", "\(tx)/Sum", "\(tx)/Min", "\(tx)/Max", "\(tx)/Average", "\(tx)/Join", "\(tx)/Reverse":
         return ["source"]
     case "\(tx)/IsString", "\(tx)/IsNumber", "\(tx)/IsReference", "\(tx)/IsList":

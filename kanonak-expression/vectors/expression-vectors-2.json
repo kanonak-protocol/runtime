@@ -1,6 +1,6 @@
 {
   "expressionRuntimeVersion": "2",
-  "description": "Behavior parity vectors for expressionRuntimeVersion 2 — the value-domain extension (number | string | ref | list), the list/aggregate/membership family, polymorphic Equals, kind predicates, lambda binding (Filter/ListMap/ForEach), and Matches over the pinned RE2-compatible XSD-regex subset. Runs IN ADDITION to expression-vectors.json (v1), every vector of which must pass unchanged under a v2 kernel — that file is the numeric-regression gate. `expected` and `env` values are Values: JSON numbers, strings, arrays (lists), and {\"ref\": \"publisher/package/name\"} objects (refs). Normative list-family semantics are the SDK reference engine's: Sum on empty = 0; Min/Max/Average on empty = loud error; Count type-agnostic; absence is the empty list; predicates fail closed on type-confused operands, computations fail loud.",
+  "description": "Behavior parity vectors for expressionRuntimeVersion 2 — the value-domain extension (number | string | ref | list), the list/aggregate/membership family, polymorphic Equals, kind predicates, lambda binding (Filter/ListMap/ForEach), Matches over the pinned RE2-compatible XSD-regex subset, and NameBasedUuid, the RFC 9562 version 5 UUID of a name (1.2.0). Runs IN ADDITION to expression-vectors.json (v1), every vector of which must pass unchanged under a v2 kernel — that file is the numeric-regression gate. `expected` and `env` values are Values: JSON numbers, strings, arrays (lists), and {\"ref\": \"publisher/package/name\"} objects (refs). Normative list-family semantics are the SDK reference engine's: Sum on empty = 0; Min/Max/Average on empty = loud error; Count type-agnostic; absence is the empty list; predicates fail closed on type-confused operands, computations fail loud.",
   "vectors": [
     {
       "id": "string-literal",
@@ -1627,6 +1627,357 @@
       "expected": [
         "own value"
       ]
+    },
+    {
+      "id": "name-based-uuid-dns-namespace",
+      "description": "RFC 9562 version 5 of www.example.com under the RFC's DNS namespace, as Python's uuid.uuid5 gives it; uuidFormat absent is canonical text",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "www.example.com"
+        }
+      },
+      "expected": "2ed6657d-e927-568b-95e1-2665a8aea6a2"
+    },
+    {
+      "id": "name-based-uuid-url-namespace-versionless-uri",
+      "description": "A versionless URI under the RFC's URL namespace: the identifier of a declaration derived from its name",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "6ba7b811-9dad-11d1-80b4-00c04fd430c8"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "example.com/example-package/example-subject"
+        }
+      },
+      "expected": "be8ed0ff-6592-5bdf-a80d-6e7001609a48"
+    },
+    {
+      "id": "name-based-uuid-canonical-uuid-named",
+      "description": "uuidFormat canonical-uuid, named, gives what its absence gives",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "www.example.com"
+        },
+        "uuidFormat": "kanonak.org/transformations/canonical-uuid"
+      },
+      "expected": "2ed6657d-e927-568b-95e1-2665a8aea6a2"
+    },
+    {
+      "id": "name-based-uuid-hex-uuid",
+      "description": "uuidFormat hex-uuid: the same 32 lower-case hex digits, without hyphens",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "www.example.com"
+        },
+        "uuidFormat": "kanonak.org/transformations/hex-uuid"
+      },
+      "expected": "2ed6657de927568b95e12665a8aea6a2"
+    },
+    {
+      "id": "name-based-uuid-upper-case-namespace",
+      "description": "A namespace's hex digits are read in either case (RFC 9562, section 4), and the result is always lower-case",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "6BA7B810-9DAD-11D1-80B4-00C04FD430C8"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "www.example.com"
+        }
+      },
+      "expected": "2ed6657d-e927-568b-95e1-2665a8aea6a2"
+    },
+    {
+      "id": "name-based-uuid-utf8-name",
+      "description": "The name is hashed as its UTF-8 bytes: two-byte, three-byte and an astral four-byte character, never UTF-16 code units",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "6ba7b811-9dad-11d1-80b4-00c04fd430c8"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "café/日本/😀"
+        }
+      },
+      "expected": "ec2bae54-7e46-5219-b4ea-0a44921487e8"
+    },
+    {
+      "id": "name-based-uuid-empty-name",
+      "description": "An empty name hashes the namespace's 16 bytes alone",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": ""
+        }
+      },
+      "expected": "4ebd0208-8328-5d69-8c44-ec50939c0967"
+    },
+    {
+      "id": "name-based-uuid-bound-name",
+      "description": "Both operands are expressions: the name here is a bound variable",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/VarRef",
+          "varName": "name"
+        }
+      },
+      "env": {
+        "name": "www.example.com"
+      },
+      "expected": "2ed6657d-e927-568b-95e1-2665a8aea6a2"
+    },
+    {
+      "id": "name-based-uuid-namespace-not-a-uuid",
+      "description": "A namespace that isn't a UUID is an error, never a value",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "not-a-uuid"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "www.example.com"
+        }
+      },
+      "expectError": true
+    },
+    {
+      "id": "name-based-uuid-namespace-without-hyphens",
+      "description": "Only canonical text is a namespace: the 32 digits without hyphens are refused, though some UUID parsers accept them",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "6ba7b8109dad11d180b400c04fd430c8"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "www.example.com"
+        }
+      },
+      "expectError": true
+    },
+    {
+      "id": "name-based-uuid-namespace-braced",
+      "description": "A braced namespace is refused, though some UUID parsers accept it",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "{6ba7b810-9dad-11d1-80b4-00c04fd430c8}"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "www.example.com"
+        }
+      },
+      "expectError": true
+    },
+    {
+      "id": "name-based-uuid-namespace-urn",
+      "description": "A urn:uuid: namespace is refused, though some UUID parsers accept it",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "urn:uuid:6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "www.example.com"
+        }
+      },
+      "expectError": true
+    },
+    {
+      "id": "name-based-uuid-namespace-trailing-newline",
+      "description": "A namespace with a trailing newline is refused: a pattern whose $ matches before a final newline, as Python's, Java's and .NET's do, would accept it",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "6ba7b810-9dad-11d1-80b4-00c04fd430c8\n"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "www.example.com"
+        }
+      },
+      "expectError": true
+    },
+    {
+      "id": "name-based-uuid-namespace-fullwidth-digit",
+      "description": "Hex digits are ASCII only: a fullwidth digit, which a Unicode-aware digit class or number parse reads as 8, is refused",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "6ba7b810-9dad-11d1-80b4-00c04fd430c８"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "www.example.com"
+        }
+      },
+      "expectError": true
+    },
+    {
+      "id": "name-based-uuid-namespace-number",
+      "description": "A namespace that isn't a string is an error",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/IntegerLiteral",
+          "integerLiteral": 5
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "www.example.com"
+        }
+      },
+      "expectError": true
+    },
+    {
+      "id": "name-based-uuid-namespace-ref",
+      "description": "A reference is not the string spelling of its URI, so it isn't a namespace",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/UriLiteral",
+          "refTo": "example.org/namespaces/dns"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "www.example.com"
+        }
+      },
+      "expectError": true
+    },
+    {
+      "id": "name-based-uuid-name-number",
+      "description": "A name that isn't a string is an error",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/IntegerLiteral",
+          "integerLiteral": 5
+        }
+      },
+      "expectError": true
+    },
+    {
+      "id": "name-based-uuid-name-list",
+      "description": "A list is not a name, even of one string",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/VarRef",
+          "varName": "names"
+        }
+      },
+      "env": {
+        "names": [
+          "www.example.com"
+        ]
+      },
+      "expectError": true
+    },
+    {
+      "id": "name-based-uuid-name-absent",
+      "description": "Absence, the empty list, is not a name",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/VarRef",
+          "varName": "names"
+        }
+      },
+      "env": {
+        "names": []
+      },
+      "expectError": true
+    },
+    {
+      "id": "name-based-uuid-unknown-format",
+      "description": "A uuidFormat other than canonical-uuid or hex-uuid is an error",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "www.example.com"
+        },
+        "uuidFormat": "kanonak.org/transformations/to-upper"
+      },
+      "expectError": true
+    },
+    {
+      "id": "name-based-uuid-format-inherited-member",
+      "description": "A uuidFormat that names a member every object inherits misses, as any other unknown format does",
+      "expr": {
+        "type": "kanonak.org/transformations/NameBasedUuid",
+        "uuidNamespace": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+        },
+        "uuidName": {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "stringLiteral": "www.example.com"
+        },
+        "uuidFormat": "valueOf"
+      },
+      "expectError": true
     }
   ]
 }

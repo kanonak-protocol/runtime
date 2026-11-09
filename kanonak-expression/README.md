@@ -109,7 +109,9 @@ The v2 extension splits by role:
   operators on a non-number, an aggregate over a non-numeric element,
   `Min`/`Max`/`Average` on an empty list, a nested list in `Join`, a
   non-string `Matches` source, an out-of-subset `Matches` pattern, a
-  non-integer or negative `ListItemAt` index — all raise, never coerce.
+  non-integer or negative `ListItemAt` index, a `NameBasedUuid` namespace
+  that isn't a UUID in canonical text, a non-string or ill-formed name, an
+  unknown `uuidFormat` — all raise, never coerce.
 - **Predicates fail CLOSED.** `Equals` on any cross-kind pair (a URI is never
   equal to the string spelling of it; lists are containers, never equal) and
   the ordering comparisons (`GreaterThan` et al.) on non-numeric operands
@@ -147,6 +149,7 @@ those values are unreachable by construction.
 | `IteratingExpression` | `source`, `loopVar`, body | Filter (`predicate`), ListMap (`mapBody`), ForEach (`emit`) |
 | `KindPredicate` | `kindCheck` | IsString, IsNumber, IsReference, IsList |
 | (direct) | `matchSource`, `pattern` (data) | Matches |
+| (direct) | `uuidNamespace`, `uuidName`, `uuidFormat` (data, optional) | NameBasedUuid (1.2.0) |
 
 Literals: `IntegerLiteral`, `DecimalLiteral`, `BooleanLiteral` (→ `1`/`0`),
 `StringLiteral`, `UriLiteral` (→ a ref value; doubles as the identity leaf
@@ -261,6 +264,31 @@ is an `ExpressionError` from both). An engine that evaluates `Matches` over
 its own value domain — the SDK's look and transformation engine, say — calls
 these rather than re-implement the dialect: the subset is defined once per
 port, here.
+
+## NameBasedUuid — RFC 9562 version 5 (1.2.0)
+
+`NameBasedUuid(uuidNamespace, uuidName)` yields the version 5 UUID of a name
+under a namespace (RFC 9562, section 5.5): SHA-1 over the namespace's 16
+bytes followed by the name's UTF-8 bytes, with the version and variant bits
+set. The same namespace and name give the same UUID in every port, so an
+identifier derived from a declaration, such as the UUID of its versionless
+URI, is stated in the declaration rather than computed in each consumer.
+
+- **The namespace** is a string holding a UUID in canonical text, exactly
+  `8-4-4-4-12` ASCII hex digits, in either case. Nothing else is read as one:
+  a hyphenless, braced or `urn:uuid:` form, a fullwidth digit, or a trailing
+  newline is an error, though a language's own UUID parser may accept it.
+- **The name** is a string. A list, even of one string, and absence are not.
+  A name holding a lone surrogate, which only a UTF-16 or byte-string host
+  can hold, is an error, never replaced: it has no UTF-8 form every port
+  would agree on.
+- **`uuidFormat`** is data, a versionless URI: `tx.canonical-uuid` (the
+  default, 36 characters with hyphens) or `tx.hex-uuid` (the 32 digits
+  alone). Any other value is an error. The result is always lower-case.
+
+**For a host engine.** `nameBasedUuid(namespace, name, format)` computes it
+exactly as the node folds, so an engine evaluating `NameBasedUuid` over its
+own value domain calls it rather than hash a name itself.
 
 ## Ordered comparisons
 
@@ -380,7 +408,9 @@ public surface:
 - [`vectors/expression-vectors-2.json`](./vectors/expression-vectors-2.json)
   — the v2 surface: the value domain, the list/aggregate/membership family,
   lambda binding, polymorphic `Equals`, kind predicates, and the `Matches`
-  subset with its adversarial divergence probes.
+  subset with its adversarial divergence probes, and `NameBasedUuid` (1.2.0),
+  checked against Python's `uuid.uuid5`, with the namespace forms and
+  operand kinds it refuses.
 - [`vectors/expression-alignment-vectors.json`](./vectors/expression-alignment-vectors.json)
   — `align(expr, trace)`.
 - [`vectors/expression-surface-vectors.json`](./vectors/expression-surface-vectors.json)
