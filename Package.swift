@@ -16,7 +16,8 @@ let package = Package(
         .library(name: "KanonakWire", targets: ["KanonakWire"]),
     ],
     dependencies: [
-        // SHA-256 on Darwin and Linux through one import (`Crypto`).
+        // SHA-256 for canonical, and SHA-1 for expression's NameBasedUuid, on Darwin
+        // and Linux through one import (`Crypto`).
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
     ],
     targets: [
@@ -44,6 +45,7 @@ let package = Package(
         // operator engine over the dictionary node contract.
         .target(
             name: "KanonakExpression",
+            dependencies: [.product(name: "Crypto", package: "swift-crypto")],
             path: "kanonak-expression/swift/Sources/KanonakExpression"
         ),
         .testTarget(

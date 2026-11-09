@@ -38,9 +38,10 @@ WITHIN a version.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re as _re
-from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Tuple, Union
+from typing import Any, Callable, Dict, FrozenSet, List, Literal, Mapping, Optional, Tuple, Union
 
 # The public API — what a 1.x release keeps compatible (runtime#29). Everything
 # else here is an implementation detail and may change in any release.
@@ -56,12 +57,14 @@ __all__ = [
     "Resolve",
     "ResolveRef",
     "TraceNode",
+    "UuidFormat",
     "Value",
     "align",
     "evaluate",
     "evaluates",
     "explain",
     "matches",
+    "name_based_uuid",
     "validate_matches_pattern",
 ]
 
@@ -189,6 +192,7 @@ _CONTAINS = f"{TX}/Contains"
 _IS_SET = f"{TX}/IsSet"
 _LIST_ITEM_AT = f"{TX}/ListItemAt"
 _MATCHES = f"{TX}/Matches"
+_NAME_BASED_UUID = f"{TX}/NameBasedUuid"
 
 # The literal classes the kernel answers itself (see ``_literal_value``).
 _INTEGER_LITERAL = f"{TX}/IntegerLiteral"
@@ -577,6 +581,77 @@ def matches(input: str, pattern: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# NameBasedUuid — the RFC 9562 version 5 UUID of a name under a namespace (1.2.0).
+# ---------------------------------------------------------------------------
+
+UuidFormat = Literal["canonical", "hex"]
+"""The text forms ``tx.UuidFormat`` names: ``canonical-uuid`` and ``hex-uuid``."""
+
+_UUID_FORMATS: Dict[str, UuidFormat] = {
+    f"{TX}/canonical-uuid": "canonical",
+    f"{TX}/hex-uuid": "hex",
+}
+
+_CANONICAL_UUID_TEXT = _re.compile(
+    r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
+)
+
+
+def name_based_uuid(namespace: str, name: str, format: UuidFormat = "canonical") -> str:
+    """The RFC 9562 version 5 UUID of ``name`` under ``namespace``: SHA-1 over
+    the namespace's 16 bytes and the name's UTF-8 bytes, with the version and
+    variant bits set (section 5.5), as lower-case text in ``format``. The
+    namespace is a UUID in canonical text, in either case; anything else is an
+    :class:`ExpressionError`, as is a name holding a lone surrogate, which has
+    no UTF-8 form every port would agree on, and a ``format`` other than
+    ``"canonical"`` or ``"hex"``.
+
+    For a host engine that evaluates ``NameBasedUuid`` over its own value
+    domain: it calls this rather than hash a name itself."""
+    if format not in ("canonical", "hex"):
+        raise ExpressionError(f"NameBasedUuid format must be 'canonical' or 'hex', got {format!r}")
+    if _CANONICAL_UUID_TEXT.fullmatch(namespace) is None:
+        raise ExpressionError(
+            f"NameBasedUuid requires uuidNamespace to be a UUID in canonical text, got {namespace!r}"
+        )
+    try:
+        name_bytes = name.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ExpressionError(
+            "NameBasedUuid requires uuidName to be well-formed Unicode, and it holds a lone surrogate"
+        ) from exc
+    digest = hashlib.sha1(bytes.fromhex(namespace.replace("-", "")) + name_bytes).digest()
+    uuid = bytearray(digest[:16])
+    uuid[6] = (uuid[6] & 0x0F) | 0x50
+    uuid[8] = (uuid[8] & 0x3F) | 0x80
+    hex_digits = uuid.hex()
+    if format == "hex":
+        return hex_digits
+    return "-".join((hex_digits[:8], hex_digits[8:12], hex_digits[12:16], hex_digits[16:20], hex_digits[20:]))
+
+
+def _uuid_format_of(node: ExprNode) -> UuidFormat:
+    """The form a ``NameBasedUuid`` node's ``uuidFormat`` names: canonical where it's absent."""
+    if "uuidFormat" not in node:
+        return "canonical"
+    named = node["uuidFormat"]
+    found = _UUID_FORMATS.get(named) if isinstance(named, str) else None
+    if found is None:
+        raise ExpressionError(
+            f"NameBasedUuid uuidFormat must be {TX}/canonical-uuid or {TX}/hex-uuid, got {named!r}"
+        )
+    return found
+
+
+def _fold_name_based_uuid(node: ExprNode, namespace: Value, name: Value) -> str:
+    if not isinstance(namespace, str):
+        raise ExpressionError(f"NameBasedUuid requires a string uuidNamespace, got {_kind(namespace)}")
+    if not isinstance(name, str):
+        raise ExpressionError(f"NameBasedUuid requires a string uuidName, got {_kind(name)}")
+    return name_based_uuid(namespace, name, _uuid_format_of(node))
+
+
+# ---------------------------------------------------------------------------
 # Ordered comparisons (unchanged from v1).
 # ---------------------------------------------------------------------------
 
@@ -628,7 +703,7 @@ _KERNEL_NODE_CLASSES: FrozenSet[str] = frozenset((
     *_LIST_FOLDS,
     *_ITERATOR_BODY,
     *_KIND_PREDICATES,
-    _NOT, _IS_AT_LEAST, _DOMINATES, _CONTAINS, _IS_SET, _LIST_ITEM_AT, _MATCHES,
+    _NOT, _IS_AT_LEAST, _DOMINATES, _CONTAINS, _IS_SET, _LIST_ITEM_AT, _MATCHES, _NAME_BASED_UUID,
     _INTEGER_LITERAL, _DECIMAL_LITERAL, _BOOLEAN_LITERAL, _STRING_LITERAL, _URI_LITERAL,
 ))
 
@@ -792,6 +867,11 @@ def _go(
         if not isinstance(pattern, str):
             raise ExpressionError("Matches is missing pattern")
         return _bool(_matches_pattern(src, pattern))
+
+    if typ == _NAME_BASED_UUID:
+        namespace = _go(_operand(node, typ, "uuidNamespace"), ctx, resolve, options, frames)
+        name = _go(_operand(node, typ, "uuidName"), ctx, resolve, options, frames)
+        return _fold_name_based_uuid(node, namespace, name)
 
     kind_pred = _KIND_PREDICATES.get(typ)
     if kind_pred is not None:
@@ -983,6 +1063,11 @@ def _trace(
             raise ExpressionError("Matches is missing pattern")
         return TraceNode(typ, _bool(_matches_pattern(src.value, pattern)), [src])
 
+    if typ == _NAME_BASED_UUID:
+        namespace = _trace(_operand(node, typ, "uuidNamespace"), ctx, resolve, options, frames)
+        name = _trace(_operand(node, typ, "uuidName"), ctx, resolve, options, frames)
+        return TraceNode(typ, _fold_name_based_uuid(node, namespace.value, name.value), [namespace, name])
+
     kind_pred = _KIND_PREDICATES.get(typ)
     if kind_pred is not None:
         x = _trace(_operand(node, typ, "kindCheck"), ctx, resolve, options, frames)
@@ -1018,13 +1103,15 @@ def _trace(
 _ORDERED_COMPARISON = {_IS_AT_LEAST, _DOMINATES}
 
 # Trace-child order for the direct and list operators — the order ``explain``
-# visits them. Data operands (Join's separator, Matches' pattern) are not children.
+# visits them. Data operands (Join's separator, Matches' pattern, NameBasedUuid's
+# uuidFormat) are not children.
 _DIRECT_CHILDREN: Dict[str, Tuple[str, ...]] = {
     _NOT: ("operand",),
     _LIST_ITEM_AT: ("source", "itemIndex"),
     _CONTAINS: ("haystack", "needle"),
     _IS_SET: ("checkExpr",),
     _MATCHES: ("matchSource",),
+    _NAME_BASED_UUID: ("uuidNamespace", "uuidName"),
     f"{TX}/Count": ("source",),
     f"{TX}/Sum": ("source",),
     f"{TX}/Min": ("source",),

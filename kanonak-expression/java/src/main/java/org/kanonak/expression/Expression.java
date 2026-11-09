@@ -1,7 +1,12 @@
 package org.kanonak.expression;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -60,6 +65,7 @@ public final class Expression {
     private static final String IS_SET = TX + "/IsSet";
     private static final String LIST_ITEM_AT = TX + "/ListItemAt";
     private static final String MATCHES = TX + "/Matches";
+    private static final String NAME_BASED_UUID = TX + "/NameBasedUuid";
 
     /** The literal classes the kernel answers itself (see {@code literalValue}). */
     private static final String INTEGER_LITERAL = TX + "/IntegerLiteral";
@@ -473,6 +479,91 @@ public final class Expression {
         return matchesPattern(input, pattern);
     }
 
+    // -- NameBasedUuid: the RFC 9562 version 5 UUID of a name under a namespace --
+
+    /** The text forms {@code tx.UuidFormat} names: {@code canonical-uuid} and {@code hex-uuid}. */
+    public enum UuidFormat { CANONICAL, HEX }
+
+    private static final Map<String, UuidFormat> UUID_FORMATS = Map.of(
+        TX + "/canonical-uuid", UuidFormat.CANONICAL,
+        TX + "/hex-uuid", UuidFormat.HEX);
+
+    private static final Pattern CANONICAL_UUID_TEXT =
+        Pattern.compile("[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}");
+
+    /**
+     * The RFC 9562 version 5 UUID of {@code name} under {@code namespace}: SHA-1 over the
+     * namespace's 16 bytes and the name's UTF-8 bytes, with the version and variant bits set
+     * (section 5.5), as lower-case text in {@code format}. The namespace is a UUID in canonical
+     * text, in either case; anything else is an {@link ExpressionError}, as is a name holding a
+     * lone surrogate, which has no UTF-8 form every port would agree on.
+     *
+     * <p>For a host engine that evaluates {@code NameBasedUuid} over its own value domain: it
+     * calls this rather than hash a name itself.
+     *
+     * @throws ExpressionError when the namespace is not a UUID in canonical text, or the name
+     *     holds a lone surrogate
+     */
+    public static String nameBasedUuid(String namespace, String name, UuidFormat format) {
+        if (!CANONICAL_UUID_TEXT.matcher(namespace).matches()) {
+            throw err("NameBasedUuid requires uuidNamespace to be a UUID in canonical text, got \"" + namespace + "\"");
+        }
+        if (!isWellFormedUnicode(name)) {
+            throw err("NameBasedUuid requires uuidName to be well-formed Unicode, and it holds a lone surrogate");
+        }
+        MessageDigest sha1;
+        try {
+            sha1 = MessageDigest.getInstance("SHA-1");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("every Java platform must provide the SHA-1 MessageDigest", e);
+        }
+        sha1.update(HexFormat.of().parseHex(namespace.replace("-", "")));
+        sha1.update(name.getBytes(StandardCharsets.UTF_8));
+        byte[] uuid = Arrays.copyOf(sha1.digest(), 16);
+        uuid[6] = (byte) ((uuid[6] & 0x0f) | 0x50);
+        uuid[8] = (byte) ((uuid[8] & 0x3f) | 0x80);
+        String hex = HexFormat.of().formatHex(uuid);
+        return switch (format) {
+            case HEX -> hex;
+            case CANONICAL -> hex.substring(0, 8) + "-" + hex.substring(8, 12) + "-" + hex.substring(12, 16)
+                + "-" + hex.substring(16, 20) + "-" + hex.substring(20);
+        };
+    }
+
+    private static boolean isWellFormedUnicode(String s) {
+        for (int i = 0; i < s.length(); i++) {
+            char unit = s.charAt(i);
+            if (Character.isLowSurrogate(unit)) return false;
+            if (Character.isHighSurrogate(unit)) {
+                if (i + 1 >= s.length() || !Character.isLowSurrogate(s.charAt(i + 1))) return false;
+                i++;
+            }
+        }
+        return true;
+    }
+
+    /** The form a {@code NameBasedUuid} node's {@code uuidFormat} names: canonical where it's absent. */
+    private static UuidFormat uuidFormatOf(Map<String, Object> node) {
+        if (!node.containsKey("uuidFormat")) return UuidFormat.CANONICAL;
+        Object named = node.get("uuidFormat");
+        UuidFormat format = named instanceof String ? UUID_FORMATS.get(named) : null;
+        if (format == null) {
+            throw err("NameBasedUuid uuidFormat must be " + TX + "/canonical-uuid or " + TX + "/hex-uuid, got "
+                + (named instanceof String ? "\"" + named + "\"" : String.valueOf(named)));
+        }
+        return format;
+    }
+
+    private static String foldNameBasedUuid(Map<String, Object> node, Object uuidNamespace, Object uuidName) {
+        if (!(uuidNamespace instanceof String)) {
+            throw err("NameBasedUuid requires a string uuidNamespace, got " + kindOf(uuidNamespace));
+        }
+        if (!(uuidName instanceof String)) {
+            throw err("NameBasedUuid requires a string uuidName, got " + kindOf(uuidName));
+        }
+        return nameBasedUuid((String) uuidNamespace, (String) uuidName, uuidFormatOf(node));
+    }
+
     // -- ordered comparisons (unchanged from v1) ------------------------------
 
     private static <C> String identityOf(Map<String, Object> node, C ctx, EvalOptions<C> opts) {
@@ -687,7 +778,7 @@ public final class Expression {
         classes.addAll(ITERATOR_BODY.keySet());
         classes.addAll(KIND_PREDICATES);
         Collections.addAll(classes,
-            NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES,
+            NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES, NAME_BASED_UUID,
             INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL);
         KERNEL_NODE_CLASSES = Collections.unmodifiableSet(classes);
     }
@@ -858,6 +949,12 @@ public final class Expression {
             Object pattern = node.get("pattern");
             if (!(pattern instanceof String)) throw err("Matches is missing pattern");
             return bool(matchesPattern((String) src, (String) pattern));
+        }
+
+        if (typ.equals(NAME_BASED_UUID)) {
+            Object uuidNamespace = go(operand(node, typ, "uuidNamespace"), ctx, resolve, options, frames);
+            Object uuidName = go(operand(node, typ, "uuidName"), ctx, resolve, options, frames);
+            return foldNameBasedUuid(node, uuidNamespace, uuidName);
         }
 
         if (isKindPredicate(typ)) {
@@ -1041,6 +1138,12 @@ public final class Expression {
             return parent(typ, bool(matchesPattern((String) src.value, (String) pattern)), listOf(src));
         }
 
+        if (typ.equals(NAME_BASED_UUID)) {
+            TraceNode uuidNamespace = trace(operand(node, typ, "uuidNamespace"), ctx, resolve, options, frames);
+            TraceNode uuidName = trace(operand(node, typ, "uuidName"), ctx, resolve, options, frames);
+            return parent(typ, foldNameBasedUuid(node, uuidNamespace.value, uuidName.value), listOf(uuidNamespace, uuidName));
+        }
+
         if (isKindPredicate(typ)) {
             TraceNode x = trace(operand(node, typ, "kindCheck"), ctx, resolve, options, frames);
             return parent(typ, bool(kindPredicate(typ, x.value)), listOf(x));
@@ -1113,6 +1216,7 @@ public final class Expression {
             case CONTAINS: return new String[] {"haystack", "needle"};
             case IS_SET: return new String[] {"checkExpr"};
             case MATCHES: return new String[] {"matchSource"};
+            case NAME_BASED_UUID: return new String[] {"uuidNamespace", "uuidName"};
             case TX + "/Count": case TX + "/Sum": case TX + "/Min": case TX + "/Max": case TX + "/Average":
             case TX + "/Join": case TX + "/Reverse":
                 return new String[] {"source"};

@@ -198,6 +198,11 @@
       "expected": true
     },
     {
+      "id": "evaluates-tx-NameBasedUuid",
+      "type": "kanonak.org/transformations/NameBasedUuid",
+      "expected": true
+    },
+    {
       "id": "evaluates-math-Power",
       "type": "kanonak.org/math/Power",
       "expected": true

@@ -187,6 +187,7 @@ const CONTAINS: &str = "kanonak.org/transformations/Contains";
 const IS_SET: &str = "kanonak.org/transformations/IsSet";
 const LIST_ITEM_AT: &str = "kanonak.org/transformations/ListItemAt";
 const MATCHES: &str = "kanonak.org/transformations/Matches";
+const NAME_BASED_UUID: &str = "kanonak.org/transformations/NameBasedUuid";
 
 /// The literal classes the kernel answers itself (see `literal_value`).
 const INTEGER_LITERAL: &str = "kanonak.org/transformations/IntegerLiteral";
@@ -794,6 +795,132 @@ pub fn matches(input: &str, pattern: &str) -> Result<bool, ExpressionError> {
 }
 
 // ---------------------------------------------------------------------------
+// NameBasedUuid — the RFC 9562 version 5 UUID of a name under a namespace.
+// ---------------------------------------------------------------------------
+
+const CANONICAL_UUID: &str = "kanonak.org/transformations/canonical-uuid";
+const HEX_UUID: &str = "kanonak.org/transformations/hex-uuid";
+
+/// The text forms `tx.UuidFormat` names: `canonical-uuid` and `hex-uuid`.
+// Non-exhaustive, so a form the protocol adds later is an addition, not a break.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum UuidFormat {
+    #[default]
+    Canonical,
+    Hex,
+}
+
+/// The 16 bytes of a UUID in canonical text (`8-4-4-4-12` ASCII hex digits, in
+/// either case), or `None` for any other text: braced, `urn:uuid:` and
+/// hyphenless forms included.
+fn canonical_uuid_bytes(text: &str) -> Option<[u8; 16]> {
+    let bytes = text.as_bytes();
+    if bytes.len() != 36 {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    let mut nibble = 0;
+    for (i, &c) in bytes.iter().enumerate() {
+        if matches!(i, 8 | 13 | 18 | 23) {
+            if c != b'-' {
+                return None;
+            }
+            continue;
+        }
+        let digit = (c as char).to_digit(16)? as u8;
+        out[nibble / 2] |= if nibble % 2 == 0 { digit << 4 } else { digit };
+        nibble += 1;
+    }
+    Some(out)
+}
+
+/// The RFC 9562 version 5 UUID of `name` under `namespace`: SHA-1 over the
+/// namespace's 16 bytes and the name's UTF-8 bytes, with the version and variant
+/// bits set (section 5.5), as lower-case text in `format`. The namespace is a
+/// UUID in canonical text, in either case; anything else is an
+/// [`ExpressionError`].
+///
+/// For a host engine that evaluates `NameBasedUuid` over its own value domain:
+/// it calls this rather than hash a name itself.
+pub fn name_based_uuid(
+    namespace: &str,
+    name: &str,
+    format: UuidFormat,
+) -> Result<String, ExpressionError> {
+    use sha1::{Digest, Sha1};
+    let namespace_bytes = match canonical_uuid_bytes(namespace) {
+        Some(b) => b,
+        None => {
+            return err(format!(
+                "NameBasedUuid requires uuidNamespace to be a UUID in canonical text, got {namespace:?}"
+            ))
+        }
+    };
+    let mut hasher = Sha1::new();
+    hasher.update(namespace_bytes);
+    hasher.update(name.as_bytes());
+    let digest = hasher.finalize();
+    let mut uuid = [0u8; 16];
+    uuid.copy_from_slice(&digest[..16]);
+    uuid[6] = (uuid[6] & 0x0f) | 0x50;
+    uuid[8] = (uuid[8] & 0x3f) | 0x80;
+    let hex: String = uuid.iter().map(|b| format!("{b:02x}")).collect();
+    Ok(match format {
+        UuidFormat::Hex => hex,
+        UuidFormat::Canonical => format!(
+            "{}-{}-{}-{}-{}",
+            &hex[..8],
+            &hex[8..12],
+            &hex[12..16],
+            &hex[16..20],
+            &hex[20..]
+        ),
+    })
+}
+
+/// The form a `NameBasedUuid` node's `uuidFormat` names: canonical where it's absent.
+fn uuid_format_of(node: &Json) -> Result<UuidFormat, ExpressionError> {
+    let named = match node.get("uuidFormat") {
+        None => return Ok(UuidFormat::Canonical),
+        Some(named) => named,
+    };
+    match named.as_str() {
+        Some(CANONICAL_UUID) => Ok(UuidFormat::Canonical),
+        Some(HEX_UUID) => Ok(UuidFormat::Hex),
+        _ => err(format!(
+            "NameBasedUuid uuidFormat must be {CANONICAL_UUID} or {HEX_UUID}, got {named}"
+        )),
+    }
+}
+
+fn fold_name_based_uuid(
+    node: &Json,
+    namespace: &EvalValue,
+    name: &EvalValue,
+) -> Result<EvalValue, ExpressionError> {
+    let namespace = match namespace {
+        EvalValue::Str(s) => s,
+        other => {
+            return err(format!(
+                "NameBasedUuid requires a string uuidNamespace, got {}",
+                other.kind()
+            ))
+        }
+    };
+    let name = match name {
+        EvalValue::Str(s) => s,
+        other => {
+            return err(format!(
+                "NameBasedUuid requires a string uuidName, got {}",
+                other.kind()
+            ))
+        }
+    };
+    Ok(EvalValue::Str(name_based_uuid(namespace, name, uuid_format_of(node)?)?))
+}
+
+// ---------------------------------------------------------------------------
 // Ordered comparisons (unchanged from v1).
 // ---------------------------------------------------------------------------
 
@@ -861,6 +988,7 @@ fn kernel_node_classes() -> &'static HashSet<&'static str> {
             .chain(KIND_PREDICATES.iter().copied())
             .chain([
                 NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES,
+                NAME_BASED_UUID,
                 INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL,
             ])
             .collect()
@@ -1086,6 +1214,12 @@ fn go<C>(
             None => return err("Matches is missing pattern"),
         };
         return Ok(EvalValue::Num(boolnum(matches_pattern(s, pattern)?)));
+    }
+
+    if typ == NAME_BASED_UUID {
+        let namespace = go(operand(node, typ, "uuidNamespace")?, ctx, resolve, options, frames)?;
+        let name = go(operand(node, typ, "uuidName")?, ctx, resolve, options, frames)?;
+        return fold_name_based_uuid(node, &namespace, &name);
     }
 
     if is_kind_predicate(typ) {
@@ -1333,6 +1467,13 @@ fn trace<C>(
         return Ok(parent(typ, EvalValue::Num(v), vec![src]));
     }
 
+    if typ == NAME_BASED_UUID {
+        let namespace = trace(operand(node, typ, "uuidNamespace")?, ctx, resolve, options, frames)?;
+        let name = trace(operand(node, typ, "uuidName")?, ctx, resolve, options, frames)?;
+        let v = fold_name_based_uuid(node, &namespace.value, &name.value)?;
+        return Ok(parent(typ, v, vec![namespace, name]));
+    }
+
     if is_kind_predicate(typ) {
         let x = trace(operand(node, typ, "kindCheck")?, ctx, resolve, options, frames)?;
         let v = kind_predicate(typ, &x.value).unwrap();
@@ -1391,7 +1532,8 @@ pub struct AlignedNode<'a> {
 }
 
 /// Trace-child order for the direct and list operators — the order `explain`
-/// visits them. Data operands (Join's separator, Matches' pattern) are not children.
+/// visits them. Data operands (Join's separator, Matches' pattern, NameBasedUuid's
+/// uuidFormat) are not children.
 fn direct_children(typ: &str) -> Option<&'static [&'static str]> {
     match typ {
         NOT => Some(&["operand"]),
@@ -1399,6 +1541,7 @@ fn direct_children(typ: &str) -> Option<&'static [&'static str]> {
         CONTAINS => Some(&["haystack", "needle"]),
         IS_SET => Some(&["checkExpr"]),
         MATCHES => Some(&["matchSource"]),
+        NAME_BASED_UUID => Some(&["uuidNamespace", "uuidName"]),
         "kanonak.org/transformations/Count"
         | "kanonak.org/transformations/Sum"
         | "kanonak.org/transformations/Min"

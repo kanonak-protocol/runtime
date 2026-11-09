@@ -217,6 +217,7 @@ const CONTAINS = `${TX}/Contains`;
 const IS_SET = `${TX}/IsSet`;
 const LIST_ITEM_AT = `${TX}/ListItemAt`;
 const MATCHES = `${TX}/Matches`;
+const NAME_BASED_UUID = `${TX}/NameBasedUuid`;
 
 /** The literal classes the kernel answers itself (see `literalValue`). */
 const INTEGER_LITERAL = `${TX}/IntegerLiteral`;
@@ -662,6 +663,133 @@ export function matches(input: string, pattern: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// NameBasedUuid — the RFC 9562 version 5 UUID of a name under a namespace (1.2.0).
+// ---------------------------------------------------------------------------
+
+/** The text forms `tx.UuidFormat` names: `canonical-uuid` and `hex-uuid`. */
+export type UuidFormat = 'canonical' | 'hex';
+
+// A Map, never an object literal: a uuidFormat of `valueOf` or `__proto__` must miss, not read an inherited member.
+const UUID_FORMATS: ReadonlyMap<string, UuidFormat> = new Map([
+  [`${TX}/canonical-uuid`, 'canonical'],
+  [`${TX}/hex-uuid`, 'hex'],
+]);
+
+const CANONICAL_UUID_TEXT = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
+
+/**
+ * The RFC 9562 version 5 UUID of `name` under `namespace`: SHA-1 over the
+ * namespace's 16 bytes and the name's UTF-8 bytes, with the version and variant
+ * bits set (section 5.5), as lower-case text in `format`. The namespace is a
+ * UUID in canonical text, in either case; anything else is an
+ * `ExpressionError`, as is a name holding a lone surrogate, which has no UTF-8
+ * form every port would agree on.
+ *
+ * For a host engine that evaluates `NameBasedUuid` over its own value domain:
+ * it calls this rather than hash a name itself.
+ */
+export function nameBasedUuid(namespace: string, name: string, format: UuidFormat = 'canonical'): string {
+  if (!CANONICAL_UUID_TEXT.test(namespace)) {
+    throw new ExpressionError(`NameBasedUuid requires uuidNamespace to be a UUID in canonical text, got ${JSON.stringify(namespace)}`);
+  }
+  if (!isWellFormedUnicode(name)) {
+    throw new ExpressionError('NameBasedUuid requires uuidName to be well-formed Unicode, and it holds a lone surrogate');
+  }
+  const namespaceHex = namespace.replace(/-/g, '');
+  const nameBytes = new TextEncoder().encode(name);
+  const input = new Uint8Array(16 + nameBytes.length);
+  for (let i = 0; i < 16; i++) input[i] = parseInt(namespaceHex.slice(i * 2, i * 2 + 2), 16);
+  input.set(nameBytes, 16);
+  const uuid = sha1(input).subarray(0, 16);
+  uuid[6] = (uuid[6]! & 0x0f) | 0x50;
+  uuid[8] = (uuid[8]! & 0x3f) | 0x80;
+  const hex = Array.from(uuid, b => b.toString(16).padStart(2, '0')).join('');
+  if (format === 'hex') return hex;
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function isWellFormedUnicode(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const unit = s.charCodeAt(i);
+    if (unit >= 0xdc00 && unit <= 0xdfff) return false;
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = s.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      i++;
+    }
+  }
+  return true;
+}
+
+// Its own SHA-1, since `evaluate` is synchronous with no dependencies, and Web Crypto's digest is asynchronous.
+function sha1(message: Uint8Array): Uint8Array {
+  const paddedLength = Math.ceil((message.length + 9) / 64) * 64;
+  const block = new Uint8Array(paddedLength);
+  block.set(message);
+  block[message.length] = 0x80;
+  const view = new DataView(block.buffer);
+  const bits = message.length * 8;
+  view.setUint32(paddedLength - 8, Math.floor(bits / 0x100000000));
+  view.setUint32(paddedLength - 4, bits >>> 0);
+
+  const h = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0];
+  const w = new Uint32Array(80);
+  for (let offset = 0; offset < paddedLength; offset += 64) {
+    for (let i = 0; i < 16; i++) w[i] = view.getUint32(offset + i * 4);
+    for (let i = 16; i < 80; i++) {
+      const x = w[i - 3]! ^ w[i - 8]! ^ w[i - 14]! ^ w[i - 16]!;
+      w[i] = (x << 1) | (x >>> 31);
+    }
+    let [a, b, c, d, e] = h as [number, number, number, number, number];
+    for (let i = 0; i < 80; i++) {
+      const [f, k] =
+        i < 20 ? [(b & c) | (~b & d), 0x5a827999]
+        : i < 40 ? [b ^ c ^ d, 0x6ed9eba1]
+        : i < 60 ? [(b & c) | (b & d) | (c & d), 0x8f1bbcdc]
+        : [b ^ c ^ d, 0xca62c1d6];
+      const t = (((a << 5) | (a >>> 27)) + f + e + k + w[i]!) >>> 0;
+      e = d;
+      d = c;
+      c = ((b << 30) | (b >>> 2)) >>> 0;
+      b = a;
+      a = t;
+    }
+    h[0] = (h[0]! + a) >>> 0;
+    h[1] = (h[1]! + b) >>> 0;
+    h[2] = (h[2]! + c) >>> 0;
+    h[3] = (h[3]! + d) >>> 0;
+    h[4] = (h[4]! + e) >>> 0;
+  }
+  const digest = new Uint8Array(20);
+  const out = new DataView(digest.buffer);
+  h.forEach((word, i) => out.setUint32(i * 4, word));
+  return digest;
+}
+
+/** The form a `NameBasedUuid` node's `uuidFormat` names: canonical where it's absent. */
+function uuidFormatOf(node: ExprNode): UuidFormat {
+  const named = node.uuidFormat;
+  if (named === undefined) return 'canonical';
+  const format = typeof named === 'string' ? UUID_FORMATS.get(named) : undefined;
+  if (format === undefined) {
+    throw new ExpressionError(
+      `NameBasedUuid uuidFormat must be ${TX}/canonical-uuid or ${TX}/hex-uuid, got ${JSON.stringify(named)}`,
+    );
+  }
+  return format;
+}
+
+function foldNameBasedUuid(node: ExprNode, namespace: Value, name: Value): string {
+  if (typeof namespace !== 'string') {
+    throw new ExpressionError(`NameBasedUuid requires a string uuidNamespace, got ${kindOf(namespace)}`);
+  }
+  if (typeof name !== 'string') {
+    throw new ExpressionError(`NameBasedUuid requires a string uuidName, got ${kindOf(name)}`);
+  }
+  return nameBasedUuid(namespace, name, uuidFormatOf(node));
+}
+
+// ---------------------------------------------------------------------------
 // Ordered comparisons (unchanged from v1).
 // ---------------------------------------------------------------------------
 
@@ -730,7 +858,7 @@ const KERNEL_NODE_CLASSES: ReadonlySet<string> = new Set<string>([
   ...Object.keys(LIST_FOLDS),
   ...Object.keys(ITERATOR_BODY),
   ...Object.keys(KIND_PREDICATES),
-  NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES,
+  NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES, NAME_BASED_UUID,
   INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL,
 ]);
 
@@ -918,6 +1046,12 @@ function evalNode<C>(
     const pattern = node.pattern;
     if (typeof pattern !== 'string') throw new ExpressionError('Matches is missing pattern');
     return bool(matchesPattern(src, pattern));
+  }
+
+  if (node.type === NAME_BASED_UUID) {
+    const namespace = evalNode(operand(node, 'uuidNamespace'), ctx, resolve, options, frames);
+    const name = evalNode(operand(node, 'uuidName'), ctx, resolve, options, frames);
+    return foldNameBasedUuid(node, namespace, name);
   }
 
   const kind = KIND_PREDICATES[node.type];
@@ -1147,6 +1281,12 @@ export function explain<C = unknown>(
       return { type: n.type, value: bool(matchesPattern(src.value, pattern)), children: [src] };
     }
 
+    if (n.type === NAME_BASED_UUID) {
+      const namespace = trace(operand(n, 'uuidNamespace'), c, frames);
+      const name = trace(operand(n, 'uuidName'), c, frames);
+      return { type: n.type, value: foldNameBasedUuid(n, namespace.value, name.value), children: [namespace, name] };
+    }
+
     const kind = KIND_PREDICATES[n.type];
     if (kind) {
       const x = trace(operand(n, 'kindCheck'), c, frames);
@@ -1201,7 +1341,7 @@ const ORDERED_COMPARISON: ReadonlySet<string> = new Set([IS_AT_LEAST, DOMINATES]
 /**
  * Trace-child order for the direct and list operators — the order `explain`
  * visits them, which is the order the arity-less branches of `trace` evaluate.
- * (Data operands — Join's `separator`, Matches' `pattern` — are not children.)
+ * (Data operands — Join's `separator`, Matches' `pattern`, NameBasedUuid's `uuidFormat` — are not children.)
  */
 const DIRECT_CHILDREN: Record<string, readonly string[]> = {
   [NOT]: ['operand'],
@@ -1209,6 +1349,7 @@ const DIRECT_CHILDREN: Record<string, readonly string[]> = {
   [CONTAINS]: ['haystack', 'needle'],
   [IS_SET]: ['checkExpr'],
   [MATCHES]: ['matchSource'],
+  [NAME_BASED_UUID]: ['uuidNamespace', 'uuidName'],
   [`${TX}/Count`]: ['source'],
   [`${TX}/Sum`]: ['source'],
   [`${TX}/Min`]: ['source'],
