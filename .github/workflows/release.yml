@@ -300,6 +300,23 @@ jobs:
           cd ../../kanonak-wire/java
           javac -d out src/main/java/org/kanonak/wire/*.java conformance/Conformance.java
           java -cp out Conformance ../vectors
+      # Only publish-java builds the release profile, so nothing else resolves its plugins. Codec 3.3.2's bump moved
+      # the Jackson pom's maven-source-plugin to a 3.3.2 that was never released, and publish-java failed after
+      # deploying codec, holding back Jackson, expression and the Go tags.
+      - name: Maven 3.9.16 (pinned)
+        run: bash .github/scripts/pinned-maven.sh
+      - name: every pom's release profile resolves its plugins
+        run: |
+          fail=0
+          for pom in $(git ls-files '*pom.xml'); do
+            if out=$(mvn -B -q -f "$pom" -P release org.apache.maven.plugins:maven-dependency-plugin:3.11.0:resolve-plugins 2>&1); then
+              echo "OK        java          $pom: the release profile's plugins resolve"
+            else
+              echo "$out"
+              echo "::error::$pom: a plugin of its release profile does not resolve (above), so publish-java would fail on it after deploying every pom before it. Name a released version."; fail=1
+            fi
+          done
+          exit $fail
       # THE 1.x COMPATIBILITY GATE (runtime#29), Java half: japicmp, binary AND
       # source compatibility against the jar as published on Maven Central.
       # Maven loads ONE runtime version for a whole app, so SDKs generated
@@ -1032,13 +1049,7 @@ jobs:
       # 1.1.0's first publish after 1.0.0 had published on 3.9.16. The bundle is
       # built with this exact Maven, verified by its Apache-published sha512.
       - name: Maven 3.9.16 (pinned)
-        run: |
-          v=3.9.16
-          tgz="$RUNNER_TEMP/apache-maven-$v-bin.tar.gz"
-          curl -sfL -o "$tgz" "https://archive.apache.org/dist/maven/maven-3/$v/binaries/apache-maven-$v-bin.tar.gz"
-          echo "831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6  $tgz" | sha512sum -c --quiet -
-          tar -xzf "$tgz" -C "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/apache-maven-$v/bin" >> "$GITHUB_PATH"
+        run: bash .github/scripts/pinned-maven.sh
       - name: deploy canonical then codec (Maven Central, signed)
         env:
           MAVEN_CENTRAL_USERNAME: ${{ vars.MAVEN_CENTRAL_USERNAME }}
