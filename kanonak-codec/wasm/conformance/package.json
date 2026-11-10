@@ -12,5 +12,10 @@
   "devDependencies": {
     "@bytecodealliance/jco": "^1.13.4",
     "@bytecodealliance/preview2-shim": "^0.17.4"
+  },
+  "overrides": {
+    "@bytecodealliance/jco-std": {
+      "minimatch": "^11.0.1"
+    }
   }
 }
