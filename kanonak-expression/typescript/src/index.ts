@@ -49,7 +49,8 @@
  *     `Join`, a non-string `Matches` source, an out-of-subset `Matches`
  *     pattern — all raise `ExpressionError`, never coerce.
  *   - PREDICATES FAIL CLOSED: `Equals` and the ordering comparisons on
- *     cross-kind or non-numeric operands return `0`, never error (the SHACL
+ *     cross-kind or non-numeric operands, and `StartsWith` on any operand but
+ *     a string, return `0`, never error (the SHACL
  *     and reference-engine rule: a non-comparable value is a falsified
  *     constraint, not a crash).
  *
@@ -193,6 +194,7 @@ const OPERATOR_ARITY: Record<string, Arity> = {
   [`${TX}/LessThan`]: COMPARE,
   [`${TX}/GreaterThanOrEqual`]: COMPARE,
   [`${TX}/LessThanOrEqual`]: COMPARE,
+  [`${TX}/StartsWith`]: COMPARE,
 
   [`${TX}/And`]: { kind: 'nary', operands: 'operands' },
   [`${TX}/Or`]: { kind: 'nary', operands: 'operands' },
@@ -218,6 +220,7 @@ const IS_SET = `${TX}/IsSet`;
 const LIST_ITEM_AT = `${TX}/ListItemAt`;
 const MATCHES = `${TX}/Matches`;
 const NAME_BASED_UUID = `${TX}/NameBasedUuid`;
+const STARTS_WITH = `${TX}/StartsWith`;
 
 /** The literal classes the kernel answers itself (see `literalValue`). */
 const INTEGER_LITERAL = `${TX}/IntegerLiteral`;
@@ -663,6 +666,29 @@ export function matches(input: string, pattern: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// StartsWith — a prefix test of one string by another (1.3.0).
+// ---------------------------------------------------------------------------
+
+/**
+ * True when `input` begins with `prefix`, code point by code point, with no
+ * case folding and no Unicode normalization, exactly as `tx.StartsWith`
+ * evaluates two strings. A string holding a lone surrogate isn't well-formed
+ * Unicode, and gives false, since the ports' strings can't all hold one.
+ *
+ * For a host engine that evaluates `StartsWith` over its own value domain: it
+ * calls this rather than compare the strings itself.
+ */
+export function startsWith(input: string, prefix: string): boolean {
+  // On well-formed strings a prefix of UTF-16 code units is a prefix of code points.
+  return isWellFormedUnicode(input) && isWellFormedUnicode(prefix) && input.startsWith(prefix);
+}
+
+/** `StartsWith` over the value domain: a predicate, so any operand but a string fails closed. */
+function startsWithValue(a: Value, b: Value): boolean {
+  return typeof a === 'string' && typeof b === 'string' && startsWith(a, b);
+}
+
+// ---------------------------------------------------------------------------
 // NameBasedUuid — the RFC 9562 version 5 UUID of a name under a namespace (1.2.0).
 // ---------------------------------------------------------------------------
 
@@ -944,6 +970,7 @@ function evalNode<C>(
         const a = recurse(operand(node, arity.left), ctx);
         const b = recurse(operand(node, arity.right), ctx);
         if (node.type === `${TX}/Equals`) return bool(valuesEqual(a, b));
+        if (node.type === STARTS_WITH) return bool(startsWithValue(a, b));
         const order = BINARY_ORDER[node.type];
         if (order) {
           // Predicate: non-numeric operands fail CLOSED.
@@ -1152,6 +1179,8 @@ export function explain<C = unknown>(
           let value: Value;
           if (n.type === `${TX}/Equals`) {
             value = bool(valuesEqual(a.value, b.value));
+          } else if (n.type === STARTS_WITH) {
+            value = bool(startsWithValue(a.value, b.value));
           } else {
             const order = BINARY_ORDER[n.type];
             if (order) {

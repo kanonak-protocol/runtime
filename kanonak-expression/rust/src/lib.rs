@@ -15,8 +15,8 @@
 //! ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an
 //! aggregate over non-numeric elements, Min/Max/Average on empty, a nested
 //! list in Join, an out-of-subset Matches pattern); predicates fail CLOSED
-//! (`Equals` cross-kind and the ordering comparisons on non-numbers yield
-//! `0.0`, never an error).
+//! (`Equals` cross-kind, the ordering comparisons on non-numbers, and
+//! `StartsWith` on any operand but a string yield `0.0`, never an error).
 //!
 //! LAMBDA BINDING: the iterating operators (Filter/ListMap/ForEach) bind
 //! their `loopVar` per element; within their bodies — and only there — a
@@ -167,6 +167,7 @@ const OPERATOR_ARITY: &[(&str, Arity)] = &[
     ("kanonak.org/transformations/LessThan", COMPARE),
     ("kanonak.org/transformations/GreaterThanOrEqual", COMPARE),
     ("kanonak.org/transformations/LessThanOrEqual", COMPARE),
+    (STARTS_WITH, COMPARE),
     ("kanonak.org/transformations/And", Arity::Nary { operands: "operands" }),
     ("kanonak.org/transformations/Or", Arity::Nary { operands: "operands" }),
     (
@@ -188,6 +189,7 @@ const IS_SET: &str = "kanonak.org/transformations/IsSet";
 const LIST_ITEM_AT: &str = "kanonak.org/transformations/ListItemAt";
 const MATCHES: &str = "kanonak.org/transformations/Matches";
 const NAME_BASED_UUID: &str = "kanonak.org/transformations/NameBasedUuid";
+const STARTS_WITH: &str = "kanonak.org/transformations/StartsWith";
 
 /// The literal classes the kernel answers itself (see `literal_value`).
 const INTEGER_LITERAL: &str = "kanonak.org/transformations/IntegerLiteral";
@@ -795,6 +797,29 @@ pub fn matches(input: &str, pattern: &str) -> Result<bool, ExpressionError> {
 }
 
 // ---------------------------------------------------------------------------
+// StartsWith — a prefix test of one string by another.
+// ---------------------------------------------------------------------------
+
+/// True when `input` begins with `prefix`, code point by code point, with no
+/// case folding and no Unicode normalization, exactly as `tx.StartsWith`
+/// evaluates two strings.
+///
+/// For a host engine that evaluates `StartsWith` over its own value domain: it
+/// calls this rather than compare the strings itself.
+pub fn starts_with(input: &str, prefix: &str) -> bool {
+    // A `&str` is always well-formed UTF-8, where a prefix of bytes is a prefix of code points.
+    input.starts_with(prefix)
+}
+
+/// `StartsWith` over the value domain: a predicate, so any operand but a string fails closed.
+fn starts_with_value(a: &EvalValue, b: &EvalValue) -> bool {
+    match (a, b) {
+        (EvalValue::Str(input), EvalValue::Str(prefix)) => starts_with(input, prefix),
+        _ => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // NameBasedUuid — the RFC 9562 version 5 UUID of a name under a namespace.
 // ---------------------------------------------------------------------------
 
@@ -1079,6 +1104,9 @@ fn go<C>(
                 if typ == "kanonak.org/transformations/Equals" {
                     return Ok(EvalValue::Num(boolnum(values_equal(&a, &b))));
                 }
+                if typ == STARTS_WITH {
+                    return Ok(EvalValue::Num(boolnum(starts_with_value(&a, &b))));
+                }
                 if is_order_comparison(typ) {
                     // Predicate: non-numeric operands fail CLOSED.
                     return Ok(match (&a, &b) {
@@ -1303,6 +1331,8 @@ fn trace<C>(
                 let b = trace(operand(node, typ, right)?, ctx, resolve, options, frames)?;
                 let value = if typ == "kanonak.org/transformations/Equals" {
                     EvalValue::Num(boolnum(values_equal(&a.value, &b.value)))
+                } else if typ == STARTS_WITH {
+                    EvalValue::Num(boolnum(starts_with_value(&a.value, &b.value)))
                 } else if is_order_comparison(typ) {
                     match (&a.value, &b.value) {
                         (EvalValue::Num(x), EvalValue::Num(y)) => {

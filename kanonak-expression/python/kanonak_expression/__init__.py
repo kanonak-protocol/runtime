@@ -15,7 +15,8 @@ leaf that returns a list. The kernel NEVER touches a graph.
 ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an
 aggregate over non-numeric elements, Min/Max/Average on empty, a nested list
 in Join, an out-of-subset Matches pattern); predicates fail CLOSED (``Equals``
-cross-kind and the ordering comparisons on non-numbers yield ``0.0``).
+cross-kind, the ordering comparisons on non-numbers, and ``StartsWith`` on any
+operand but a well-formed string yield ``0.0``).
 
 LAMBDA BINDING: Filter/ListMap/ForEach bind their ``loopVar`` per element;
 within their bodies -- and only there -- a ``tx.VarRef`` naming a
@@ -65,6 +66,7 @@ __all__ = [
     "explain",
     "matches",
     "name_based_uuid",
+    "starts_with",
     "validate_matches_pattern",
 ]
 
@@ -179,6 +181,7 @@ OPERATOR_ARITY: Dict[str, tuple] = {
     f"{TX}/LessThan": _COMPARE,
     f"{TX}/GreaterThanOrEqual": _COMPARE,
     f"{TX}/LessThanOrEqual": _COMPARE,
+    f"{TX}/StartsWith": _COMPARE,
     f"{TX}/And": ("nary", "operands"),
     f"{TX}/Or": ("nary", "operands"),
     f"{MATH}/Clip": ("ternary", "clipValue", "clipLower", "clipUpper"),
@@ -193,6 +196,7 @@ _IS_SET = f"{TX}/IsSet"
 _LIST_ITEM_AT = f"{TX}/ListItemAt"
 _MATCHES = f"{TX}/Matches"
 _NAME_BASED_UUID = f"{TX}/NameBasedUuid"
+_STARTS_WITH = f"{TX}/StartsWith"
 
 # The literal classes the kernel answers itself (see ``_literal_value``).
 _INTEGER_LITERAL = f"{TX}/IntegerLiteral"
@@ -581,6 +585,35 @@ def matches(input: str, pattern: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# StartsWith — a prefix test of one string by another (1.3.0).
+# ---------------------------------------------------------------------------
+
+def starts_with(input: str, prefix: str) -> bool:
+    """True when ``input`` begins with ``prefix``, code point by code point,
+    with no case folding and no Unicode normalization, exactly as
+    ``tx.StartsWith`` evaluates two strings. A string holding a lone surrogate
+    isn't well-formed Unicode, and gives false, since the ports' strings can't
+    all hold one.
+
+    For a host engine that evaluates ``StartsWith`` over its own value domain:
+    it calls this rather than compare the strings itself."""
+    return _is_well_formed_unicode(input) and _is_well_formed_unicode(prefix) and input.startswith(prefix)
+
+
+def _is_well_formed_unicode(s: str) -> bool:
+    try:
+        s.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _starts_with_value(a: Value, b: Value) -> bool:
+    """``StartsWith`` over the value domain: a predicate, so any operand but a string fails closed."""
+    return isinstance(a, str) and isinstance(b, str) and starts_with(a, b)
+
+
+# ---------------------------------------------------------------------------
 # NameBasedUuid — the RFC 9562 version 5 UUID of a name under a namespace (1.2.0).
 # ---------------------------------------------------------------------------
 
@@ -775,6 +808,8 @@ def _go(
             b = _go(_operand(node, typ, arity[2]), ctx, resolve, options, frames)
             if typ == f"{TX}/Equals":
                 return _bool(_values_equal(a, b))
+            if typ == _STARTS_WITH:
+                return _bool(_starts_with_value(a, b))
             order = BINARY_ORDER.get(typ)
             if order is not None:
                 # Predicate: non-numeric operands fail CLOSED.
@@ -952,6 +987,8 @@ def _trace(
             b = _trace(_operand(node, typ, arity[2]), ctx, resolve, options, frames)
             if typ == f"{TX}/Equals":
                 value: Value = _bool(_values_equal(a.value, b.value))
+            elif typ == _STARTS_WITH:
+                value = _bool(_starts_with_value(a.value, b.value))
             else:
                 order = BINARY_ORDER.get(typ)
                 if order is not None:

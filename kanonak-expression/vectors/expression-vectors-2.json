@@ -1,6 +1,6 @@
 {
   "expressionRuntimeVersion": "2",
-  "description": "Behavior parity vectors for expressionRuntimeVersion 2 — the value-domain extension (number | string | ref | list), the list/aggregate/membership family, polymorphic Equals, kind predicates, lambda binding (Filter/ListMap/ForEach), Matches over the pinned RE2-compatible XSD-regex subset, and NameBasedUuid, the RFC 9562 version 5 UUID of a name (1.2.0). Runs IN ADDITION to expression-vectors.json (v1), every vector of which must pass unchanged under a v2 kernel — that file is the numeric-regression gate. `expected` and `env` values are Values: JSON numbers, strings, arrays (lists), and {\"ref\": \"publisher/package/name\"} objects (refs). Normative list-family semantics are the SDK reference engine's: Sum on empty = 0; Min/Max/Average on empty = loud error; Count type-agnostic; absence is the empty list; predicates fail closed on type-confused operands, computations fail loud.",
+  "description": "Behavior parity vectors for expressionRuntimeVersion 2 — the value-domain extension (number | string | ref | list), the list/aggregate/membership family, polymorphic Equals, kind predicates, lambda binding (Filter/ListMap/ForEach), Matches over the pinned RE2-compatible XSD-regex subset, NameBasedUuid, the RFC 9562 version 5 UUID of a name (1.2.0), and StartsWith, a prefix test of one string by another (1.3.0). Runs IN ADDITION to expression-vectors.json (v1), every vector of which must pass unchanged under a v2 kernel — that file is the numeric-regression gate. `expected` and `env` values are Values: JSON numbers, strings, arrays (lists), and {\"ref\": \"publisher/package/name\"} objects (refs). Normative list-family semantics are the SDK reference engine's: Sum on empty = 0; Min/Max/Average on empty = loud error; Count type-agnostic; absence is the empty list; predicates fail closed on type-confused operands, computations fail loud.",
   "vectors": [
     {
       "id": "string-literal",
@@ -1978,6 +1978,134 @@
         "uuidFormat": "valueOf"
       },
       "expectError": true
+    },
+    {
+      "id": "starts-with-prefix",
+      "expr": {
+        "type": "kanonak.org/transformations/StartsWith",
+        "compareLeft": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "PRJ-0042" },
+        "compareRight": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "PRJ-" }
+      },
+      "expected": 1
+    },
+    {
+      "id": "starts-with-substring-elsewhere",
+      "description": "A prefix test, not a substring test: the string must begin with it",
+      "expr": {
+        "type": "kanonak.org/transformations/StartsWith",
+        "compareLeft": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "XPRJ-0042" },
+        "compareRight": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "PRJ-" }
+      },
+      "expected": 0
+    },
+    {
+      "id": "starts-with-equal-strings",
+      "description": "A string starts with itself",
+      "expr": {
+        "type": "kanonak.org/transformations/StartsWith",
+        "compareLeft": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "PRJ" },
+        "compareRight": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "PRJ" }
+      },
+      "expected": 1
+    },
+    {
+      "id": "starts-with-prefix-longer-than-string",
+      "expr": {
+        "type": "kanonak.org/transformations/StartsWith",
+        "compareLeft": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "PR" },
+        "compareRight": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "PRJ" }
+      },
+      "expected": 0
+    },
+    {
+      "id": "starts-with-empty-prefix",
+      "description": "Every string starts with the empty string, the empty string included",
+      "expr": {
+        "type": "kanonak.org/transformations/StartsWith",
+        "compareLeft": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "" },
+        "compareRight": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "" }
+      },
+      "expected": 1
+    },
+    {
+      "id": "starts-with-case-sensitive",
+      "description": "No case folding",
+      "expr": {
+        "type": "kanonak.org/transformations/StartsWith",
+        "compareLeft": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "prj-0042" },
+        "compareRight": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "PRJ" }
+      },
+      "expected": 0
+    },
+    {
+      "id": "starts-with-no-normalization",
+      "description": "Code point by code point, with no Unicode normalization: a decomposed e-acute does not start with the precomposed one",
+      "expr": {
+        "type": "kanonak.org/transformations/StartsWith",
+        "compareLeft": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "e\u0301t\u00e9" },
+        "compareRight": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "\u00e9" }
+      },
+      "expected": 0
+    },
+    {
+      "id": "starts-with-combining-mark-split",
+      "description": "A prefix may end before a combining mark: code points, not grapheme clusters",
+      "expr": {
+        "type": "kanonak.org/transformations/StartsWith",
+        "compareLeft": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "e\u0301t\u00e9" },
+        "compareRight": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "e" }
+      },
+      "expected": 1
+    },
+    {
+      "id": "starts-with-astral",
+      "description": "A character outside the Basic Multilingual Plane is one code point",
+      "expr": {
+        "type": "kanonak.org/transformations/StartsWith",
+        "compareLeft": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "\ud83d\ude00-1" },
+        "compareRight": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "\ud83d\ude00" }
+      },
+      "expected": 1
+    },
+    {
+      "id": "starts-with-number-operand-is-false",
+      "description": "A predicate fails closed: a number is not a string",
+      "expr": {
+        "type": "kanonak.org/transformations/StartsWith",
+        "compareLeft": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 12 },
+        "compareRight": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "1" }
+      },
+      "expected": 0
+    },
+    {
+      "id": "starts-with-number-prefix-is-false",
+      "expr": {
+        "type": "kanonak.org/transformations/StartsWith",
+        "compareLeft": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "12" },
+        "compareRight": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 1 }
+      },
+      "expected": 0
+    },
+    {
+      "id": "starts-with-ref-is-false",
+      "description": "A URI is never the string spelling of it",
+      "expr": {
+        "type": "kanonak.org/transformations/StartsWith",
+        "compareLeft": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org/colors/red" },
+        "compareRight": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "example.org" }
+      },
+      "expected": 0
+    },
+    {
+      "id": "starts-with-list-is-false",
+      "description": "A list is a container, not a string",
+      "expr": {
+        "type": "kanonak.org/transformations/StartsWith",
+        "compareLeft": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" },
+        "compareRight": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "a" }
+      },
+      "env": { "xs": ["abc"] },
+      "expected": 0
     }
   ]
 }

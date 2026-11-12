@@ -102,7 +102,8 @@ namespace Kanonak.Expression
     /// value. The kernel NEVER touches a graph.</para>
     ///
     /// <para>ERROR CONTRACT: computations fail LOUD; predicates fail CLOSED (Equals
-    /// cross-kind and the ordering comparisons on non-numbers yield 0).</para>
+    /// cross-kind, the ordering comparisons on non-numbers, and StartsWith on any operand
+    /// but a string yield 0).</para>
     ///
     /// <para>MATCHES: the pinned RE2-compatible XSD-regex subset. .NET's Regex counts
     /// UTF-16 CODE UNITS — the pinned unit is CODE POINTS — so this engine owes the
@@ -299,6 +300,7 @@ namespace Kanonak.Expression
             [TX + "/LessThan"] = Compare,
             [TX + "/GreaterThanOrEqual"] = Compare,
             [TX + "/LessThanOrEqual"] = Compare,
+            [STARTS_WITH] = Compare,
 
             [TX + "/And"] = new Arity("nary", "operands"),
             [TX + "/Or"] = new Arity("nary", "operands"),
@@ -318,6 +320,7 @@ namespace Kanonak.Expression
         const string LIST_ITEM_AT = TX + "/ListItemAt";
         const string MATCHES = TX + "/Matches";
         const string NAME_BASED_UUID = TX + "/NameBasedUuid";
+        const string STARTS_WITH = TX + "/StartsWith";
 
         // The literal classes the kernel answers itself (see LiteralValue).
         const string INTEGER_LITERAL = TX + "/IntegerLiteral";
@@ -709,6 +712,32 @@ namespace Kanonak.Expression
             return MatchesPattern(input, pattern);
         }
 
+        // -- StartsWith: a prefix test of one string by another -----------------
+
+        /// <summary>
+        /// True when <paramref name="input"/> begins with <paramref name="prefix"/>, code point by
+        /// code point, with no case folding and no Unicode normalization, exactly as
+        /// <c>tx.StartsWith</c> evaluates two strings. A string holding a lone surrogate isn't
+        /// well-formed Unicode, and gives false, since the ports' strings can't all hold one.
+        /// </summary>
+        /// <remarks>For a host engine that evaluates <c>StartsWith</c> over its own value domain: it
+        /// calls this rather than compare the strings itself.</remarks>
+        /// <exception cref="ArgumentNullException"><paramref name="input"/> or
+        /// <paramref name="prefix"/> is null.</exception>
+        public static bool StartsWith(string input, string prefix)
+        {
+            if (input == null) throw new ArgumentNullException(nameof(input));
+            if (prefix == null) throw new ArgumentNullException(nameof(prefix));
+            // Ordinal: the default is culture-sensitive, and takes a decomposed é for the precomposed one.
+            // On well-formed strings a prefix of UTF-16 code units is a prefix of code points.
+            return IsWellFormedUnicode(input) && IsWellFormedUnicode(prefix)
+                && input.StartsWith(prefix, StringComparison.Ordinal);
+        }
+
+        /// <summary><c>StartsWith</c> over the value domain: a predicate, so any operand but a string fails closed.</summary>
+        static bool StartsWithValue(object a, object b)
+            => a is string input && b is string prefix && StartsWith(input, prefix);
+
         // -- NameBasedUuid: the RFC 9562 version 5 UUID of a name under a namespace
 
         static readonly Dictionary<string, UuidFormat> UuidFormats = new Dictionary<string, UuidFormat>
@@ -916,6 +945,7 @@ namespace Kanonak.Expression
                         var l = Go(Operand(node, a.A), ctx, resolve, options, frames);
                         var r = Go(Operand(node, a.B), ctx, resolve, options, frames);
                         if (typ == TX + "/Equals") return Bool(ValuesEqual(l, r));
+                        if (typ == STARTS_WITH) return Bool(StartsWithValue(l, r));
                         if (IsOrderComparison(typ))
                         {
                             // Predicate: non-numeric operands fail CLOSED.
@@ -1206,6 +1236,7 @@ namespace Kanonak.Expression
                         var r = Trace(Operand(node, a.B), ctx, resolve, options, frames);
                         object value;
                         if (typ == TX + "/Equals") value = Bool(ValuesEqual(l.Value, r.Value));
+                        else if (typ == STARTS_WITH) value = Bool(StartsWithValue(l.Value, r.Value));
                         else if (IsOrderComparison(typ))
                         {
                             if (!(l.Value is double ld) || !(r.Value is double rd)) value = 0.0;

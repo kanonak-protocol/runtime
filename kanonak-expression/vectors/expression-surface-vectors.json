@@ -203,6 +203,11 @@
       "expected": true
     },
     {
+      "id": "evaluates-tx-StartsWith",
+      "type": "kanonak.org/transformations/StartsWith",
+      "expected": true
+    },
+    {
       "id": "evaluates-math-Power",
       "type": "kanonak.org/math/Power",
       "expected": true

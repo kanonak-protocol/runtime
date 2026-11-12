@@ -113,9 +113,9 @@ The v2 extension splits by role:
   that isn't a UUID in canonical text, a non-string or ill-formed name, an
   unknown `uuidFormat` — all raise, never coerce.
 - **Predicates fail CLOSED.** `Equals` on any cross-kind pair (a URI is never
-  equal to the string spelling of it; lists are containers, never equal) and
-  the ordering comparisons (`GreaterThan` et al.) on non-numeric operands
-  return `0`, never error — the rule the reference engine and SHACL share: a
+  equal to the string spelling of it; lists are containers, never equal), the
+  ordering comparisons (`GreaterThan` et al.) on non-numeric operands, and
+  `StartsWith` on any operand but a well-formed string return `0`, never error — the rule the reference engine and SHACL share: a
   non-comparable value falsifies a constraint, it doesn't crash the gate.
 
 A change to any primitive, value rule, or dispatch entry requires a **new**
@@ -136,7 +136,7 @@ those values are unreachable by construction.
 |---|---|---|
 | `BinaryArithmetic` | `arithLeft`, `arithRight` | Add, Subtract, Multiply, Divide, Power, Modulo, Minimum, Maximum |
 | `UnaryNumericOp` | `value` | Abs, Negate, Exp, Ln, Log10, Sqrt, Floor, Ceil, Round, Sign |
-| `BinaryComparison` | `compareLeft`, `compareRight` | Equals (polymorphic), GreaterThan, LessThan, GreaterThanOrEqual, LessThanOrEqual |
+| `BinaryComparison` | `compareLeft`, `compareRight` | Equals (polymorphic), GreaterThan, LessThan, GreaterThanOrEqual, LessThanOrEqual, StartsWith (1.3.0) |
 | `OrderedComparison` | `compareLeft`, `compareRight`, `viaProperty` | IsAtLeast, Dominates |
 | `BooleanLogic` | `operands` (list) | And, Or |
 | (direct) | `operand` | Not |
@@ -290,6 +290,30 @@ URI, is stated in the declaration rather than computed in each consumer.
 exactly as the node folds, so an engine evaluating `NameBasedUuid` over its
 own value domain calls it rather than hash a name itself.
 
+## StartsWith — a prefix test (1.3.0)
+
+`StartsWith(compareLeft, compareRight)` is `1` when the string `compareLeft`
+begins with the string `compareRight`, and `0` otherwise. Both operands are
+expressions, so a prefix can be read from another value, where `Matches`
+takes its pattern as data.
+
+- **Code point by code point,** with no case folding and no Unicode
+  normalization: a decomposed `é` doesn't start with the precomposed one, and
+  a prefix may end before a combining mark. On well-formed strings a prefix
+  of UTF-16 code units, of UTF-8 bytes and of code points is the same, so
+  each port compares in its own string's units.
+- **Every string starts with the empty string.**
+- **A predicate, so it fails closed:** a number, a ref, a list (even of one
+  string) or absence on either side gives `0`, never an error. So does a
+  string holding a lone surrogate, which only a UTF-16 or byte-string host
+  can hold, and which isn't well-formed Unicode. No vector holds one, since
+  JSON parsers disagree on reading it, so each port pins it in code.
+- **Linear** in the length of its operands.
+
+**For a host engine.** `startsWith(input, prefix)` decides two strings exactly
+as the node folds them, so an engine evaluating `StartsWith` over its own
+value domain calls it.
+
 ## Ordered comparisons
 
 `IsAtLeast` / `Dominates` compare **ordered vocabulary members** — members of a
@@ -408,9 +432,10 @@ public surface:
 - [`vectors/expression-vectors-2.json`](./vectors/expression-vectors-2.json)
   — the v2 surface: the value domain, the list/aggregate/membership family,
   lambda binding, polymorphic `Equals`, kind predicates, and the `Matches`
-  subset with its adversarial divergence probes, and `NameBasedUuid` (1.2.0),
+  subset with its adversarial divergence probes, `NameBasedUuid` (1.2.0),
   checked against Python's `uuid.uuid5`, with the namespace forms and
-  operand kinds it refuses.
+  operand kinds it refuses, and `StartsWith` (1.3.0), with the normalization,
+  astral and operand-kind cases.
 - [`vectors/expression-alignment-vectors.json`](./vectors/expression-alignment-vectors.json)
   — `align(expr, trace)`.
 - [`vectors/expression-surface-vectors.json`](./vectors/expression-surface-vectors.json)
