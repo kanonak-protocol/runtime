@@ -57,6 +57,13 @@
 
     { "id": "base64-canonical", "carrier": "base64Binary", "input": "aGVsbG8=", "expected": "aGVsbG8=" },
     { "id": "base64-line-wrap-collapses", "carrier": "base64Binary", "input": "aGVs\nbG8=", "expected": "aGVsbG8=" },
+    { "id": "base64-whitespace-inside-collapses", "carrier": "base64Binary", "input": "QU JD\nRA==", "expected": "QUJDRA==" },
+    { "id": "base64-nonzero-pad-bits-zeroed", "carrier": "base64Binary", "input": "QR==", "expected": "QQ==" },
+    { "id": "base64-nonzero-pad-bits-zeroed-one-pad", "carrier": "base64Binary", "input": "QUJ=", "expected": "QUI=" },
+    { "id": "base64-rejects-url-safe-alphabet", "carrier": "base64Binary", "input": "QQ-_", "expectError": true },
+    { "id": "base64-rejects-missing-padding", "carrier": "base64Binary", "input": "QQ", "expectError": true },
+    { "id": "base64-rejects-excess-padding", "carrier": "base64Binary", "input": "Q===", "expectError": true },
+    { "id": "base64-rejects-padding-inside", "carrier": "base64Binary", "input": "QQ==QQ==", "expectError": true },
 
     { "id": "dateTime-offset-to-utc-z", "carrier": "dateTime", "input": "2026-05-31T13:00:00+01:00", "expected": "2026-05-31T12:00:00Z" },
     { "id": "dateTime-z-stable", "carrier": "dateTime", "input": "2026-05-31T12:00:00Z", "expected": "2026-05-31T12:00:00Z" },
