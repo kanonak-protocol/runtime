@@ -4,8 +4,8 @@
  * -> canonical form + content hash). Run: `npm run conformance`.
  */
 import { readFileSync } from 'node:fs';
-import { canonicalForm, canonicalHash } from './index.js';
-import { canonicalScalarLexical, type Carrier } from './Datatypes.js';
+import { canonicalForm, canonicalHash, canonicalBase64, canonicalHexBinary } from './index.js';
+import { canonicalScalarLexical, Carrier } from './Datatypes.js';
 import {
   parseCoordinate,
   parsePackageCoordinate,
@@ -46,6 +46,32 @@ function runLexical(file: string): void {
 runLexical('lexical-vectors.json');
 runLexical('lexical-ieee-vectors.json');
 runLexical('lexical-temporal-vectors.json');
+
+// The binary carriers' functions are exported from the entry point (runtime#83),
+// so their vectors run through those exports too, as a consumer calls them.
+const binaryExports = new Map<string, (raw: string) => string>([
+  [Carrier.HexBinary, canonicalHexBinary],
+  [Carrier.Base64Binary, canonicalBase64],
+]);
+let bpass = 0;
+let bcount = 0;
+for (const v of read('lexical-vectors.json').vectors) {
+  const exported = binaryExports.get(v.carrier);
+  if (!exported) continue;
+  bcount++;
+  let got: string;
+  try {
+    got = exported(v.input);
+  } catch (e) {
+    if (v.expectError) bpass++;
+    else { fails++; console.error(`exported ${v.id}: threw ${(e as Error).message}`); }
+    continue;
+  }
+  if (v.expectError) { fails++; console.error(`exported ${v.id}: expected an error, got ${JSON.stringify(got)}`); }
+  else if (got === v.expected) bpass++;
+  else { fails++; console.error(`exported ${v.id}: expected ${JSON.stringify(v.expected)} got ${JSON.stringify(got)}`); }
+}
+console.log(`binary carriers through the entry point's exports: ${bpass}/${bcount} pass`);
 
 const ff = read('full-form-vectors.json');
 let fpass = 0;
