@@ -29,8 +29,8 @@ import java.util.regex.PatternSyntaxException;
  *
  * <p>ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an aggregate over
  * non-numeric elements, Min/Max/Average on empty, a nested list in Join, an out-of-subset
- * Matches pattern); predicates fail CLOSED (Equals cross-kind and the ordering comparisons
- * on non-numbers yield 0).
+ * Matches pattern); predicates fail CLOSED (Equals cross-kind, the ordering comparisons
+ * on non-numbers, and StartsWith on any operand but a string yield 0).
  *
  * <p>LAMBDA BINDING: Filter/ListMap/ForEach bind their loopVar per element; within their
  * bodies — and only there — a tx.VarRef naming a lexically-enclosing loopVar is resolved by
@@ -66,6 +66,7 @@ public final class Expression {
     private static final String LIST_ITEM_AT = TX + "/ListItemAt";
     private static final String MATCHES = TX + "/Matches";
     private static final String NAME_BASED_UUID = TX + "/NameBasedUuid";
+    private static final String STARTS_WITH = TX + "/StartsWith";
 
     /** The literal classes the kernel answers itself (see {@code literalValue}). */
     private static final String INTEGER_LITERAL = TX + "/IntegerLiteral";
@@ -479,6 +480,27 @@ public final class Expression {
         return matchesPattern(input, pattern);
     }
 
+    // -- StartsWith: a prefix test of one string by another --------------------
+
+    /**
+     * True when {@code input} begins with {@code prefix}, code point by code point, with no case
+     * folding and no Unicode normalization, exactly as {@code tx.StartsWith} evaluates two
+     * strings. A string holding a lone surrogate isn't well-formed Unicode, and gives false,
+     * since the ports' strings can't all hold one.
+     *
+     * <p>For a host engine that evaluates {@code StartsWith} over its own value domain: it calls
+     * this rather than compare the strings itself.
+     */
+    public static boolean startsWith(String input, String prefix) {
+        // On well-formed strings a prefix of UTF-16 code units is a prefix of code points.
+        return isWellFormedUnicode(input) && isWellFormedUnicode(prefix) && input.startsWith(prefix);
+    }
+
+    /** {@code StartsWith} over the value domain: a predicate, so any operand but a string fails closed. */
+    private static boolean startsWithValue(Object a, Object b) {
+        return a instanceof String input && b instanceof String prefix && startsWith(input, prefix);
+    }
+
     // -- NameBasedUuid: the RFC 9562 version 5 UUID of a name under a namespace --
 
     /** The text forms {@code tx.UuidFormat} names: {@code canonical-uuid} and {@code hex-uuid}. */
@@ -626,7 +648,7 @@ public final class Expression {
         Map.entry(MATH + "/Round", VALUE), Map.entry(MATH + "/Sign", VALUE),
         Map.entry(TX + "/Equals", COMPARE), Map.entry(TX + "/GreaterThan", COMPARE),
         Map.entry(TX + "/LessThan", COMPARE), Map.entry(TX + "/GreaterThanOrEqual", COMPARE),
-        Map.entry(TX + "/LessThanOrEqual", COMPARE),
+        Map.entry(TX + "/LessThanOrEqual", COMPARE), Map.entry(STARTS_WITH, COMPARE),
         Map.entry(TX + "/And", OPERANDS), Map.entry(TX + "/Or", OPERANDS),
         Map.entry(MATH + "/Clip", CLIP));
 
@@ -849,6 +871,7 @@ public final class Expression {
                     Object a = go(operand(node, typ, ar.a), ctx, resolve, options, frames);
                     Object b = go(operand(node, typ, ar.b), ctx, resolve, options, frames);
                     if (typ.equals(TX + "/Equals")) return bool(valuesEqual(a, b));
+                    if (typ.equals(STARTS_WITH)) return bool(startsWithValue(a, b));
                     if (isOrderComparison(typ)) {
                         // Predicate: non-numeric operands fail CLOSED.
                         if (!(a instanceof Double) || !(b instanceof Double)) return 0.0;
@@ -1014,6 +1037,8 @@ public final class Expression {
                     Object value;
                     if (typ.equals(TX + "/Equals")) {
                         value = bool(valuesEqual(a.value, b.value));
+                    } else if (typ.equals(STARTS_WITH)) {
+                        value = bool(startsWithValue(a.value, b.value));
                     } else if (isOrderComparison(typ)) {
                         if (!(a.value instanceof Double) || !(b.value instanceof Double)) value = 0.0;
                         else value = binaryOrder(typ, (Double) a.value, (Double) b.value);

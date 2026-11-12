@@ -14,7 +14,8 @@
 // ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an
 // aggregate over non-numeric elements, Min/Max/Average on empty, a nested
 // list in Join, an out-of-subset Matches pattern); predicates fail CLOSED
-// (Equals cross-kind and the ordering comparisons on non-numbers yield 0).
+// (Equals cross-kind, the ordering comparisons on non-numbers, and StartsWith
+// on any operand but a well-formed string yield 0).
 //
 // LAMBDA BINDING: Filter/ListMap/ForEach bind their loopVar per element;
 // within their bodies — and only there — a tx.VarRef naming a
@@ -116,7 +117,7 @@ func operatorArity(typ string) (arity, bool) {
 		math_ + "/Sqrt", math_ + "/Floor", math_ + "/Ceil", math_ + "/Round", math_ + "/Sign":
 		return valueArity, true
 	case tx + "/Equals", tx + "/GreaterThan", tx + "/LessThan",
-		tx + "/GreaterThanOrEqual", tx + "/LessThanOrEqual":
+		tx + "/GreaterThanOrEqual", tx + "/LessThanOrEqual", opStartsWith:
 		return compareArity, true
 	case tx + "/And", tx + "/Or":
 		return arity{kind: "nary", a: "operands"}, true
@@ -157,6 +158,7 @@ const (
 	opListItemAt    = tx + "/ListItemAt"
 	opMatches       = tx + "/Matches"
 	opNameBasedUUID = tx + "/NameBasedUuid"
+	opStartsWith    = tx + "/StartsWith"
 )
 
 // The literal classes the kernel answers itself (see literalValue).
@@ -742,6 +744,29 @@ func Matches(input, pattern string) (matched bool, err error) {
 	return matchesPattern(input, pattern), nil
 }
 
+// --- StartsWith: a prefix test of one string by another (1.3.0)
+
+// StartsWith reports whether input begins with prefix, code point by code
+// point, with no case folding and no Unicode normalization, exactly as
+// tx.StartsWith evaluates two strings. A string that isn't valid UTF-8 isn't
+// well-formed Unicode, and gives false, since the ports' strings can't all
+// hold one.
+//
+// For a host engine that evaluates StartsWith over its own value domain: it
+// calls this rather than compare the strings itself.
+func StartsWith(input, prefix string) bool {
+	// On valid UTF-8 a byte prefix is a code-point prefix.
+	return utf8.ValidString(input) && utf8.ValidString(prefix) && strings.HasPrefix(input, prefix)
+}
+
+// startsWithValue is StartsWith over the value domain: a predicate, so any
+// operand but a string fails closed.
+func startsWithValue(a, b Value) bool {
+	as, aok := a.(string)
+	bs, bok := b.(string)
+	return aok && bok && StartsWith(as, bs)
+}
+
 // --- NameBasedUuid: the RFC 9562 version 5 UUID of a name under a namespace (1.2.0)
 
 // UUIDFormat is a text form tx.UuidFormat names: canonical-uuid or hex-uuid.
@@ -971,6 +996,9 @@ func evalNode(node Node, ctx interface{}, resolve Resolve, opts *Options, frames
 			if typ == tx+"/Equals" {
 				return boolNum(valuesEqual(a, b))
 			}
+			if typ == opStartsWith {
+				return boolNum(startsWithValue(a, b))
+			}
 			if _, isOrder := binaryOrder(typ, 0, 0); isOrder {
 				// Predicate: non-numeric operands fail CLOSED.
 				an, aok := a.(float64)
@@ -1189,6 +1217,8 @@ func explainPanic(node Node, ctx interface{}, resolve Resolve, opts *Options, fr
 			var value Value
 			if typ == tx+"/Equals" {
 				value = boolNum(valuesEqual(a.Value, b.Value))
+			} else if typ == opStartsWith {
+				value = boolNum(startsWithValue(a.Value, b.Value))
 			} else if _, isOrder := binaryOrder(typ, 0, 0); isOrder {
 				an, aok := a.Value.(float64)
 				bn, bok := b.Value.(float64)

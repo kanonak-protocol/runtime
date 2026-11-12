@@ -15,7 +15,8 @@
 // ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an
 // aggregate over non-numeric elements, Min/Max/Average on empty, a nested list
 // in Join, an out-of-subset Matches pattern); predicates fail CLOSED (`Equals`
-// cross-kind and the ordering comparisons on non-numbers yield `0`).
+// cross-kind, the ordering comparisons on non-numbers, and `StartsWith` on any
+// operand but a string yield `0`).
 //
 // LAMBDA BINDING: Filter/ListMap/ForEach bind their `loopVar` per element;
 // within their bodies — and only there — a `tx.VarRef` naming a
@@ -61,6 +62,7 @@ private let isSetType = "\(tx)/IsSet"
 private let listItemAtType = "\(tx)/ListItemAt"
 private let matchesType = "\(tx)/Matches"
 private let nameBasedUuidType = "\(tx)/NameBasedUuid"
+private let startsWithType = "\(tx)/StartsWith"
 
 // The literal classes the kernel answers itself (see `literalValue`).
 private let integerLiteralType = "\(tx)/IntegerLiteral"
@@ -153,7 +155,7 @@ private func operatorArity(_ typ: String) -> Arity? {
          "\(math)/Sqrt", "\(math)/Floor", "\(math)/Ceil", "\(math)/Round", "\(math)/Sign":
         return .unary("value")
     case "\(tx)/Equals", "\(tx)/GreaterThan", "\(tx)/LessThan",
-         "\(tx)/GreaterThanOrEqual", "\(tx)/LessThanOrEqual":
+         "\(tx)/GreaterThanOrEqual", "\(tx)/LessThanOrEqual", startsWithType:
         return .binary("compareLeft", "compareRight")
     case "\(tx)/And", "\(tx)/Or":
         return .nary("operands")
@@ -604,6 +606,25 @@ public func matches(_ input: String, _ pattern: String) throws -> Bool {
     try matchesPattern(input, pattern)
 }
 
+// MARK: - StartsWith: a prefix test of one string by another
+
+/// True when `input` begins with `prefix`, code point by code point, with no
+/// case folding and no Unicode normalization, exactly as `tx.StartsWith`
+/// evaluates two strings.
+///
+/// For a host engine that evaluates `StartsWith` over its own value domain: it
+/// calls this rather than compare the strings itself.
+public func startsWith(_ input: String, _ prefix: String) -> Bool {
+    // Scalars, never `hasPrefix`, which compares grapheme clusters under canonical equivalence.
+    input.unicodeScalars.starts(with: prefix.unicodeScalars)
+}
+
+/// `StartsWith` over the value domain: a predicate, so any operand but a string fails closed.
+private func startsWithValue(_ a: EvalValue, _ b: EvalValue) -> Bool {
+    guard case let .str(input) = a, case let .str(prefix) = b else { return false }
+    return startsWith(input, prefix)
+}
+
 // MARK: - NameBasedUuid: the RFC 9562 version 5 UUID of a name under a namespace
 
 /// The text forms `tx.UuidFormat` names: `canonical-uuid` and `hex-uuid`.
@@ -802,6 +823,7 @@ private func go<C>(
             let a = try go(try operand(node, typ, leftKey), ctx, resolve, options, &frames)
             let b = try go(try operand(node, typ, rightKey), ctx, resolve, options, &frames)
             if typ == "\(tx)/Equals" { return .num(boolNum(valuesEqual(a, b))) }
+            if typ == startsWithType { return .num(boolNum(startsWithValue(a, b))) }
             if isOrderComparison(typ) {
                 // Predicate: non-numeric operands fail CLOSED.
                 guard case let .num(x) = a, case let .num(y) = b else { return .num(0) }
@@ -976,6 +998,8 @@ private func trace<C>(
             let value: EvalValue
             if typ == "\(tx)/Equals" {
                 value = .num(boolNum(valuesEqual(a.value, b.value)))
+            } else if typ == startsWithType {
+                value = .num(boolNum(startsWithValue(a.value, b.value)))
             } else if isOrderComparison(typ) {
                 if case let .num(x) = a.value, case let .num(y) = b.value {
                     value = .num(binaryOrder(typ, x, y))
