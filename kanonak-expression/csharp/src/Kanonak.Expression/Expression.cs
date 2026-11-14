@@ -320,6 +320,8 @@ namespace Kanonak.Expression
         const string LIST_ITEM_AT = TX + "/ListItemAt";
         const string MATCHES = TX + "/Matches";
         const string NAME_BASED_UUID = TX + "/NameBasedUuid";
+        const string EPOCH_MILLISECONDS = TX + "/EpochMilliseconds";
+        const string EPOCH_DAYS = TX + "/EpochDays";
         const string STARTS_WITH = TX + "/StartsWith";
 
         // The literal classes the kernel answers itself (see LiteralValue).
@@ -825,6 +827,134 @@ namespace Kanonak.Expression
             return NameBasedUuid(ns, name, UuidFormatOf(node));
         }
 
+        // -- EpochMilliseconds and EpochDays: a date-time or a date read as a whole count since
+        //    1970-01-01, so the numeric comparisons order it (1.4.0) --------------
+
+        // XSD 1.1 Part 2's own expressions for the lexical forms (3.3.7, 3.3.9), with the fields captured.
+        // \A and \z, since .NET's $ also matches before a final newline; [0-9], since its \d admits other scripts' digits.
+        static readonly Regex XsdDateTime = new Regex(
+            @"\A(-?)([1-9][0-9]{3,}|0[0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])"
+            + @"T(?:([01][0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9])(?:\.([0-9]+))?|24:00:00(?:\.0+)?)"
+            + @"(Z|[+-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))?\z");
+        static readonly Regex XsdDate = new Regex(
+            @"\A(-?)([1-9][0-9]{3,}|0[0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])"
+            + @"(Z|[+-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))?\z");
+
+        /// <summary>The largest count every port's number holds exactly, with every whole value below it.</summary>
+        const long MaxExactCount = (1L << 53) - 1;
+        // A year of more digits names a count past MaxExactCount, so it's refused before any arithmetic, which keeps
+        // CivilDays' 64-bit integers from overflowing.
+        const int MaxYearDigits = 15;
+        const long MillisecondsPerDay = 86_400_000L;
+        // No instant within MaxExactCount milliseconds, at any zone, has a day count further from zero, so one that is
+        // is refused before it's multiplied: in 64 bits, 10522000000-01-01 would otherwise wrap to a count in range.
+        const long MaxMillisecondDays = MaxExactCount / MillisecondsPerDay + 1;
+
+        /// <summary>
+        /// The instant an <c>xsd:dateTime</c> names, as the whole milliseconds since
+        /// 1970-01-01T00:00:00Z, exactly as <c>tx.EpochMilliseconds</c> evaluates one. It must
+        /// carry a time zone; a fraction of a second finer than a millisecond is floored;
+        /// <c>24:00:00</c> is the next day's first instant. Anything outside the lexical form, a
+        /// day its month lacks, or a count past 2^53 - 1 is an <see cref="ExpressionError"/>.
+        /// </summary>
+        /// <remarks>For a host engine that evaluates <c>EpochMilliseconds</c> over its own value
+        /// domain: it calls this rather than parse a date-time itself.</remarks>
+        /// <exception cref="ExpressionError">The text is outside the lexical form, carries no time
+        /// zone, names a day its month lacks, or counts past 2^53 - 1.</exception>
+        /// <exception cref="ArgumentNullException"><paramref name="text"/> is null.</exception>
+        public static double EpochMilliseconds(string text)
+        {
+            if (text == null) throw new ArgumentNullException(nameof(text));
+            const string op = "EpochMilliseconds";
+            var m = XsdDateTime.Match(text);
+            if (!m.Success) throw Err(op + " requires an xsd:dateTime in its lexical form, got \"" + text + "\"");
+            var zone = m.Groups[9];
+            if (!zone.Success)
+                throw Err(op + " requires an xsd:dateTime with a time zone, since the instant of one without is"
+                    + " indeterminate, got \"" + text + "\"");
+            long days = CivilDays(op, text, m.Groups[1].Value, m.Groups[2].Value, m.Groups[3].Value, m.Groups[4].Value);
+            if (days > MaxMillisecondDays || days < -MaxMillisecondDays) throw CountOutOfRange(op, text);
+            long secondOfDay = !m.Groups[5].Success ? 86_400
+                : AsciiInteger(m.Groups[5].Value) * 3_600 + AsciiInteger(m.Groups[6].Value) * 60 + AsciiInteger(m.Groups[7].Value);
+            var fraction = m.Groups[8];
+            long millisecond = !fraction.Success ? 0 : AsciiInteger((fraction.Value + "00").Substring(0, 3));
+            long count = days * MillisecondsPerDay + secondOfDay * 1_000 + millisecond - ZoneMinutes(zone.Value) * 60_000;
+            return ExactCount(op, text, count);
+        }
+
+        /// <summary>
+        /// The calendar day an <c>xsd:date</c> names, as the whole days since 1970-01-01, exactly
+        /// as <c>tx.EpochDays</c> evaluates one. A time zone it carries is read and ignored.
+        /// Anything outside the lexical form, a day its month lacks, or a count past 2^53 - 1 is
+        /// an <see cref="ExpressionError"/>.
+        /// </summary>
+        /// <remarks>For a host engine that evaluates <c>EpochDays</c> over its own value domain:
+        /// it calls this rather than parse a date itself.</remarks>
+        /// <exception cref="ExpressionError">The text is outside the lexical form, names a day its
+        /// month lacks, or counts past 2^53 - 1.</exception>
+        /// <exception cref="ArgumentNullException"><paramref name="text"/> is null.</exception>
+        public static double EpochDays(string text)
+        {
+            if (text == null) throw new ArgumentNullException(nameof(text));
+            const string op = "EpochDays";
+            var m = XsdDate.Match(text);
+            if (!m.Success) throw Err(op + " requires an xsd:date in its lexical form, got \"" + text + "\"");
+            return ExactCount(op, text, CivilDays(op, text, m.Groups[1].Value, m.Groups[2].Value, m.Groups[3].Value, m.Groups[4].Value));
+        }
+
+        /// <summary>Days since 1970-01-01 of a proleptic Gregorian date, year 0 being 1 BCE, once its day is one its month has.</summary>
+        static long CivilDays(string op, string text, string sign, string yearDigits, string month, string day)
+        {
+            if (yearDigits.Length > MaxYearDigits) throw CountOutOfRange(op, text);
+            long year = sign == "-" ? -AsciiInteger(yearDigits) : AsciiInteger(yearDigits);
+            int mo = (int)AsciiInteger(month);
+            int d = (int)AsciiInteger(day);
+            if (d > DaysInMonth(year, mo)) throw Err(op + " requires a day its month has, got \"" + text + "\"");
+            // Howard Hinnant's days_from_civil: a year counted from March, in 400-year eras of 146097 days.
+            // C#'s / truncates toward zero, so a negative year steps back 399 to floor its era.
+            long y = mo <= 2 ? year - 1 : year;
+            long era = (y >= 0 ? y : y - 399) / 400;
+            long yearOfEra = y - era * 400;
+            long dayOfYear = (153 * ((mo + 9) % 12) + 2) / 5 + d - 1;
+            long dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear;
+            return era * 146_097 + dayOfEra - 719_468;
+        }
+
+        static int DaysInMonth(long year, int month)
+        {
+            if (month == 2) return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) ? 29 : 28;
+            return month == 4 || month == 6 || month == 9 || month == 11 ? 30 : 31;
+        }
+
+        /// <summary>A time zone's offset from UTC in minutes: the local time is UTC plus it.</summary>
+        static long ZoneMinutes(string zone)
+        {
+            if (zone == "Z") return 0;
+            long minutes = AsciiInteger(zone.Substring(1, 2)) * 60 + AsciiInteger(zone.Substring(4, 2));
+            return zone[0] == '-' ? -minutes : minutes;
+        }
+
+        /// <summary>The value of digits the lexical form has already matched as ASCII.</summary>
+        static long AsciiInteger(string digits)
+            => long.Parse(digits, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture);
+
+        static double ExactCount(string op, string text, long count)
+        {
+            if (count > MaxExactCount || count < -MaxExactCount) throw CountOutOfRange(op, text);
+            return count;
+        }
+
+        static ExpressionError CountOutOfRange(string op, string text)
+            => Err(op + " counts \"" + text + "\" past 2^53 - 1 from 1970, beyond which a number no longer holds every whole value");
+
+        static double FoldEpochCount(string typ, object source)
+        {
+            string op = typ == EPOCH_MILLISECONDS ? "EpochMilliseconds" : "EpochDays";
+            if (!(source is string text))
+                throw Err(op + " requires a string temporalSource, got " + KindOf(source));
+            return typ == EPOCH_MILLISECONDS ? EpochMilliseconds(text) : EpochDays(text);
+        }
+
         // -- ordered comparisons (unchanged from v1) ---------------------------
 
         static string IdentityOf(ExprNode node, object ctx, EvalOptions opts)
@@ -876,6 +1006,7 @@ namespace Kanonak.Expression
             set.UnionWith(new[]
             {
                 NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES, NAME_BASED_UUID,
+                EPOCH_MILLISECONDS, EPOCH_DAYS,
                 INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL,
             });
             return set;
@@ -1077,6 +1208,11 @@ namespace Kanonak.Expression
                 return FoldNameBasedUuid(node, uuidNamespace, uuidName);
             }
 
+            if (typ == EPOCH_MILLISECONDS || typ == EPOCH_DAYS)
+            {
+                return FoldEpochCount(typ, Go(Operand(node, "temporalSource"), ctx, resolve, options, frames));
+            }
+
             if (IsKindPredicate(typ))
             {
                 var x = Go(Operand(node, "kindCheck"), ctx, resolve, options, frames);
@@ -1129,6 +1265,8 @@ namespace Kanonak.Expression
                 case IS_SET: return new[] { "checkExpr" };
                 case MATCHES: return new[] { "matchSource" };
                 case NAME_BASED_UUID: return new[] { "uuidNamespace", "uuidName" };
+                case EPOCH_MILLISECONDS: return new[] { "temporalSource" };
+                case EPOCH_DAYS: return new[] { "temporalSource" };
                 case TX + "/Count": case TX + "/Sum": case TX + "/Min": case TX + "/Max": case TX + "/Average":
                 case TX + "/Join": case TX + "/Reverse":
                     return new[] { "source" };
@@ -1384,6 +1522,12 @@ namespace Kanonak.Expression
                 var uuidNamespace = Trace(Operand(node, "uuidNamespace"), ctx, resolve, options, frames);
                 var uuidName = Trace(Operand(node, "uuidName"), ctx, resolve, options, frames);
                 return Parent(typ, FoldNameBasedUuid(node, uuidNamespace.Value, uuidName.Value), uuidNamespace, uuidName);
+            }
+
+            if (typ == EPOCH_MILLISECONDS || typ == EPOCH_DAYS)
+            {
+                var source = Trace(Operand(node, "temporalSource"), ctx, resolve, options, frames);
+                return Parent(typ, FoldEpochCount(typ, source.Value), source);
             }
 
             if (IsKindPredicate(typ))

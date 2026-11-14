@@ -14,7 +14,9 @@
 //!
 //! ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an
 //! aggregate over non-numeric elements, Min/Max/Average on empty, a nested
-//! list in Join, an out-of-subset Matches pattern); predicates fail CLOSED
+//! list in Join, an out-of-subset Matches pattern, an
+//! `EpochMilliseconds`/`EpochDays` source that isn't a date-time or a date in
+//! its lexical form); predicates fail CLOSED
 //! (`Equals` cross-kind, the ordering comparisons on non-numbers, and
 //! `StartsWith` on any operand but a string yield `0.0`, never an error).
 //!
@@ -189,6 +191,8 @@ const IS_SET: &str = "kanonak.org/transformations/IsSet";
 const LIST_ITEM_AT: &str = "kanonak.org/transformations/ListItemAt";
 const MATCHES: &str = "kanonak.org/transformations/Matches";
 const NAME_BASED_UUID: &str = "kanonak.org/transformations/NameBasedUuid";
+const EPOCH_MILLISECONDS: &str = "kanonak.org/transformations/EpochMilliseconds";
+const EPOCH_DAYS: &str = "kanonak.org/transformations/EpochDays";
 const STARTS_WITH: &str = "kanonak.org/transformations/StartsWith";
 
 /// The literal classes the kernel answers itself (see `literal_value`).
@@ -946,6 +950,170 @@ fn fold_name_based_uuid(
 }
 
 // ---------------------------------------------------------------------------
+// EpochMilliseconds and EpochDays — a date-time or a date read as a whole count
+// since 1970-01-01, so the numeric comparisons order it (1.4.0).
+// ---------------------------------------------------------------------------
+
+// XSD 1.1 Part 2's own expressions for the lexical forms (3.3.7, 3.3.9), with the fields captured.
+// Without the multi-line flag, `$` is the end of the text, never before a final newline.
+const XSD_DATE_TIME: &str = r"^(-?)([1-9][0-9]{3,}|0[0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T(?:([01][0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9])(?:\.([0-9]+))?|24:00:00(?:\.0+)?)(Z|[+-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))?$";
+const XSD_DATE: &str = r"^(-?)([1-9][0-9]{3,}|0[0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])(Z|[+-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))?$";
+
+/// The largest count every port's number holds exactly, with every whole value below it.
+const MAX_EXACT_COUNT: i64 = (1 << 53) - 1;
+// A year of more digits names a count past MAX_EXACT_COUNT, so it's refused before any arithmetic, which keeps
+// every port's 64-bit integers from overflowing.
+const MAX_YEAR_DIGITS: usize = 15;
+const MILLISECONDS_PER_DAY: i64 = 86_400_000;
+// No instant whose count is within MAX_EXACT_COUNT, at any zone, is more days from 1970, and a year of up to
+// MAX_YEAR_DIGITS has days enough to overflow 64 bits once read in milliseconds.
+const MAX_MILLISECOND_DAYS: i64 = 104_249_992;
+
+fn xsd_form(cell: &'static OnceLock<regex::Regex>, pattern: &str) -> &'static regex::Regex {
+    cell.get_or_init(|| regex::Regex::new(pattern).expect("XSD 1.1's lexical forms compile"))
+}
+
+/// The whole number a run of ASCII digits names, once the lexical form has matched only ASCII digits.
+fn ascii_int(digits: &str) -> i64 {
+    digits.bytes().fold(0, |n, d| n * 10 + i64::from(d - b'0'))
+}
+
+/// The instant an `xsd:dateTime` names, as the whole milliseconds since
+/// 1970-01-01T00:00:00Z, exactly as `tx.EpochMilliseconds` evaluates one. It
+/// must carry a time zone; a fraction of a second finer than a millisecond is
+/// floored; `24:00:00` is the next day's first instant. Anything outside the
+/// lexical form, a day its month lacks, or a count past 2^53 - 1 is an
+/// [`ExpressionError`].
+///
+/// For a host engine that evaluates `EpochMilliseconds` over its own value
+/// domain: it calls this rather than parse a date-time itself.
+pub fn epoch_milliseconds(text: &str) -> Result<f64, ExpressionError> {
+    const OP: &str = "EpochMilliseconds";
+    static FORM: OnceLock<regex::Regex> = OnceLock::new();
+    let m = match xsd_form(&FORM, XSD_DATE_TIME).captures(text) {
+        Some(m) => m,
+        None => return err(format!("{OP} requires an xsd:dateTime in its lexical form, got {text:?}")),
+    };
+    let zone = match m.get(9) {
+        Some(zone) => zone.as_str(),
+        None => {
+            return err(format!(
+                "{OP} requires an xsd:dateTime with a time zone, since the instant of one without is indeterminate, got {text:?}"
+            ))
+        }
+    };
+    let days = civil_days(OP, text, &m[1], &m[2], &m[3], &m[4])?;
+    if days > MAX_MILLISECOND_DAYS || days < -MAX_MILLISECOND_DAYS {
+        return Err(count_out_of_range(OP, text));
+    }
+    let second_of_day = match m.get(5) {
+        None => 86_400,
+        Some(hour) => ascii_int(hour.as_str()) * 3_600 + ascii_int(&m[6]) * 60 + ascii_int(&m[7]),
+    };
+    let millisecond = m.get(8).map_or(0, |fraction| {
+        let digits = fraction.as_str().as_bytes();
+        (0..3).fold(0, |ms, i| ms * 10 + digits.get(i).map_or(0, |d| i64::from(d - b'0')))
+    });
+    let count = days * MILLISECONDS_PER_DAY + second_of_day * 1_000 + millisecond - zone_minutes(zone) * 60_000;
+    exact_count(OP, text, count)
+}
+
+/// The calendar day an `xsd:date` names, as the whole days since 1970-01-01,
+/// exactly as `tx.EpochDays` evaluates one. A time zone it carries is read and
+/// ignored. Anything outside the lexical form, a day its month lacks, or a
+/// count past 2^53 - 1 is an [`ExpressionError`].
+///
+/// For a host engine that evaluates `EpochDays` over its own value domain: it
+/// calls this rather than parse a date itself.
+pub fn epoch_days(text: &str) -> Result<f64, ExpressionError> {
+    const OP: &str = "EpochDays";
+    static FORM: OnceLock<regex::Regex> = OnceLock::new();
+    let m = match xsd_form(&FORM, XSD_DATE).captures(text) {
+        Some(m) => m,
+        None => return err(format!("{OP} requires an xsd:date in its lexical form, got {text:?}")),
+    };
+    exact_count(OP, text, civil_days(OP, text, &m[1], &m[2], &m[3], &m[4])?)
+}
+
+/// Days since 1970-01-01 of a proleptic Gregorian date, year 0 being 1 BCE, once its day is one its month has.
+fn civil_days(
+    op: &str,
+    text: &str,
+    sign: &str,
+    year_digits: &str,
+    month: &str,
+    day: &str,
+) -> Result<i64, ExpressionError> {
+    if year_digits.len() > MAX_YEAR_DIGITS {
+        return Err(count_out_of_range(op, text));
+    }
+    let year = if sign == "-" { -ascii_int(year_digits) } else { ascii_int(year_digits) };
+    let m = ascii_int(month);
+    let d = ascii_int(day);
+    if d > days_in_month(year, m) {
+        return err(format!("{op} requires a day its month has, got {text:?}"));
+    }
+    // Howard Hinnant's days_from_civil: a year counted from March, in 400-year eras of 146097 days.
+    // Rust's `/` truncates toward zero, so a negative year steps down 399 to floor its era.
+    let y = if m <= 2 { year - 1 } else { year };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let year_of_era = y - era * 400;
+    let day_of_year = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    Ok(era * 146_097 + day_of_era - 719_468)
+}
+
+fn days_in_month(year: i64, month: i64) -> i64 {
+    match month {
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+/// A time zone's offset from UTC in minutes: the local time is UTC plus it.
+fn zone_minutes(zone: &str) -> i64 {
+    if zone == "Z" {
+        return 0;
+    }
+    let minutes = ascii_int(&zone[1..3]) * 60 + ascii_int(&zone[4..6]);
+    if zone.starts_with('-') {
+        -minutes
+    } else {
+        minutes
+    }
+}
+
+fn exact_count(op: &str, text: &str, count: i64) -> Result<f64, ExpressionError> {
+    if count > MAX_EXACT_COUNT || count < -MAX_EXACT_COUNT {
+        return Err(count_out_of_range(op, text));
+    }
+    Ok(count as f64)
+}
+
+fn count_out_of_range(op: &str, text: &str) -> ExpressionError {
+    ExpressionError(format!(
+        "{op} counts {text:?} past 2^53 - 1 from 1970, beyond which a number no longer holds every whole value"
+    ))
+}
+
+fn fold_epoch_count(typ: &str, source: &EvalValue) -> Result<EvalValue, ExpressionError> {
+    let op = if typ == EPOCH_MILLISECONDS { "EpochMilliseconds" } else { "EpochDays" };
+    let text = match source {
+        EvalValue::Str(s) => s,
+        other => {
+            return err(format!("{op} requires a string temporalSource, got {}", other.kind()))
+        }
+    };
+    Ok(EvalValue::Num(if typ == EPOCH_MILLISECONDS {
+        epoch_milliseconds(text)?
+    } else {
+        epoch_days(text)?
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Ordered comparisons (unchanged from v1).
 // ---------------------------------------------------------------------------
 
@@ -1013,7 +1181,7 @@ fn kernel_node_classes() -> &'static HashSet<&'static str> {
             .chain(KIND_PREDICATES.iter().copied())
             .chain([
                 NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES,
-                NAME_BASED_UUID,
+                NAME_BASED_UUID, EPOCH_MILLISECONDS, EPOCH_DAYS,
                 INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL,
             ])
             .collect()
@@ -1248,6 +1416,11 @@ fn go<C>(
         let namespace = go(operand(node, typ, "uuidNamespace")?, ctx, resolve, options, frames)?;
         let name = go(operand(node, typ, "uuidName")?, ctx, resolve, options, frames)?;
         return fold_name_based_uuid(node, &namespace, &name);
+    }
+
+    if typ == EPOCH_MILLISECONDS || typ == EPOCH_DAYS {
+        let source = go(operand(node, typ, "temporalSource")?, ctx, resolve, options, frames)?;
+        return fold_epoch_count(typ, &source);
     }
 
     if is_kind_predicate(typ) {
@@ -1504,6 +1677,12 @@ fn trace<C>(
         return Ok(parent(typ, v, vec![namespace, name]));
     }
 
+    if typ == EPOCH_MILLISECONDS || typ == EPOCH_DAYS {
+        let source = trace(operand(node, typ, "temporalSource")?, ctx, resolve, options, frames)?;
+        let v = fold_epoch_count(typ, &source.value)?;
+        return Ok(parent(typ, v, vec![source]));
+    }
+
     if is_kind_predicate(typ) {
         let x = trace(operand(node, typ, "kindCheck")?, ctx, resolve, options, frames)?;
         let v = kind_predicate(typ, &x.value).unwrap();
@@ -1572,6 +1751,7 @@ fn direct_children(typ: &str) -> Option<&'static [&'static str]> {
         IS_SET => Some(&["checkExpr"]),
         MATCHES => Some(&["matchSource"]),
         NAME_BASED_UUID => Some(&["uuidNamespace", "uuidName"]),
+        EPOCH_MILLISECONDS | EPOCH_DAYS => Some(&["temporalSource"]),
         "kanonak.org/transformations/Count"
         | "kanonak.org/transformations/Sum"
         | "kanonak.org/transformations/Min"

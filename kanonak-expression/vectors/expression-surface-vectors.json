@@ -208,6 +208,16 @@
       "expected": true
     },
     {
+      "id": "evaluates-tx-EpochMilliseconds",
+      "type": "kanonak.org/transformations/EpochMilliseconds",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-EpochDays",
+      "type": "kanonak.org/transformations/EpochDays",
+      "expected": true
+    },
+    {
       "id": "evaluates-math-Power",
       "type": "kanonak.org/math/Power",
       "expected": true

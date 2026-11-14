@@ -111,7 +111,9 @@ The v2 extension splits by role:
   non-string `Matches` source, an out-of-subset `Matches` pattern, a
   non-integer or negative `ListItemAt` index, a `NameBasedUuid` namespace
   that isn't a UUID in canonical text, a non-string or ill-formed name, an
-  unknown `uuidFormat` — all raise, never coerce.
+  unknown `uuidFormat`, an `EpochMilliseconds` or `EpochDays` source that
+  isn't a date-time or a date in its lexical form, or whose count passes
+  2^53 - 1 — all raise, never coerce.
 - **Predicates fail CLOSED.** `Equals` on any cross-kind pair (a URI is never
   equal to the string spelling of it; lists are containers, never equal), the
   ordering comparisons (`GreaterThan` et al.) on non-numeric operands, and
@@ -150,6 +152,7 @@ those values are unreachable by construction.
 | `KindPredicate` | `kindCheck` | IsString, IsNumber, IsReference, IsList |
 | (direct) | `matchSource`, `pattern` (data) | Matches |
 | (direct) | `uuidNamespace`, `uuidName`, `uuidFormat` (data, optional) | NameBasedUuid (1.2.0) |
+| `EpochCount` | `temporalSource` | EpochMilliseconds, EpochDays (1.4.0) |
 
 Literals: `IntegerLiteral`, `DecimalLiteral`, `BooleanLiteral` (→ `1`/`0`),
 `StringLiteral`, `UriLiteral` (→ a ref value; doubles as the identity leaf
@@ -314,6 +317,45 @@ takes its pattern as data.
 as the node folds them, so an engine evaluating `StartsWith` over its own
 value domain calls it.
 
+## EpochMilliseconds and EpochDays — a date read as a number (1.4.0)
+
+`EpochMilliseconds(temporalSource)` is the instant an `xsd:dateTime` names,
+as the whole milliseconds since 1970-01-01T00:00:00Z, and
+`EpochDays(temporalSource)` the calendar day an `xsd:date` names, as the
+whole days since 1970-01-01, each negative before it. The value domain has
+no date kind, so a date reaches the kernel as a string, and the ordering
+comparisons fail closed on strings. Read as numbers, two dates order with
+`LessThan` and its siblings, and `Subtract` gives the time between them.
+
+- **XSD 1.1's lexical forms only** (Part 2, 3.3.7 and 3.3.9), matched as a
+  whole string by each port, in ASCII digits: no surrounding whitespace, no
+  lower-case `t` or `z`, no leap second (`:60`), and a day its month has.
+  Each port reads the fields from its own match of XSD's own expression,
+  never a language's date parser, whose forms and ranges differ.
+- **A date-time must carry a time zone,** since the instant of one without
+  is indeterminate. A date's time zone is read and ignored, so `EpochDays`
+  counts the day as written.
+- **A fraction finer than a millisecond is floored,** toward the earlier
+  instant, so `1969-12-31T23:59:59.9995Z` is `-1`. `24:00:00` is the next
+  day's first instant.
+- **The proleptic Gregorian calendar, year 0 being 1 BCE,** as XSD 1.1 has
+  it, so years before 1970, year zero and negative years all count. Each port
+  counts days with Howard Hinnant's `days_from_civil`, in 64-bit integers.
+- **A count past 2^53 - 1 is refused,** since a number no longer holds every
+  whole value there: from `-283457-03-21T15:00:59.009Z` to
+  `287396-10-12T08:59:00.991Z` in milliseconds. A year of more than 15 digits
+  is refused before any arithmetic, which keeps a 64-bit day count from
+  overflowing, and a day count further than 104 249 992 from zero before it's
+  multiplied into milliseconds, which no instant in range has: in 64 bits,
+  `10522000000-01-01T00:00:00Z` would otherwise wrap to a count in range.
+- **A computation, so it fails loud:** a source that isn't a string (absence,
+  the empty list, among them), or a string outside the form, raises. A value
+  that may be absent is guarded with `IsSet`.
+
+**For a host engine.** `epochMilliseconds(text)` and `epochDays(text)` read a
+string exactly as the nodes fold it, so an engine evaluating either over its
+own value domain calls them rather than parse a date itself.
+
 ## Ordered comparisons
 
 `IsAtLeast` / `Dominates` compare **ordered vocabulary members** — members of a
@@ -434,8 +476,11 @@ public surface:
   lambda binding, polymorphic `Equals`, kind predicates, and the `Matches`
   subset with its adversarial divergence probes, `NameBasedUuid` (1.2.0),
   checked against Python's `uuid.uuid5`, with the namespace forms and
-  operand kinds it refuses, and `StartsWith` (1.3.0), with the normalization,
-  astral and operand-kind cases.
+  operand kinds it refuses, `StartsWith` (1.3.0), with the normalization,
+  astral and operand-kind cases, and `EpochMilliseconds` and `EpochDays`
+  (1.4.0), each value computed with Python's `datetime` and whole 400-year
+  cycles rather than the ports' algorithm, with every edge XSD allows and a
+  refusal for each form it doesn't.
 - [`vectors/expression-alignment-vectors.json`](./vectors/expression-alignment-vectors.json)
   — `align(expr, trace)`.
 - [`vectors/expression-surface-vectors.json`](./vectors/expression-surface-vectors.json)

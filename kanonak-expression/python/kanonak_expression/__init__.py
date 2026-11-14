@@ -14,9 +14,10 @@ leaf that returns a list. The kernel NEVER touches a graph.
 
 ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an
 aggregate over non-numeric elements, Min/Max/Average on empty, a nested list
-in Join, an out-of-subset Matches pattern); predicates fail CLOSED (``Equals``
-cross-kind, the ordering comparisons on non-numbers, and ``StartsWith`` on any
-operand but a well-formed string yield ``0.0``).
+in Join, an out-of-subset Matches pattern, an EpochMilliseconds/EpochDays
+source that isn't a date-time or a date in its lexical form); predicates fail
+CLOSED (``Equals`` cross-kind, the ordering comparisons on non-numbers, and
+``StartsWith`` on any operand but a well-formed string yield ``0.0``).
 
 LAMBDA BINDING: Filter/ListMap/ForEach bind their ``loopVar`` per element;
 within their bodies -- and only there -- a ``tx.VarRef`` naming a
@@ -40,6 +41,7 @@ WITHIN a version.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import re as _re
 from typing import Any, Callable, Dict, FrozenSet, List, Literal, Mapping, Optional, Tuple, Union
@@ -61,6 +63,8 @@ __all__ = [
     "UuidFormat",
     "Value",
     "align",
+    "epoch_days",
+    "epoch_milliseconds",
     "evaluate",
     "evaluates",
     "explain",
@@ -196,6 +200,8 @@ _IS_SET = f"{TX}/IsSet"
 _LIST_ITEM_AT = f"{TX}/ListItemAt"
 _MATCHES = f"{TX}/Matches"
 _NAME_BASED_UUID = f"{TX}/NameBasedUuid"
+_EPOCH_MILLISECONDS = f"{TX}/EpochMilliseconds"
+_EPOCH_DAYS = f"{TX}/EpochDays"
 _STARTS_WITH = f"{TX}/StartsWith"
 
 # The literal classes the kernel answers itself (see ``_literal_value``).
@@ -685,6 +691,135 @@ def _fold_name_based_uuid(node: ExprNode, namespace: Value, name: Value) -> str:
 
 
 # ---------------------------------------------------------------------------
+# EpochMilliseconds and EpochDays — a date-time or a date read as a whole count
+# since 1970-01-01, so the numeric comparisons order it (1.4.0).
+# ---------------------------------------------------------------------------
+
+# XSD 1.1 Part 2's own expressions for the lexical forms (3.3.7, 3.3.9), with the fields captured. Each is matched
+# with fullmatch, since a $ would also match before a final newline.
+_XSD_DATE_TIME = _re.compile(
+    r"(-?)([1-9][0-9]{3,}|0[0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])"
+    r"T(?:([01][0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9])(?:\.([0-9]+))?|24:00:00(?:\.0+)?)"
+    r"(Z|[+-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))?"
+)
+_XSD_DATE = _re.compile(
+    r"(-?)([1-9][0-9]{3,}|0[0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])"
+    r"(Z|[+-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))?"
+)
+
+# The largest count every port's number holds exactly, with every whole value below it.
+_MAX_EXACT_COUNT = 2**53 - 1
+# A year of more digits names a count past _MAX_EXACT_COUNT, so it's refused before any arithmetic, which keeps
+# every port's 64-bit integers from overflowing.
+_MAX_YEAR_DIGITS = 15
+_MILLISECONDS_PER_DAY = 86_400_000
+# The most days from 1970 whose milliseconds can still be within _MAX_EXACT_COUNT, whatever the time of day and zone.
+# Past it the count is out of range, and in a 64-bit port multiplying it by _MILLISECONDS_PER_DAY would overflow.
+_MAX_EXACT_DAYS = _MAX_EXACT_COUNT // _MILLISECONDS_PER_DAY + 1
+
+
+def epoch_milliseconds(text: str) -> float:
+    """The instant an ``xsd:dateTime`` names, as the whole milliseconds since
+    1970-01-01T00:00:00Z, exactly as ``tx.EpochMilliseconds`` evaluates one. It
+    must carry a time zone; a fraction of a second finer than a millisecond is
+    floored; ``24:00:00`` is the next day's first instant. Anything outside the
+    lexical form, a day its month lacks, or a count past 2^53 - 1 is an
+    :class:`ExpressionError`.
+
+    For a host engine that evaluates ``EpochMilliseconds`` over its own value
+    domain: it calls this rather than parse a date-time itself."""
+    op = "EpochMilliseconds"
+    m = _XSD_DATE_TIME.fullmatch(text)
+    if m is None:
+        raise ExpressionError(f"{op} requires an xsd:dateTime in its lexical form, got {_quoted(text)}")
+    sign, year_digits, month, day, hour, minute, second, fraction, zone = m.groups()
+    if zone is None:
+        raise ExpressionError(
+            f"{op} requires an xsd:dateTime with a time zone, since the instant of one without is indeterminate, "
+            f"got {_quoted(text)}"
+        )
+    days = _civil_days(op, text, sign, year_digits, month, day)
+    if days > _MAX_EXACT_DAYS or days < -_MAX_EXACT_DAYS:
+        raise _count_out_of_range(op, text)
+    second_of_day = 86_400 if hour is None else int(hour) * 3_600 + int(minute) * 60 + int(second)
+    millisecond = 0 if fraction is None else int(fraction[:3].ljust(3, "0"))
+    count = days * _MILLISECONDS_PER_DAY + second_of_day * 1_000 + millisecond - _zone_minutes(zone) * 60_000
+    return _exact_count(op, text, count)
+
+
+def epoch_days(text: str) -> float:
+    """The calendar day an ``xsd:date`` names, as the whole days since
+    1970-01-01, exactly as ``tx.EpochDays`` evaluates one. A time zone it
+    carries is read and ignored. Anything outside the lexical form, a day its
+    month lacks, or a count past 2^53 - 1 is an :class:`ExpressionError`.
+
+    For a host engine that evaluates ``EpochDays`` over its own value domain: it
+    calls this rather than parse a date itself."""
+    op = "EpochDays"
+    m = _XSD_DATE.fullmatch(text)
+    if m is None:
+        raise ExpressionError(f"{op} requires an xsd:date in its lexical form, got {_quoted(text)}")
+    sign, year_digits, month, day, _zone = m.groups()
+    return _exact_count(op, text, _civil_days(op, text, sign, year_digits, month, day))
+
+
+def _civil_days(op: str, text: str, sign: str, year_digits: str, month: str, day: str) -> int:
+    """Days since 1970-01-01 of a proleptic Gregorian date, year 0 being 1 BCE, once its day is one its month has."""
+    if len(year_digits) > _MAX_YEAR_DIGITS:
+        raise _count_out_of_range(op, text)
+    year = -int(year_digits) if sign == "-" else int(year_digits)
+    m = int(month)
+    d = int(day)
+    if d > _days_in_month(year, m):
+        raise ExpressionError(f"{op} requires a day its month has, got {_quoted(text)}")
+    # Howard Hinnant's days_from_civil: a year counted from March, in 400-year eras of 146097 days. Python's //
+    # already floors, so the era of a negative year needs none of the truncating ports' y - 399.
+    y = year - 1 if m <= 2 else year
+    era = y // 400
+    year_of_era = y - era * 400
+    day_of_year = (153 * ((m + 9) % 12) + 2) // 5 + d - 1
+    day_of_era = year_of_era * 365 + year_of_era // 4 - year_of_era // 100 + day_of_year
+    return era * 146_097 + day_of_era - 719_468
+
+
+def _days_in_month(year: int, month: int) -> int:
+    if month == 2:
+        return 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28
+    return 30 if month in (4, 6, 9, 11) else 31
+
+
+def _zone_minutes(zone: str) -> int:
+    """A time zone's offset from UTC in minutes: the local time is UTC plus it."""
+    if zone == "Z":
+        return 0
+    minutes = int(zone[1:3]) * 60 + int(zone[4:6])
+    return -minutes if zone[0] == "-" else minutes
+
+
+def _exact_count(op: str, text: str, count: int) -> float:
+    if count > _MAX_EXACT_COUNT or count < -_MAX_EXACT_COUNT:
+        raise _count_out_of_range(op, text)
+    return float(count)
+
+
+def _count_out_of_range(op: str, text: str) -> ExpressionError:
+    return ExpressionError(
+        f"{op} counts {_quoted(text)} past 2^53 - 1 from 1970, beyond which a number no longer holds every whole value"
+    )
+
+
+def _quoted(text: str) -> str:
+    return json.dumps(text, ensure_ascii=False)
+
+
+def _fold_epoch_count(typ: str, source: Value) -> float:
+    op = "EpochMilliseconds" if typ == _EPOCH_MILLISECONDS else "EpochDays"
+    if not isinstance(source, str):
+        raise ExpressionError(f"{op} requires a string temporalSource, got {_kind(source)}")
+    return epoch_milliseconds(source) if typ == _EPOCH_MILLISECONDS else epoch_days(source)
+
+
+# ---------------------------------------------------------------------------
 # Ordered comparisons (unchanged from v1).
 # ---------------------------------------------------------------------------
 
@@ -737,6 +872,7 @@ _KERNEL_NODE_CLASSES: FrozenSet[str] = frozenset((
     *_ITERATOR_BODY,
     *_KIND_PREDICATES,
     _NOT, _IS_AT_LEAST, _DOMINATES, _CONTAINS, _IS_SET, _LIST_ITEM_AT, _MATCHES, _NAME_BASED_UUID,
+    _EPOCH_MILLISECONDS, _EPOCH_DAYS,
     _INTEGER_LITERAL, _DECIMAL_LITERAL, _BOOLEAN_LITERAL, _STRING_LITERAL, _URI_LITERAL,
 ))
 
@@ -907,6 +1043,9 @@ def _go(
         namespace = _go(_operand(node, typ, "uuidNamespace"), ctx, resolve, options, frames)
         name = _go(_operand(node, typ, "uuidName"), ctx, resolve, options, frames)
         return _fold_name_based_uuid(node, namespace, name)
+
+    if typ in (_EPOCH_MILLISECONDS, _EPOCH_DAYS):
+        return _fold_epoch_count(typ, _go(_operand(node, typ, "temporalSource"), ctx, resolve, options, frames))
 
     kind_pred = _KIND_PREDICATES.get(typ)
     if kind_pred is not None:
@@ -1105,6 +1244,10 @@ def _trace(
         name = _trace(_operand(node, typ, "uuidName"), ctx, resolve, options, frames)
         return TraceNode(typ, _fold_name_based_uuid(node, namespace.value, name.value), [namespace, name])
 
+    if typ in (_EPOCH_MILLISECONDS, _EPOCH_DAYS):
+        source = _trace(_operand(node, typ, "temporalSource"), ctx, resolve, options, frames)
+        return TraceNode(typ, _fold_epoch_count(typ, source.value), [source])
+
     kind_pred = _KIND_PREDICATES.get(typ)
     if kind_pred is not None:
         x = _trace(_operand(node, typ, "kindCheck"), ctx, resolve, options, frames)
@@ -1149,6 +1292,8 @@ _DIRECT_CHILDREN: Dict[str, Tuple[str, ...]] = {
     _IS_SET: ("checkExpr",),
     _MATCHES: ("matchSource",),
     _NAME_BASED_UUID: ("uuidNamespace", "uuidName"),
+    _EPOCH_MILLISECONDS: ("temporalSource",),
+    _EPOCH_DAYS: ("temporalSource",),
     f"{TX}/Count": ("source",),
     f"{TX}/Sum": ("source",),
     f"{TX}/Min": ("source",),

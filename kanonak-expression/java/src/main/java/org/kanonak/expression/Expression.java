@@ -29,7 +29,8 @@ import java.util.regex.PatternSyntaxException;
  *
  * <p>ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an aggregate over
  * non-numeric elements, Min/Max/Average on empty, a nested list in Join, an out-of-subset
- * Matches pattern); predicates fail CLOSED (Equals cross-kind, the ordering comparisons
+ * Matches pattern, an EpochMilliseconds/EpochDays source that isn't a date-time or a date in
+ * its lexical form); predicates fail CLOSED (Equals cross-kind, the ordering comparisons
  * on non-numbers, and StartsWith on any operand but a string yield 0).
  *
  * <p>LAMBDA BINDING: Filter/ListMap/ForEach bind their loopVar per element; within their
@@ -66,6 +67,8 @@ public final class Expression {
     private static final String LIST_ITEM_AT = TX + "/ListItemAt";
     private static final String MATCHES = TX + "/Matches";
     private static final String NAME_BASED_UUID = TX + "/NameBasedUuid";
+    private static final String EPOCH_MILLISECONDS = TX + "/EpochMilliseconds";
+    private static final String EPOCH_DAYS = TX + "/EpochDays";
     private static final String STARTS_WITH = TX + "/StartsWith";
 
     /** The literal classes the kernel answers itself (see {@code literalValue}). */
@@ -586,6 +589,128 @@ public final class Expression {
         return nameBasedUuid((String) uuidNamespace, (String) uuidName, uuidFormatOf(node));
     }
 
+    // -- EpochMilliseconds and EpochDays: a date-time or a date read as a whole count since
+    //    1970-01-01, so the numeric comparisons order it (1.4.0) ----------------
+
+    // XSD 1.1 Part 2's own expressions for the lexical forms (3.3.7, 3.3.9), with the fields captured.
+    // Matched by matches(), whole: a find() would let a $ stop before a final newline.
+    private static final Pattern XSD_DATE_TIME = Pattern.compile(
+        "(-?)([1-9][0-9]{3,}|0[0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])"
+            + "T(?:([01][0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9])(?:\\.([0-9]+))?|24:00:00(?:\\.0+)?)"
+            + "(Z|[+-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))?");
+    private static final Pattern XSD_DATE = Pattern.compile(
+        "(-?)([1-9][0-9]{3,}|0[0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])"
+            + "(Z|[+-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))?");
+
+    /** The largest count every port's number holds exactly, with every whole value below it. */
+    private static final long MAX_EXACT_COUNT = (1L << 53) - 1;
+    // A year of more digits names a count past MAX_EXACT_COUNT, so it's refused before any arithmetic, which keeps
+    // civilDays' 64-bit integers from overflowing.
+    private static final int MAX_YEAR_DIGITS = 15;
+    private static final long MILLISECONDS_PER_DAY = 86_400_000L;
+    // No instant within MAX_EXACT_COUNT milliseconds, at any zone, has a day count further from zero, so one that is
+    // is refused before it's multiplied: in 64 bits, 10522000000-01-01 would otherwise wrap to a count in range.
+    private static final long MAX_MILLISECOND_DAYS = MAX_EXACT_COUNT / MILLISECONDS_PER_DAY + 1;
+
+    /**
+     * The instant an {@code xsd:dateTime} names, as the whole milliseconds since
+     * 1970-01-01T00:00:00Z, exactly as {@code tx.EpochMilliseconds} evaluates one. It must carry
+     * a time zone; a fraction of a second finer than a millisecond is floored; {@code 24:00:00}
+     * is the next day's first instant. Anything outside the lexical form, a day its month lacks,
+     * or a count past 2^53 - 1 is an {@link ExpressionError}.
+     *
+     * <p>For a host engine that evaluates {@code EpochMilliseconds} over its own value domain: it
+     * calls this rather than parse a date-time itself.
+     *
+     * @throws ExpressionError when the text is outside the lexical form, carries no time zone,
+     *     names a day its month lacks, or counts past 2^53 - 1
+     */
+    public static double epochMilliseconds(String text) {
+        String op = "EpochMilliseconds";
+        java.util.regex.Matcher m = XSD_DATE_TIME.matcher(text);
+        if (!m.matches()) throw err(op + " requires an xsd:dateTime in its lexical form, got \"" + text + "\"");
+        String zone = m.group(9);
+        if (zone == null) {
+            throw err(op + " requires an xsd:dateTime with a time zone, since the instant of one without is"
+                + " indeterminate, got \"" + text + "\"");
+        }
+        long days = civilDays(op, text, m.group(1), m.group(2), m.group(3), m.group(4));
+        if (days > MAX_MILLISECOND_DAYS || days < -MAX_MILLISECOND_DAYS) throw countOutOfRange(op, text);
+        String hour = m.group(5);
+        long secondOfDay = hour == null ? 86_400
+            : Long.parseLong(hour) * 3_600 + Long.parseLong(m.group(6)) * 60 + Long.parseLong(m.group(7));
+        String fraction = m.group(8);
+        long millisecond = fraction == null ? 0 : Long.parseLong((fraction + "00").substring(0, 3));
+        long count = days * MILLISECONDS_PER_DAY + secondOfDay * 1_000 + millisecond - zoneMinutes(zone) * 60_000;
+        return exactCount(op, text, count);
+    }
+
+    /**
+     * The calendar day an {@code xsd:date} names, as the whole days since 1970-01-01, exactly as
+     * {@code tx.EpochDays} evaluates one. A time zone it carries is read and ignored. Anything
+     * outside the lexical form, a day its month lacks, or a count past 2^53 - 1 is an
+     * {@link ExpressionError}.
+     *
+     * <p>For a host engine that evaluates {@code EpochDays} over its own value domain: it calls
+     * this rather than parse a date itself.
+     *
+     * @throws ExpressionError when the text is outside the lexical form, names a day its month
+     *     lacks, or counts past 2^53 - 1
+     */
+    public static double epochDays(String text) {
+        String op = "EpochDays";
+        java.util.regex.Matcher m = XSD_DATE.matcher(text);
+        if (!m.matches()) throw err(op + " requires an xsd:date in its lexical form, got \"" + text + "\"");
+        return exactCount(op, text, civilDays(op, text, m.group(1), m.group(2), m.group(3), m.group(4)));
+    }
+
+    /** Days since 1970-01-01 of a proleptic Gregorian date, year 0 being 1 BCE, once its day is one its month has. */
+    private static long civilDays(String op, String text, String sign, String yearDigits, String month, String day) {
+        if (yearDigits.length() > MAX_YEAR_DIGITS) throw countOutOfRange(op, text);
+        long year = sign.equals("-") ? -Long.parseLong(yearDigits) : Long.parseLong(yearDigits);
+        int mo = Integer.parseInt(month);
+        int d = Integer.parseInt(day);
+        if (d > daysInMonth(year, mo)) throw err(op + " requires a day its month has, got \"" + text + "\"");
+        // Howard Hinnant's days_from_civil: a year counted from March, in 400-year eras of 146097 days.
+        // Java's / truncates toward zero, so a negative year steps back 399 to floor its era.
+        long y = mo <= 2 ? year - 1 : year;
+        long era = (y >= 0 ? y : y - 399) / 400;
+        long yearOfEra = y - era * 400;
+        long dayOfYear = (153 * ((mo + 9) % 12) + 2) / 5 + d - 1;
+        long dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear;
+        return era * 146_097 + dayOfEra - 719_468;
+    }
+
+    private static int daysInMonth(long year, int month) {
+        if (month == 2) return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) ? 29 : 28;
+        return month == 4 || month == 6 || month == 9 || month == 11 ? 30 : 31;
+    }
+
+    /** A time zone's offset from UTC in minutes: the local time is UTC plus it. */
+    private static long zoneMinutes(String zone) {
+        if (zone.equals("Z")) return 0;
+        long minutes = Long.parseLong(zone.substring(1, 3)) * 60 + Long.parseLong(zone.substring(4, 6));
+        return zone.charAt(0) == '-' ? -minutes : minutes;
+    }
+
+    private static double exactCount(String op, String text, long count) {
+        if (count > MAX_EXACT_COUNT || count < -MAX_EXACT_COUNT) throw countOutOfRange(op, text);
+        return (double) count;
+    }
+
+    private static ExpressionError countOutOfRange(String op, String text) {
+        return err(op + " counts \"" + text + "\" past 2^53 - 1 from 1970, beyond which a number no longer holds"
+            + " every whole value");
+    }
+
+    private static double foldEpochCount(String typ, Object source) {
+        String op = typ.equals(EPOCH_MILLISECONDS) ? "EpochMilliseconds" : "EpochDays";
+        if (!(source instanceof String text)) {
+            throw err(op + " requires a string temporalSource, got " + kindOf(source));
+        }
+        return typ.equals(EPOCH_MILLISECONDS) ? epochMilliseconds(text) : epochDays(text);
+    }
+
     // -- ordered comparisons (unchanged from v1) ------------------------------
 
     private static <C> String identityOf(Map<String, Object> node, C ctx, EvalOptions<C> opts) {
@@ -801,6 +926,7 @@ public final class Expression {
         classes.addAll(KIND_PREDICATES);
         Collections.addAll(classes,
             NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES, NAME_BASED_UUID,
+            EPOCH_MILLISECONDS, EPOCH_DAYS,
             INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL);
         KERNEL_NODE_CLASSES = Collections.unmodifiableSet(classes);
     }
@@ -978,6 +1104,10 @@ public final class Expression {
             Object uuidNamespace = go(operand(node, typ, "uuidNamespace"), ctx, resolve, options, frames);
             Object uuidName = go(operand(node, typ, "uuidName"), ctx, resolve, options, frames);
             return foldNameBasedUuid(node, uuidNamespace, uuidName);
+        }
+
+        if (typ.equals(EPOCH_MILLISECONDS) || typ.equals(EPOCH_DAYS)) {
+            return foldEpochCount(typ, go(operand(node, typ, "temporalSource"), ctx, resolve, options, frames));
         }
 
         if (isKindPredicate(typ)) {
@@ -1169,6 +1299,11 @@ public final class Expression {
             return parent(typ, foldNameBasedUuid(node, uuidNamespace.value, uuidName.value), listOf(uuidNamespace, uuidName));
         }
 
+        if (typ.equals(EPOCH_MILLISECONDS) || typ.equals(EPOCH_DAYS)) {
+            TraceNode source = trace(operand(node, typ, "temporalSource"), ctx, resolve, options, frames);
+            return parent(typ, foldEpochCount(typ, source.value), listOf(source));
+        }
+
         if (isKindPredicate(typ)) {
             TraceNode x = trace(operand(node, typ, "kindCheck"), ctx, resolve, options, frames);
             return parent(typ, bool(kindPredicate(typ, x.value)), listOf(x));
@@ -1242,6 +1377,8 @@ public final class Expression {
             case IS_SET: return new String[] {"checkExpr"};
             case MATCHES: return new String[] {"matchSource"};
             case NAME_BASED_UUID: return new String[] {"uuidNamespace", "uuidName"};
+            case EPOCH_MILLISECONDS: return new String[] {"temporalSource"};
+            case EPOCH_DAYS: return new String[] {"temporalSource"};
             case TX + "/Count": case TX + "/Sum": case TX + "/Min": case TX + "/Max": case TX + "/Average":
             case TX + "/Join": case TX + "/Reverse":
                 return new String[] {"source"};

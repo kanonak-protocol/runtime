@@ -14,9 +14,10 @@
 //
 // ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an
 // aggregate over non-numeric elements, Min/Max/Average on empty, a nested list
-// in Join, an out-of-subset Matches pattern); predicates fail CLOSED (`Equals`
-// cross-kind, the ordering comparisons on non-numbers, and `StartsWith` on any
-// operand but a string yield `0`).
+// in Join, an out-of-subset Matches pattern, an `EpochMilliseconds`/`EpochDays`
+// source that isn't a date-time or a date in its lexical form); predicates fail
+// CLOSED (`Equals` cross-kind, the ordering comparisons on non-numbers, and
+// `StartsWith` on any operand but a string yield `0`).
 //
 // LAMBDA BINDING: Filter/ListMap/ForEach bind their `loopVar` per element;
 // within their bodies — and only there — a `tx.VarRef` naming a
@@ -62,6 +63,8 @@ private let isSetType = "\(tx)/IsSet"
 private let listItemAtType = "\(tx)/ListItemAt"
 private let matchesType = "\(tx)/Matches"
 private let nameBasedUuidType = "\(tx)/NameBasedUuid"
+private let epochMillisecondsType = "\(tx)/EpochMilliseconds"
+private let epochDaysType = "\(tx)/EpochDays"
 private let startsWithType = "\(tx)/StartsWith"
 
 // The literal classes the kernel answers itself (see `literalValue`).
@@ -715,6 +718,150 @@ private func foldNameBasedUuid(_ node: ExprNode, _ namespace: EvalValue, _ name:
     return .str(try nameBasedUuid(ns, n, format: try uuidFormatOf(node)))
 }
 
+// MARK: - EpochMilliseconds and EpochDays: a date-time or a date read as a whole count since 1970-01-01
+
+// XSD 1.1 Part 2's own expressions for the lexical forms (3.3.7, 3.3.9), with the fields captured.
+// `\A` and `\z`, never `^` and `$`: ICU's `$` also matches before a final line terminator.
+private let xsdDateTime = try! NSRegularExpression(
+    pattern: #"\A(-?)([1-9][0-9]{3,}|0[0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T(?:([01][0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9])(?:\.([0-9]+))?|24:00:00(?:\.0+)?)(Z|[+-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))?\z"#
+)
+private let xsdDate = try! NSRegularExpression(
+    pattern: #"\A(-?)([1-9][0-9]{3,}|0[0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])(Z|[+-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))?\z"#
+)
+
+/// The largest count every port's number holds exactly, with every whole value below it.
+private let maxExactCount: Int64 = (Int64(1) << 53) - 1
+// A year of more digits names a count past maxExactCount, so it's refused before any arithmetic, which keeps
+// every port's 64-bit integers from overflowing.
+private let maxYearDigits = 15
+private let millisecondsPerDay: Int64 = 86_400_000
+// No instant whose count is within maxExactCount, at any zone, is more days from 1970, and a year of up to
+// maxYearDigits has days enough to overflow 64 bits once read in milliseconds, which traps.
+private let maxMillisecondDays: Int64 = 104_249_992
+
+/// The ASCII bytes each capture group of `form` matched in `text`, nil for a group that matched nothing, as
+/// an absent sign, hour, fraction or zone does, or nil when `text` isn't in the form. Only ASCII is in a form,
+/// so a UTF-16 offset into a match is a byte offset.
+private func xsdFields(_ form: NSRegularExpression, _ text: String) -> [[UInt8]?]? {
+    guard let match = form.firstMatch(in: text, options: [], range: NSRange(text.startIndex..., in: text)) else {
+        return nil
+    }
+    let bytes = Array(text.utf8)
+    // By its length, never its location: Darwin marks a group that took no part NSNotFound, and CF -1.
+    return (0..<match.numberOfRanges).map { i -> [UInt8]? in
+        let range = match.range(at: i)
+        return range.length == 0 ? nil : Array(bytes[range.location..<(range.location + range.length)])
+    }
+}
+
+/// The whole number a run of ASCII digits names, once the lexical form has matched only ASCII digits.
+private func asciiInt<Digits: Sequence>(_ digits: Digits) -> Int64 where Digits.Element == UInt8 {
+    digits.reduce(Int64(0)) { $0 * 10 + Int64($1 - UInt8(ascii: "0")) }
+}
+
+/// The instant an `xsd:dateTime` names, as the whole milliseconds since
+/// 1970-01-01T00:00:00Z, exactly as `tx.EpochMilliseconds` evaluates one. It
+/// must carry a time zone; a fraction of a second finer than a millisecond is
+/// floored; `24:00:00` is the next day's first instant. Anything outside the
+/// lexical form, a day its month lacks, or a count past 2^53 - 1 throws
+/// `ExpressionError`.
+///
+/// For a host engine that evaluates `EpochMilliseconds` over its own value
+/// domain: it calls this rather than parse a date-time itself.
+public func epochMilliseconds(_ text: String) throws -> Double {
+    let op = "EpochMilliseconds"
+    guard let field = xsdFields(xsdDateTime, text) else {
+        throw ExpressionError("\(op) requires an xsd:dateTime in its lexical form, got \(text.debugDescription)")
+    }
+    guard let zone = field[9] else {
+        throw ExpressionError(
+            "\(op) requires an xsd:dateTime with a time zone, since the instant of one without is indeterminate, got \(text.debugDescription)"
+        )
+    }
+    let days = try civilDays(op, text, field[1] != nil, field[2]!, field[3]!, field[4]!)
+    if days > maxMillisecondDays || days < -maxMillisecondDays { throw countOutOfRange(op, text) }
+    let secondOfDay: Int64
+    if let hour = field[5] {
+        secondOfDay = asciiInt(hour) * 3_600 + asciiInt(field[6]!) * 60 + asciiInt(field[7]!)
+    } else {
+        secondOfDay = 86_400
+    }
+    let millisecond: Int64 = field[8].map { asciiInt(($0 + Array("000".utf8)).prefix(3)) } ?? 0
+    let count = days * millisecondsPerDay + secondOfDay * 1_000 + millisecond - zoneMinutes(zone) * 60_000
+    return try exactCount(op, text, count)
+}
+
+/// The calendar day an `xsd:date` names, as the whole days since 1970-01-01,
+/// exactly as `tx.EpochDays` evaluates one. A time zone it carries is read and
+/// ignored. Anything outside the lexical form, a day its month lacks, or a
+/// count past 2^53 - 1 throws `ExpressionError`.
+///
+/// For a host engine that evaluates `EpochDays` over its own value domain: it
+/// calls this rather than parse a date itself.
+public func epochDays(_ text: String) throws -> Double {
+    let op = "EpochDays"
+    guard let field = xsdFields(xsdDate, text) else {
+        throw ExpressionError("\(op) requires an xsd:date in its lexical form, got \(text.debugDescription)")
+    }
+    return try exactCount(op, text, try civilDays(op, text, field[1] != nil, field[2]!, field[3]!, field[4]!))
+}
+
+/// Days since 1970-01-01 of a proleptic Gregorian date, year 0 being 1 BCE, once its day is one its month has.
+private func civilDays(
+    _ op: String, _ text: String, _ negative: Bool, _ yearDigits: [UInt8], _ month: [UInt8], _ day: [UInt8]
+) throws -> Int64 {
+    if yearDigits.count > maxYearDigits { throw countOutOfRange(op, text) }
+    let year = negative ? -asciiInt(yearDigits) : asciiInt(yearDigits)
+    let m = asciiInt(month)
+    let d = asciiInt(day)
+    if d > daysInMonth(year, m) {
+        throw ExpressionError("\(op) requires a day its month has, got \(text.debugDescription)")
+    }
+    // Howard Hinnant's days_from_civil: a year counted from March, in 400-year eras of 146097 days.
+    // Swift's `/` truncates toward zero, so a negative year steps down 399 to floor its era.
+    let y = m <= 2 ? year - 1 : year
+    let era = (y >= 0 ? y : y - 399) / 400
+    let yearOfEra = y - era * 400
+    let dayOfYear = (153 * ((m + 9) % 12) + 2) / 5 + d - 1
+    let dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear
+    return era * 146_097 + dayOfEra - 719_468
+}
+
+private func daysInMonth(_ year: Int64, _ month: Int64) -> Int64 {
+    switch month {
+    case 2: return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) ? 29 : 28
+    case 4, 6, 9, 11: return 30
+    default: return 31
+    }
+}
+
+/// A time zone's offset from UTC in minutes: the local time is UTC plus it.
+private func zoneMinutes(_ zone: [UInt8]) -> Int64 {
+    if zone == Array("Z".utf8) { return 0 }
+    let minutes = asciiInt(zone[1..<3]) * 60 + asciiInt(zone[4..<6])
+    return zone[0] == UInt8(ascii: "-") ? -minutes : minutes
+}
+
+private func exactCount(_ op: String, _ text: String, _ count: Int64) throws -> Double {
+    if count > maxExactCount || count < -maxExactCount { throw countOutOfRange(op, text) }
+    return Double(count)
+}
+
+private func countOutOfRange(_ op: String, _ text: String) -> ExpressionError {
+    ExpressionError(
+        "\(op) counts \(text.debugDescription) past 2^53 - 1 from 1970, beyond which a number no longer holds every whole value"
+    )
+}
+
+private func foldEpochCount(_ typ: String, _ source: EvalValue) throws -> EvalValue {
+    let op = typ == epochMillisecondsType ? "EpochMilliseconds" : "EpochDays"
+    guard case let .str(text) = source else {
+        throw ExpressionError("\(op) requires a string temporalSource, got \(source.kind)")
+    }
+    if typ == epochMillisecondsType { return .num(try epochMilliseconds(text)) }
+    return .num(try epochDays(text))
+}
+
 // MARK: - Ordered comparisons (unchanged from v1)
 
 private func identityOf<C>(_ node: ExprNode, _ ctx: C, _ options: EvalOptions<C>?) throws -> String {
@@ -756,7 +903,7 @@ private func foldOrdered<C>(
 /// The operators the fold dispatches by name, and the literals it answers.
 private let byNameOperators: Set<String> = [
     notType, isAtLeastType, dominatesType, containsType, isSetType, listItemAtType, matchesType,
-    nameBasedUuidType,
+    nameBasedUuidType, epochMillisecondsType, epochDaysType,
 ]
 private let literalTypes: Set<String> = [
     integerLiteralType, decimalLiteralType, booleanLiteralType, stringLiteralType, uriLiteralType,
@@ -931,6 +1078,11 @@ private func go<C>(
         let namespace = try go(try operand(node, typ, "uuidNamespace"), ctx, resolve, options, &frames)
         let name = try go(try operand(node, typ, "uuidName"), ctx, resolve, options, &frames)
         return try foldNameBasedUuid(node, namespace, name)
+    }
+
+    if typ == epochMillisecondsType || typ == epochDaysType {
+        let source = try go(try operand(node, typ, "temporalSource"), ctx, resolve, options, &frames)
+        return try foldEpochCount(typ, source)
     }
 
     if let v = try kindPredicateValue(typ, node, ctx, resolve, options, &frames) {
@@ -1130,6 +1282,11 @@ private func trace<C>(
         return TraceNode(typ, try foldNameBasedUuid(node, namespace.value, name.value), [namespace, name])
     }
 
+    if typ == epochMillisecondsType || typ == epochDaysType {
+        let source = try trace(try operand(node, typ, "temporalSource"), ctx, resolve, options, &frames)
+        return TraceNode(typ, try foldEpochCount(typ, source.value), [source])
+    }
+
     if kindPredicate(typ, .num(0)) != nil {
         let x = try trace(try operand(node, typ, "kindCheck"), ctx, resolve, options, &frames)
         return TraceNode(typ, .num(kindPredicate(typ, x.value)!), [x])
@@ -1200,6 +1357,7 @@ private func directChildren(_ typ: String) -> [String]? {
     case isSetType: return ["checkExpr"]
     case matchesType: return ["matchSource"]
     case nameBasedUuidType: return ["uuidNamespace", "uuidName"]
+    case epochMillisecondsType, epochDaysType: return ["temporalSource"]
     case "\(tx)/Count", "\(tx)/Sum", "\(tx)/Min", "\(tx)/Max", "\(tx)/Average", "\(tx)/Join", "\(tx)/Reverse":
         return ["source"]
     case "\(tx)/IsString", "\(tx)/IsNumber", "\(tx)/IsReference", "\(tx)/IsList":

@@ -47,7 +47,8 @@
  *     operator whose operand is not a number, an aggregate over a non-numeric
  *     element, `Min`/`Max`/`Average` on an empty list, a nested list in
  *     `Join`, a non-string `Matches` source, an out-of-subset `Matches`
- *     pattern — all raise `ExpressionError`, never coerce.
+ *     pattern, an `EpochMilliseconds`/`EpochDays` source that isn't a date-time
+ *     or a date in its lexical form — all raise `ExpressionError`, never coerce.
  *   - PREDICATES FAIL CLOSED: `Equals` and the ordering comparisons on
  *     cross-kind or non-numeric operands, and `StartsWith` on any operand but
  *     a string, return `0`, never error (the SHACL
@@ -220,6 +221,8 @@ const IS_SET = `${TX}/IsSet`;
 const LIST_ITEM_AT = `${TX}/ListItemAt`;
 const MATCHES = `${TX}/Matches`;
 const NAME_BASED_UUID = `${TX}/NameBasedUuid`;
+const EPOCH_MILLISECONDS = `${TX}/EpochMilliseconds`;
+const EPOCH_DAYS = `${TX}/EpochDays`;
 const STARTS_WITH = `${TX}/StartsWith`;
 
 /** The literal classes the kernel answers itself (see `literalValue`). */
@@ -816,6 +819,126 @@ function foldNameBasedUuid(node: ExprNode, namespace: Value, name: Value): strin
 }
 
 // ---------------------------------------------------------------------------
+// EpochMilliseconds and EpochDays — a date-time or a date read as a whole count
+// since 1970-01-01, so the numeric comparisons order it (1.4.0).
+// ---------------------------------------------------------------------------
+
+// XSD 1.1 Part 2's own expressions for the lexical forms (3.3.7, 3.3.9), with the fields captured.
+const XSD_DATE_TIME =
+  /^(-?)([1-9][0-9]{3,}|0[0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T(?:([01][0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9])(?:\.([0-9]+))?|24:00:00(?:\.0+)?)(Z|[+-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))?$/;
+const XSD_DATE =
+  /^(-?)([1-9][0-9]{3,}|0[0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])(Z|[+-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))?$/;
+
+/** The largest count every port's number holds exactly, with every whole value below it. */
+const MAX_EXACT_COUNT = 2n ** 53n - 1n;
+// A year of more digits names a count past MAX_EXACT_COUNT, so it's refused before any arithmetic, which keeps
+// every port's 64-bit day count from overflowing.
+const MAX_YEAR_DIGITS = 15;
+const MILLISECONDS_PER_DAY = 86_400_000n;
+// No instant within MAX_EXACT_COUNT milliseconds, at any zone, has a day count further from zero, so one that is is
+// refused before it's multiplied: in 64 bits, 10522000000-01-01 would otherwise wrap to a count in range.
+const MAX_MILLISECOND_DAYS = MAX_EXACT_COUNT / MILLISECONDS_PER_DAY + 1n;
+
+/**
+ * The instant an `xsd:dateTime` names, as the whole milliseconds since
+ * 1970-01-01T00:00:00Z, exactly as `tx.EpochMilliseconds` evaluates one. It
+ * must carry a time zone; a fraction of a second finer than a millisecond is
+ * floored; `24:00:00` is the next day's first instant. Anything outside the
+ * lexical form, a day its month lacks, or a count past 2^53 - 1 is an
+ * `ExpressionError`.
+ *
+ * For a host engine that evaluates `EpochMilliseconds` over its own value
+ * domain: it calls this rather than parse a date-time itself.
+ */
+export function epochMilliseconds(text: string): number {
+  const op = 'EpochMilliseconds';
+  const m = XSD_DATE_TIME.exec(text);
+  if (m === null) {
+    throw new ExpressionError(`${op} requires an xsd:dateTime in its lexical form, got ${JSON.stringify(text)}`);
+  }
+  const [, sign, yearDigits, month, day, hour, minute, second, fraction, zone] = m as unknown as (string | undefined)[];
+  if (zone === undefined) {
+    throw new ExpressionError(
+      `${op} requires an xsd:dateTime with a time zone, since the instant of one without is indeterminate, got ${JSON.stringify(text)}`,
+    );
+  }
+  const days = civilDays(op, text, sign!, yearDigits!, month!, day!);
+  if (days > MAX_MILLISECOND_DAYS || days < -MAX_MILLISECOND_DAYS) throw countOutOfRange(op, text);
+  const secondOfDay = hour === undefined ? 86_400 : Number(hour) * 3_600 + Number(minute) * 60 + Number(second);
+  const millisecond = fraction === undefined ? 0 : Number(fraction.slice(0, 3).padEnd(3, '0'));
+  const count = days * MILLISECONDS_PER_DAY + BigInt(secondOfDay * 1_000 + millisecond) - BigInt(zoneMinutes(zone) * 60_000);
+  return exactCount(op, text, count);
+}
+
+/**
+ * The calendar day an `xsd:date` names, as the whole days since 1970-01-01,
+ * exactly as `tx.EpochDays` evaluates one. A time zone it carries is read and
+ * ignored. Anything outside the lexical form, a day its month lacks, or a
+ * count past 2^53 - 1 is an `ExpressionError`.
+ *
+ * For a host engine that evaluates `EpochDays` over its own value domain: it
+ * calls this rather than parse a date itself.
+ */
+export function epochDays(text: string): number {
+  const op = 'EpochDays';
+  const m = XSD_DATE.exec(text);
+  if (m === null) {
+    throw new ExpressionError(`${op} requires an xsd:date in its lexical form, got ${JSON.stringify(text)}`);
+  }
+  const [, sign, yearDigits, month, day] = m as unknown as string[];
+  return exactCount(op, text, civilDays(op, text, sign!, yearDigits!, month!, day!));
+}
+
+/** Days since 1970-01-01 of a proleptic Gregorian date, year 0 being 1 BCE, once its day is one its month has. */
+function civilDays(op: string, text: string, sign: string, yearDigits: string, month: string, day: string): bigint {
+  if (yearDigits.length > MAX_YEAR_DIGITS) throw countOutOfRange(op, text);
+  const year = sign === '-' ? -BigInt(yearDigits) : BigInt(yearDigits);
+  const m = Number(month);
+  const d = Number(day);
+  if (d > daysInMonth(year, m)) {
+    throw new ExpressionError(`${op} requires a day its month has, got ${JSON.stringify(text)}`);
+  }
+  // Howard Hinnant's days_from_civil: a year counted from March, in 400-year eras of 146097 days.
+  const y = m <= 2 ? year - 1n : year;
+  const era = (y >= 0n ? y : y - 399n) / 400n;
+  const yearOfEra = y - era * 400n;
+  const dayOfYear = (153n * BigInt((m + 9) % 12) + 2n) / 5n + BigInt(d - 1);
+  const dayOfEra = yearOfEra * 365n + yearOfEra / 4n - yearOfEra / 100n + dayOfYear;
+  return era * 146_097n + dayOfEra - 719_468n;
+}
+
+function daysInMonth(year: bigint, month: number): number {
+  if (month === 2) return year % 4n === 0n && (year % 100n !== 0n || year % 400n === 0n) ? 29 : 28;
+  return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
+}
+
+/** A time zone's offset from UTC in minutes: the local time is UTC plus it. */
+function zoneMinutes(zone: string): number {
+  if (zone === 'Z') return 0;
+  const minutes = Number(zone.slice(1, 3)) * 60 + Number(zone.slice(4, 6));
+  return zone[0] === '-' ? -minutes : minutes;
+}
+
+function exactCount(op: string, text: string, count: bigint): number {
+  if (count > MAX_EXACT_COUNT || count < -MAX_EXACT_COUNT) throw countOutOfRange(op, text);
+  return Number(count);
+}
+
+function countOutOfRange(op: string, text: string): ExpressionError {
+  return new ExpressionError(
+    `${op} counts ${JSON.stringify(text)} past 2^53 - 1 from 1970, beyond which a number no longer holds every whole value`,
+  );
+}
+
+function foldEpochCount(type: string, source: Value): number {
+  const op = type === EPOCH_MILLISECONDS ? 'EpochMilliseconds' : 'EpochDays';
+  if (typeof source !== 'string') {
+    throw new ExpressionError(`${op} requires a string temporalSource, got ${kindOf(source)}`);
+  }
+  return type === EPOCH_MILLISECONDS ? epochMilliseconds(source) : epochDays(source);
+}
+
+// ---------------------------------------------------------------------------
 // Ordered comparisons (unchanged from v1).
 // ---------------------------------------------------------------------------
 
@@ -885,6 +1008,7 @@ const KERNEL_NODE_CLASSES: ReadonlySet<string> = new Set<string>([
   ...Object.keys(ITERATOR_BODY),
   ...Object.keys(KIND_PREDICATES),
   NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES, NAME_BASED_UUID,
+  EPOCH_MILLISECONDS, EPOCH_DAYS,
   INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL,
 ]);
 
@@ -1079,6 +1203,10 @@ function evalNode<C>(
     const namespace = evalNode(operand(node, 'uuidNamespace'), ctx, resolve, options, frames);
     const name = evalNode(operand(node, 'uuidName'), ctx, resolve, options, frames);
     return foldNameBasedUuid(node, namespace, name);
+  }
+
+  if (node.type === EPOCH_MILLISECONDS || node.type === EPOCH_DAYS) {
+    return foldEpochCount(node.type, evalNode(operand(node, 'temporalSource'), ctx, resolve, options, frames));
   }
 
   const kind = KIND_PREDICATES[node.type];
@@ -1316,6 +1444,11 @@ export function explain<C = unknown>(
       return { type: n.type, value: foldNameBasedUuid(n, namespace.value, name.value), children: [namespace, name] };
     }
 
+    if (n.type === EPOCH_MILLISECONDS || n.type === EPOCH_DAYS) {
+      const source = trace(operand(n, 'temporalSource'), c, frames);
+      return { type: n.type, value: foldEpochCount(n.type, source.value), children: [source] };
+    }
+
     const kind = KIND_PREDICATES[n.type];
     if (kind) {
       const x = trace(operand(n, 'kindCheck'), c, frames);
@@ -1379,6 +1512,8 @@ const DIRECT_CHILDREN: Record<string, readonly string[]> = {
   [IS_SET]: ['checkExpr'],
   [MATCHES]: ['matchSource'],
   [NAME_BASED_UUID]: ['uuidNamespace', 'uuidName'],
+  [EPOCH_MILLISECONDS]: ['temporalSource'],
+  [EPOCH_DAYS]: ['temporalSource'],
   [`${TX}/Count`]: ['source'],
   [`${TX}/Sum`]: ['source'],
   [`${TX}/Min`]: ['source'],

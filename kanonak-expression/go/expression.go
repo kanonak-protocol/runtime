@@ -13,9 +13,11 @@
 //
 // ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an
 // aggregate over non-numeric elements, Min/Max/Average on empty, a nested
-// list in Join, an out-of-subset Matches pattern); predicates fail CLOSED
-// (Equals cross-kind, the ordering comparisons on non-numbers, and StartsWith
-// on any operand but a well-formed string yield 0).
+// list in Join, an out-of-subset Matches pattern, an
+// EpochMilliseconds/EpochDays source that isn't a date-time or a date in its
+// lexical form); predicates fail CLOSED (Equals cross-kind, the ordering
+// comparisons on non-numbers, and StartsWith on any operand but a well-formed
+// string yield 0).
 //
 // LAMBDA BINDING: Filter/ListMap/ForEach bind their loopVar per element;
 // within their bodies — and only there — a tx.VarRef naming a
@@ -150,15 +152,17 @@ func isListFold(typ string) bool {
 
 // The operators the fold dispatches by name, beside its dispatch tables.
 const (
-	opNot           = tx + "/Not"
-	opIsAtLeast     = tx + "/IsAtLeast"
-	opDominates     = tx + "/Dominates"
-	opContains      = tx + "/Contains"
-	opIsSet         = tx + "/IsSet"
-	opListItemAt    = tx + "/ListItemAt"
-	opMatches       = tx + "/Matches"
-	opNameBasedUUID = tx + "/NameBasedUuid"
-	opStartsWith    = tx + "/StartsWith"
+	opNot               = tx + "/Not"
+	opIsAtLeast         = tx + "/IsAtLeast"
+	opDominates         = tx + "/Dominates"
+	opContains          = tx + "/Contains"
+	opIsSet             = tx + "/IsSet"
+	opListItemAt        = tx + "/ListItemAt"
+	opMatches           = tx + "/Matches"
+	opNameBasedUUID     = tx + "/NameBasedUuid"
+	opEpochMilliseconds = tx + "/EpochMilliseconds"
+	opEpochDays         = tx + "/EpochDays"
+	opStartsWith        = tx + "/StartsWith"
 )
 
 // The literal classes the kernel answers itself (see literalValue).
@@ -865,6 +869,206 @@ func isHex(c rune) bool {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
 
+// --- EpochMilliseconds and EpochDays: a date-time or a date read as a whole
+// count since 1970-01-01, so the numeric comparisons order it (1.4.0)
+
+// XSD 1.1 Part 2's own expressions for the lexical forms (3.3.7, 3.3.9), with
+// the fields captured. Without the m flag, RE2's ^ and $ match only at the
+// text's ends, so each matches the whole string.
+var (
+	xsdDateTime = regexp.MustCompile(`^(-?)([1-9][0-9]{3,}|0[0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T(?:([01][0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9])(?:\.([0-9]+))?|24:00:00(?:\.0+)?)(Z|[+-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))?$`)
+	xsdDate     = regexp.MustCompile(`^(-?)([1-9][0-9]{3,}|0[0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])(Z|[+-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))?$`)
+)
+
+const (
+	// maxExactCount is the largest count every port's number holds exactly,
+	// with every whole value below it.
+	maxExactCount = 1<<53 - 1
+	// A year of more digits names a count past maxExactCount, so it's refused
+	// before any arithmetic, which keeps every port's 64-bit day count from
+	// overflowing.
+	maxYearDigits      = 15
+	millisecondsPerDay = 86_400_000
+	// maxExactDays is the most days from 1970 whose milliseconds can still be
+	// within maxExactCount, whatever the time of day and zone. Past it the
+	// count is out of range, and multiplying it by millisecondsPerDay would
+	// overflow 64 bits for a year of 10 to 15 digits.
+	maxExactDays = maxExactCount/millisecondsPerDay + 1
+)
+
+// EpochMilliseconds returns the instant an xsd:dateTime names, as the whole
+// milliseconds since 1970-01-01T00:00:00Z, exactly as tx.EpochMilliseconds
+// evaluates one. It must carry a time zone; a fraction of a second finer than
+// a millisecond is floored; 24:00:00 is the next day's first instant. Anything
+// outside the lexical form, a day its month lacks, or a count past 2^53 - 1 is
+// an *Error.
+//
+// For a host engine that evaluates EpochMilliseconds over its own value
+// domain: it calls this rather than parse a date-time itself.
+func EpochMilliseconds(text string) (count float64, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if e, ok := r.(*Error); ok {
+				err = e
+				return
+			}
+			panic(r)
+		}
+	}()
+	return epochMilliseconds(text), nil
+}
+
+// EpochDays returns the calendar day an xsd:date names, as the whole days
+// since 1970-01-01, exactly as tx.EpochDays evaluates one. A time zone it
+// carries is read and ignored. Anything outside the lexical form, a day its
+// month lacks, or a count past 2^53 - 1 is an *Error.
+//
+// For a host engine that evaluates EpochDays over its own value domain: it
+// calls this rather than parse a date itself.
+func EpochDays(text string) (count float64, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if e, ok := r.(*Error); ok {
+				err = e
+				return
+			}
+			panic(r)
+		}
+	}()
+	return epochDays(text), nil
+}
+
+func epochMilliseconds(text string) float64 {
+	const op = "EpochMilliseconds"
+	m := xsdDateTime.FindStringSubmatch(text)
+	if m == nil {
+		raise("%s requires an xsd:dateTime in its lexical form, got %q", op, text)
+	}
+	// An optional group that took part in the match is never empty, so "" is one that didn't.
+	sign, yearDigits, month, day, hour, minute, second, fraction, zone := m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9]
+	if zone == "" {
+		raise("%s requires an xsd:dateTime with a time zone, since the instant of one without is indeterminate, got %q", op, text)
+	}
+	days := civilDays(op, text, sign, yearDigits, month, day)
+	if days > maxExactDays || days < -maxExactDays {
+		raiseCountOutOfRange(op, text)
+	}
+	secondOfDay := int64(86_400)
+	if hour != "" {
+		secondOfDay = asciiInt(hour)*3_600 + asciiInt(minute)*60 + asciiInt(second)
+	}
+	millisecond := int64(0)
+	if fraction != "" {
+		// Its first three digits, right-padded with zeros.
+		millisecond = asciiInt((fraction + "00")[:3])
+	}
+	count := days*millisecondsPerDay + secondOfDay*1_000 + millisecond - zoneMinutes(zone)*60_000
+	return exactCount(op, text, count)
+}
+
+func epochDays(text string) float64 {
+	const op = "EpochDays"
+	m := xsdDate.FindStringSubmatch(text)
+	if m == nil {
+		raise("%s requires an xsd:date in its lexical form, got %q", op, text)
+	}
+	return exactCount(op, text, civilDays(op, text, m[1], m[2], m[3], m[4]))
+}
+
+// civilDays is the days since 1970-01-01 of a proleptic Gregorian date, year 0
+// being 1 BCE, once its day is one its month has.
+func civilDays(op, text, sign, yearDigits, month, day string) int64 {
+	if len(yearDigits) > maxYearDigits {
+		raiseCountOutOfRange(op, text)
+	}
+	year := asciiInt(yearDigits)
+	if sign == "-" {
+		year = -year
+	}
+	m := asciiInt(month)
+	d := asciiInt(day)
+	if d > daysInMonth(year, m) {
+		raise("%s requires a day its month has, got %q", op, text)
+	}
+	// Howard Hinnant's days_from_civil: a year counted from March, in 400-year
+	// eras of 146097 days. Go's / truncates toward zero, so a negative year's
+	// era takes 399 off first, which floors it.
+	y := year
+	if m <= 2 {
+		y--
+	}
+	era := y / 400
+	if y < 0 {
+		era = (y - 399) / 400
+	}
+	yearOfEra := y - era*400
+	dayOfYear := (153*((m+9)%12)+2)/5 + d - 1
+	dayOfEra := yearOfEra*365 + yearOfEra/4 - yearOfEra/100 + dayOfYear
+	return era*146_097 + dayOfEra - 719_468
+}
+
+func daysInMonth(year, month int64) int64 {
+	switch month {
+	case 2:
+		if year%4 == 0 && (year%100 != 0 || year%400 == 0) {
+			return 29
+		}
+		return 28
+	case 4, 6, 9, 11:
+		return 30
+	}
+	return 31
+}
+
+// zoneMinutes is a time zone's offset from UTC in minutes: the local time is
+// UTC plus it.
+func zoneMinutes(zone string) int64 {
+	if zone == "Z" {
+		return 0
+	}
+	minutes := asciiInt(zone[1:3])*60 + asciiInt(zone[4:6])
+	if zone[0] == '-' {
+		return -minutes
+	}
+	return minutes
+}
+
+// asciiInt reads digits a lexical form above has already matched as ASCII
+// digits, at most 15 of them.
+func asciiInt(digits string) int64 {
+	n, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil {
+		raise("could not read %q as a whole number: %v", digits, err)
+	}
+	return n
+}
+
+func exactCount(op, text string, count int64) float64 {
+	if count > maxExactCount || count < -maxExactCount {
+		raiseCountOutOfRange(op, text)
+	}
+	return float64(count)
+}
+
+func raiseCountOutOfRange(op, text string) {
+	raise("%s counts %q past 2^53 - 1 from 1970, beyond which a number no longer holds every whole value", op, text)
+}
+
+func foldEpochCount(typ string, source Value) float64 {
+	op := "EpochDays"
+	if typ == opEpochMilliseconds {
+		op = "EpochMilliseconds"
+	}
+	text, ok := source.(string)
+	if !ok {
+		raise("%s requires a string temporalSource, got %s", op, kindOf(source))
+	}
+	if typ == opEpochMilliseconds {
+		return epochMilliseconds(text)
+	}
+	return epochDays(text)
+}
+
 // --- ordered comparisons (unchanged from v1) --------------------------------
 
 func operand(node Node, key string) Node {
@@ -922,6 +1126,7 @@ func foldOrdered(node Node, ctx interface{}, opts *Options) (value float64, left
 var kernelByName = map[string]bool{
 	opNot: true, opIsAtLeast: true, opDominates: true, opContains: true,
 	opIsSet: true, opListItemAt: true, opMatches: true, opNameBasedUUID: true,
+	opEpochMilliseconds: true, opEpochDays: true,
 	integerLiteral: true, decimalLiteral: true, booleanLiteral: true,
 	stringLiteral: true, uriLiteral: true,
 }
@@ -1133,6 +1338,10 @@ func evalNode(node Node, ctx interface{}, resolve Resolve, opts *Options, frames
 		namespace := evalNode(operand(node, "uuidNamespace"), ctx, resolve, opts, frames)
 		name := evalNode(operand(node, "uuidName"), ctx, resolve, opts, frames)
 		return foldNameBasedUUID(node, namespace, name)
+	}
+
+	if typ == opEpochMilliseconds || typ == opEpochDays {
+		return foldEpochCount(typ, evalNode(operand(node, "temporalSource"), ctx, resolve, opts, frames))
 	}
 
 	if v, ok := kindPredicate(typ, nil); ok {
@@ -1379,6 +1588,11 @@ func explainPanic(node Node, ctx interface{}, resolve Resolve, opts *Options, fr
 		return &TraceNode{Type: typ, Value: foldNameBasedUUID(node, namespace.Value, name.Value), Children: []*TraceNode{namespace, name}}
 	}
 
+	if typ == opEpochMilliseconds || typ == opEpochDays {
+		source := explainPanic(operand(node, "temporalSource"), ctx, resolve, opts, frames)
+		return &TraceNode{Type: typ, Value: foldEpochCount(typ, source.Value), Children: []*TraceNode{source}}
+	}
+
 	if _, ok := kindPredicate(typ, nil); ok {
 		x := explainPanic(operand(node, "kindCheck"), ctx, resolve, opts, frames)
 		v, _ := kindPredicate(typ, x.Value)
@@ -1465,6 +1679,8 @@ var directChildren = map[string][]string{
 	opIsSet:             {"checkExpr"},
 	opMatches:           {"matchSource"},
 	opNameBasedUUID:     {"uuidNamespace", "uuidName"},
+	opEpochMilliseconds: {"temporalSource"},
+	opEpochDays:         {"temporalSource"},
 	tx + "/Count":       {"source"},
 	tx + "/Sum":         {"source"},
 	tx + "/Min":         {"source"},
