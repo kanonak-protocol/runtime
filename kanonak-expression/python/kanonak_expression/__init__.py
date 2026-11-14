@@ -15,9 +15,12 @@ leaf that returns a list. The kernel NEVER touches a graph.
 ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an
 aggregate over non-numeric elements, Min/Max/Average on empty, a nested list
 in Join, an out-of-subset Matches pattern, an EpochMilliseconds/EpochDays
-source that isn't a date-time or a date in its lexical form); predicates fail
-CLOSED (``Equals`` cross-kind, the ordering comparisons on non-numbers, and
-``StartsWith`` on any operand but a well-formed string yield ``0.0``).
+source that isn't a date-time or a date in its lexical form, a
+UriPublisher/UriPackage/UriName ref that isn't ``publisher/package/name``);
+predicates fail CLOSED (``Equals`` cross-kind, the ordering comparisons on
+non-numbers, and ``StartsWith`` on any operand but a well-formed string yield
+``0.0``). UriPublisher, UriPackage and UriName of anything but a ref fold to
+absence, the empty list: the spec's "undefined" for a source with no URI.
 
 LAMBDA BINDING: Filter/ListMap/ForEach bind their ``loopVar`` per element;
 within their bodies -- and only there -- a ``tx.VarRef`` naming a
@@ -44,7 +47,7 @@ import hashlib
 import json
 import math
 import re as _re
-from typing import Any, Callable, Dict, FrozenSet, List, Literal, Mapping, Optional, Tuple, Union
+from typing import Any, Callable, Dict, FrozenSet, List, Literal, Mapping, NamedTuple, Optional, Tuple, Union
 
 # The public API — what a 1.x release keeps compatible (runtime#29). Everything
 # else here is an implementation detail and may change in any release.
@@ -60,6 +63,7 @@ __all__ = [
     "Resolve",
     "ResolveRef",
     "TraceNode",
+    "UriSegments",
     "UuidFormat",
     "Value",
     "align",
@@ -71,6 +75,7 @@ __all__ = [
     "matches",
     "name_based_uuid",
     "starts_with",
+    "uri_segments",
     "validate_matches_pattern",
 ]
 
@@ -202,6 +207,9 @@ _MATCHES = f"{TX}/Matches"
 _NAME_BASED_UUID = f"{TX}/NameBasedUuid"
 _EPOCH_MILLISECONDS = f"{TX}/EpochMilliseconds"
 _EPOCH_DAYS = f"{TX}/EpochDays"
+_URI_PUBLISHER = f"{TX}/UriPublisher"
+_URI_PACKAGE = f"{TX}/UriPackage"
+_URI_NAME = f"{TX}/UriName"
 _STARTS_WITH = f"{TX}/StartsWith"
 
 # The literal classes the kernel answers itself (see ``_literal_value``).
@@ -820,6 +828,64 @@ def _fold_epoch_count(typ: str, source: Value) -> float:
 
 
 # ---------------------------------------------------------------------------
+# UriPublisher, UriPackage and UriName — a reference's three segments (1.5.0).
+# UriVersion is left to a host engine: a kernel ref is versionless, so it could
+# only ever answer the empty string, and an expression using it would look
+# checked and pass every value.
+# ---------------------------------------------------------------------------
+
+# The segments of a ref, by the operator that reads each: its name and the segment's index.
+_URI_SEGMENTS: Dict[str, Tuple[str, int]] = {
+    _URI_PUBLISHER: ("UriPublisher", 0),
+    _URI_PACKAGE: ("UriPackage", 1),
+    _URI_NAME: ("UriName", 2),
+}
+
+# The operand each reads its source from, as ``transformations`` names it.
+_URI_SEGMENT_OPERAND: Dict[str, str] = {
+    _URI_PUBLISHER: "uriPublisherOf",
+    _URI_PACKAGE: "uriPackageOf",
+    _URI_NAME: "uriNameOf",
+}
+
+
+class UriSegments(NamedTuple):
+    """A reference's three segments."""
+
+    publisher: str
+    package: str
+    name: str
+
+
+def uri_segments(uri: str) -> UriSegments:
+    """A reference's publisher, package and local name, exactly as
+    ``tx.UriPublisher``, ``tx.UriPackage`` and ``tx.UriName`` read a ref: its
+    canonical versionless URI split at its two ``/``. A URI that isn't
+    ``publisher/package/name``, with three non-empty segments and no version on
+    its package, is an :class:`ExpressionError`.
+
+    For a host engine that evaluates the three over its own value domain: it
+    calls this rather than split a URI itself."""
+    return _segments_of("uri_segments", uri)
+
+
+def _segments_of(op: str, uri: str) -> UriSegments:
+    segments = uri.split("/")
+    if len(segments) != 3 or any(not s for s in segments) or "@" in segments[1]:
+        raise ExpressionError(
+            f"{op} requires a reference of the form publisher/package/name, with no version, got {_quoted(uri)}"
+        )
+    return UriSegments(segments[0], segments[1], segments[2])
+
+
+def _fold_uri_segment(typ: str, source: Value) -> Value:
+    op, index = _URI_SEGMENTS[typ]
+    if not isinstance(source, Ref):
+        return []
+    return _segments_of(op, source.ref)[index]
+
+
+# ---------------------------------------------------------------------------
 # Ordered comparisons (unchanged from v1).
 # ---------------------------------------------------------------------------
 
@@ -872,7 +938,7 @@ _KERNEL_NODE_CLASSES: FrozenSet[str] = frozenset((
     *_ITERATOR_BODY,
     *_KIND_PREDICATES,
     _NOT, _IS_AT_LEAST, _DOMINATES, _CONTAINS, _IS_SET, _LIST_ITEM_AT, _MATCHES, _NAME_BASED_UUID,
-    _EPOCH_MILLISECONDS, _EPOCH_DAYS,
+    _EPOCH_MILLISECONDS, _EPOCH_DAYS, _URI_PUBLISHER, _URI_PACKAGE, _URI_NAME,
     _INTEGER_LITERAL, _DECIMAL_LITERAL, _BOOLEAN_LITERAL, _STRING_LITERAL, _URI_LITERAL,
 ))
 
@@ -1046,6 +1112,10 @@ def _go(
 
     if typ in (_EPOCH_MILLISECONDS, _EPOCH_DAYS):
         return _fold_epoch_count(typ, _go(_operand(node, typ, "temporalSource"), ctx, resolve, options, frames))
+
+    segment_operand = _URI_SEGMENT_OPERAND.get(typ)
+    if segment_operand is not None:
+        return _fold_uri_segment(typ, _go(_operand(node, typ, segment_operand), ctx, resolve, options, frames))
 
     kind_pred = _KIND_PREDICATES.get(typ)
     if kind_pred is not None:
@@ -1248,6 +1318,11 @@ def _trace(
         source = _trace(_operand(node, typ, "temporalSource"), ctx, resolve, options, frames)
         return TraceNode(typ, _fold_epoch_count(typ, source.value), [source])
 
+    segment_operand = _URI_SEGMENT_OPERAND.get(typ)
+    if segment_operand is not None:
+        source = _trace(_operand(node, typ, segment_operand), ctx, resolve, options, frames)
+        return TraceNode(typ, _fold_uri_segment(typ, source.value), [source])
+
     kind_pred = _KIND_PREDICATES.get(typ)
     if kind_pred is not None:
         x = _trace(_operand(node, typ, "kindCheck"), ctx, resolve, options, frames)
@@ -1294,6 +1369,9 @@ _DIRECT_CHILDREN: Dict[str, Tuple[str, ...]] = {
     _NAME_BASED_UUID: ("uuidNamespace", "uuidName"),
     _EPOCH_MILLISECONDS: ("temporalSource",),
     _EPOCH_DAYS: ("temporalSource",),
+    _URI_PUBLISHER: ("uriPublisherOf",),
+    _URI_PACKAGE: ("uriPackageOf",),
+    _URI_NAME: ("uriNameOf",),
     f"{TX}/Count": ("source",),
     f"{TX}/Sum": ("source",),
     f"{TX}/Min": ("source",),

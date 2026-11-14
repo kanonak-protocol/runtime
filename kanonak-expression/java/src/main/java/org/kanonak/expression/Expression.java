@@ -30,8 +30,10 @@ import java.util.regex.PatternSyntaxException;
  * <p>ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an aggregate over
  * non-numeric elements, Min/Max/Average on empty, a nested list in Join, an out-of-subset
  * Matches pattern, an EpochMilliseconds/EpochDays source that isn't a date-time or a date in
- * its lexical form); predicates fail CLOSED (Equals cross-kind, the ordering comparisons
- * on non-numbers, and StartsWith on any operand but a string yield 0).
+ * its lexical form, a UriPublisher/UriPackage/UriName ref that isn't publisher/package/name);
+ * UriPublisher, UriPackage and UriName of anything but a ref fold to absence, the empty list,
+ * the spec's "undefined" for a source with no URI; predicates fail CLOSED (Equals cross-kind,
+ * the ordering comparisons on non-numbers, and StartsWith on any operand but a string yield 0).
  *
  * <p>LAMBDA BINDING: Filter/ListMap/ForEach bind their loopVar per element; within their
  * bodies — and only there — a tx.VarRef naming a lexically-enclosing loopVar is resolved by
@@ -69,6 +71,9 @@ public final class Expression {
     private static final String NAME_BASED_UUID = TX + "/NameBasedUuid";
     private static final String EPOCH_MILLISECONDS = TX + "/EpochMilliseconds";
     private static final String EPOCH_DAYS = TX + "/EpochDays";
+    private static final String URI_PUBLISHER = TX + "/UriPublisher";
+    private static final String URI_PACKAGE = TX + "/UriPackage";
+    private static final String URI_NAME = TX + "/UriName";
     private static final String STARTS_WITH = TX + "/StartsWith";
 
     /** The literal classes the kernel answers itself (see {@code literalValue}). */
@@ -711,6 +716,55 @@ public final class Expression {
         return typ.equals(EPOCH_MILLISECONDS) ? epochMilliseconds(text) : epochDays(text);
     }
 
+    // -- UriPublisher, UriPackage and UriName: a reference's three segments (1.5.0). UriVersion
+    //    is left to a host engine: a kernel ref is versionless, so it could only ever answer the
+    //    empty string, and an expression using it would look checked and pass every value ----
+
+    /** The operand each reads its source from, as {@code transformations} names it. */
+    private static final Map<String, String> URI_SEGMENT_OPERAND = Map.of(
+        URI_PUBLISHER, "uriPublisherOf",
+        URI_PACKAGE, "uriPackageOf",
+        URI_NAME, "uriNameOf");
+
+    /** A reference's three segments. {@code package} is a Java keyword, so the package's is {@code packageName}. */
+    public record UriSegments(String publisher, String packageName, String name) {}
+
+    /**
+     * A reference's publisher, package and local name, exactly as {@code tx.UriPublisher},
+     * {@code tx.UriPackage} and {@code tx.UriName} read a ref: its canonical versionless URI split
+     * at its two {@code /}. A URI that isn't {@code publisher/package/name}, with three non-empty
+     * segments and no version on its package, is an {@link ExpressionError}.
+     *
+     * <p>For a host engine that evaluates the three over its own value domain: it calls this
+     * rather than split a URI itself.
+     *
+     * @throws ExpressionError when the URI isn't {@code publisher/package/name}, with three
+     *     non-empty segments and no version on its package
+     */
+    public static UriSegments uriSegments(String uri) {
+        return segmentsOf("uriSegments", uri);
+    }
+
+    private static UriSegments segmentsOf(String op, String uri) {
+        // A limit of -1, since split otherwise drops trailing empty segments, and "a/b/" would pass as "a/b".
+        String[] segments = uri.split("/", -1);
+        if (segments.length != 3 || segments[0].isEmpty() || segments[1].isEmpty() || segments[2].isEmpty()
+            || segments[1].contains("@")) {
+            throw err(op + " requires a reference of the form publisher/package/name, with no version, got \""
+                + uri + "\"");
+        }
+        return new UriSegments(segments[0], segments[1], segments[2]);
+    }
+
+    private static Object foldUriSegment(String typ, Object source) {
+        if (!(source instanceof Ref ref)) return new ArrayList<>();
+        switch (typ) {
+            case URI_PUBLISHER: return segmentsOf("UriPublisher", ref.uri).publisher();
+            case URI_PACKAGE: return segmentsOf("UriPackage", ref.uri).packageName();
+            default: return segmentsOf("UriName", ref.uri).name();
+        }
+    }
+
     // -- ordered comparisons (unchanged from v1) ------------------------------
 
     private static <C> String identityOf(Map<String, Object> node, C ctx, EvalOptions<C> opts) {
@@ -926,7 +980,7 @@ public final class Expression {
         classes.addAll(KIND_PREDICATES);
         Collections.addAll(classes,
             NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES, NAME_BASED_UUID,
-            EPOCH_MILLISECONDS, EPOCH_DAYS,
+            EPOCH_MILLISECONDS, EPOCH_DAYS, URI_PUBLISHER, URI_PACKAGE, URI_NAME,
             INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL);
         KERNEL_NODE_CLASSES = Collections.unmodifiableSet(classes);
     }
@@ -1108,6 +1162,11 @@ public final class Expression {
 
         if (typ.equals(EPOCH_MILLISECONDS) || typ.equals(EPOCH_DAYS)) {
             return foldEpochCount(typ, go(operand(node, typ, "temporalSource"), ctx, resolve, options, frames));
+        }
+
+        String segmentOperand = URI_SEGMENT_OPERAND.get(typ);
+        if (segmentOperand != null) {
+            return foldUriSegment(typ, go(operand(node, typ, segmentOperand), ctx, resolve, options, frames));
         }
 
         if (isKindPredicate(typ)) {
@@ -1304,6 +1363,12 @@ public final class Expression {
             return parent(typ, foldEpochCount(typ, source.value), listOf(source));
         }
 
+        String segmentOperand = URI_SEGMENT_OPERAND.get(typ);
+        if (segmentOperand != null) {
+            TraceNode source = trace(operand(node, typ, segmentOperand), ctx, resolve, options, frames);
+            return parent(typ, foldUriSegment(typ, source.value), listOf(source));
+        }
+
         if (isKindPredicate(typ)) {
             TraceNode x = trace(operand(node, typ, "kindCheck"), ctx, resolve, options, frames);
             return parent(typ, bool(kindPredicate(typ, x.value)), listOf(x));
@@ -1379,6 +1444,9 @@ public final class Expression {
             case NAME_BASED_UUID: return new String[] {"uuidNamespace", "uuidName"};
             case EPOCH_MILLISECONDS: return new String[] {"temporalSource"};
             case EPOCH_DAYS: return new String[] {"temporalSource"};
+            case URI_PUBLISHER: return new String[] {"uriPublisherOf"};
+            case URI_PACKAGE: return new String[] {"uriPackageOf"};
+            case URI_NAME: return new String[] {"uriNameOf"};
             case TX + "/Count": case TX + "/Sum": case TX + "/Min": case TX + "/Max": case TX + "/Average":
             case TX + "/Join": case TX + "/Reverse":
                 return new String[] {"source"};

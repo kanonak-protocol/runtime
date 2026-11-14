@@ -101,9 +101,11 @@ namespace Kanonak.Expression
     /// and comparison results remain 1/0; absence is the empty list — there is no null
     /// value. The kernel NEVER touches a graph.</para>
     ///
-    /// <para>ERROR CONTRACT: computations fail LOUD; predicates fail CLOSED (Equals
-    /// cross-kind, the ordering comparisons on non-numbers, and StartsWith on any operand
-    /// but a string yield 0).</para>
+    /// <para>ERROR CONTRACT: computations fail LOUD, a UriPublisher/UriPackage/UriName ref
+    /// that isn't publisher/package/name among them; UriPublisher, UriPackage and UriName of
+    /// anything but a ref fold to absence, the empty list, the spec's "undefined" for a source
+    /// with no URI; predicates fail CLOSED (Equals cross-kind, the ordering comparisons on
+    /// non-numbers, and StartsWith on any operand but a string yield 0).</para>
     ///
     /// <para>MATCHES: the pinned RE2-compatible XSD-regex subset. .NET's Regex counts
     /// UTF-16 CODE UNITS — the pinned unit is CODE POINTS — so this engine owes the
@@ -322,6 +324,9 @@ namespace Kanonak.Expression
         const string NAME_BASED_UUID = TX + "/NameBasedUuid";
         const string EPOCH_MILLISECONDS = TX + "/EpochMilliseconds";
         const string EPOCH_DAYS = TX + "/EpochDays";
+        const string URI_PUBLISHER = TX + "/UriPublisher";
+        const string URI_PACKAGE = TX + "/UriPackage";
+        const string URI_NAME = TX + "/UriName";
         const string STARTS_WITH = TX + "/StartsWith";
 
         // The literal classes the kernel answers itself (see LiteralValue).
@@ -955,6 +960,55 @@ namespace Kanonak.Expression
             return typ == EPOCH_MILLISECONDS ? EpochMilliseconds(text) : EpochDays(text);
         }
 
+        // -- UriPublisher, UriPackage and UriName: a reference's three segments (1.5.0). UriVersion
+        //    is left to a host engine: a kernel ref is versionless, so it could only ever answer the
+        //    empty string, and an expression using it would look checked and pass every value ---
+
+        /// <summary>The operand each reads its source from, as <c>transformations</c> names it.</summary>
+        static readonly Dictionary<string, string> UriSegmentOperands = new Dictionary<string, string>
+        {
+            [URI_PUBLISHER] = "uriPublisherOf",
+            [URI_PACKAGE] = "uriPackageOf",
+            [URI_NAME] = "uriNameOf",
+        };
+
+        /// <summary>
+        /// A reference's publisher, package and local name, exactly as <c>tx.UriPublisher</c>,
+        /// <c>tx.UriPackage</c> and <c>tx.UriName</c> read a ref: its canonical versionless URI
+        /// split at its two <c>/</c>. A URI that isn't <c>publisher/package/name</c>, with three
+        /// non-empty segments and no version on its package, is an <see cref="ExpressionError"/>.
+        /// </summary>
+        /// <remarks>For a host engine that evaluates the three over its own value domain: it calls
+        /// this rather than split a URI itself.</remarks>
+        /// <exception cref="ExpressionError">The URI isn't <c>publisher/package/name</c>, with three
+        /// non-empty segments and no version on its package.</exception>
+        /// <exception cref="ArgumentNullException"><paramref name="uri"/> is null.</exception>
+        public static (string Publisher, string Package, string Name) UriSegments(string uri)
+        {
+            if (uri == null) throw new ArgumentNullException(nameof(uri));
+            return SegmentsOf("UriSegments", uri);
+        }
+
+        static (string Publisher, string Package, string Name) SegmentsOf(string op, string uri)
+        {
+            var segments = uri.Split('/');
+            if (segments.Length != 3 || segments[0].Length == 0 || segments[1].Length == 0 || segments[2].Length == 0
+                || segments[1].IndexOf('@') >= 0)
+                throw Err(op + " requires a reference of the form publisher/package/name, with no version, got \"" + uri + "\"");
+            return (segments[0], segments[1], segments[2]);
+        }
+
+        static object FoldUriSegment(string typ, object source)
+        {
+            if (!(source is Ref r)) return new List<object>();
+            switch (typ)
+            {
+                case URI_PUBLISHER: return SegmentsOf("UriPublisher", r.Uri).Publisher;
+                case URI_PACKAGE: return SegmentsOf("UriPackage", r.Uri).Package;
+                default: return SegmentsOf("UriName", r.Uri).Name;
+            }
+        }
+
         // -- ordered comparisons (unchanged from v1) ---------------------------
 
         static string IdentityOf(ExprNode node, object ctx, EvalOptions opts)
@@ -1006,7 +1060,7 @@ namespace Kanonak.Expression
             set.UnionWith(new[]
             {
                 NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES, NAME_BASED_UUID,
-                EPOCH_MILLISECONDS, EPOCH_DAYS,
+                EPOCH_MILLISECONDS, EPOCH_DAYS, URI_PUBLISHER, URI_PACKAGE, URI_NAME,
                 INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL,
             });
             return set;
@@ -1213,6 +1267,11 @@ namespace Kanonak.Expression
                 return FoldEpochCount(typ, Go(Operand(node, "temporalSource"), ctx, resolve, options, frames));
             }
 
+            if (UriSegmentOperands.TryGetValue(typ, out var segmentOperand))
+            {
+                return FoldUriSegment(typ, Go(Operand(node, segmentOperand), ctx, resolve, options, frames));
+            }
+
             if (IsKindPredicate(typ))
             {
                 var x = Go(Operand(node, "kindCheck"), ctx, resolve, options, frames);
@@ -1267,6 +1326,9 @@ namespace Kanonak.Expression
                 case NAME_BASED_UUID: return new[] { "uuidNamespace", "uuidName" };
                 case EPOCH_MILLISECONDS: return new[] { "temporalSource" };
                 case EPOCH_DAYS: return new[] { "temporalSource" };
+                case URI_PUBLISHER: return new[] { "uriPublisherOf" };
+                case URI_PACKAGE: return new[] { "uriPackageOf" };
+                case URI_NAME: return new[] { "uriNameOf" };
                 case TX + "/Count": case TX + "/Sum": case TX + "/Min": case TX + "/Max": case TX + "/Average":
                 case TX + "/Join": case TX + "/Reverse":
                     return new[] { "source" };
@@ -1528,6 +1590,12 @@ namespace Kanonak.Expression
             {
                 var source = Trace(Operand(node, "temporalSource"), ctx, resolve, options, frames);
                 return Parent(typ, FoldEpochCount(typ, source.Value), source);
+            }
+
+            if (UriSegmentOperands.TryGetValue(typ, out var segmentOperand))
+            {
+                var source = Trace(Operand(node, segmentOperand), ctx, resolve, options, frames);
+                return Parent(typ, FoldUriSegment(typ, source.Value), source);
             }
 
             if (IsKindPredicate(typ))

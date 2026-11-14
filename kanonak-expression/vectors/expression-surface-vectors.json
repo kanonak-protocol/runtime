@@ -218,6 +218,26 @@
       "expected": true
     },
     {
+      "id": "evaluates-tx-UriPublisher",
+      "type": "kanonak.org/transformations/UriPublisher",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-UriPackage",
+      "type": "kanonak.org/transformations/UriPackage",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-UriName",
+      "type": "kanonak.org/transformations/UriName",
+      "expected": true
+    },
+    {
+      "id": "evaluates-tx-UriVersion",
+      "type": "kanonak.org/transformations/UriVersion",
+      "expected": false
+    },
+    {
       "id": "evaluates-math-Power",
       "type": "kanonak.org/math/Power",
       "expected": true

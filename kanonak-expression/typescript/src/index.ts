@@ -48,7 +48,11 @@
  *     element, `Min`/`Max`/`Average` on an empty list, a nested list in
  *     `Join`, a non-string `Matches` source, an out-of-subset `Matches`
  *     pattern, an `EpochMilliseconds`/`EpochDays` source that isn't a date-time
- *     or a date in its lexical form — all raise `ExpressionError`, never coerce.
+ *     or a date in its lexical form, a `UriPublisher`/`UriPackage`/`UriName`
+ *     ref that isn't `publisher/package/name` — all raise `ExpressionError`,
+ *     never coerce.
+ *   - `UriPublisher`, `UriPackage` and `UriName` of anything but a ref fold to
+ *     absence, the empty list: the spec's "undefined" for a source with no URI.
  *   - PREDICATES FAIL CLOSED: `Equals` and the ordering comparisons on
  *     cross-kind or non-numeric operands, and `StartsWith` on any operand but
  *     a string, return `0`, never error (the SHACL
@@ -223,6 +227,9 @@ const MATCHES = `${TX}/Matches`;
 const NAME_BASED_UUID = `${TX}/NameBasedUuid`;
 const EPOCH_MILLISECONDS = `${TX}/EpochMilliseconds`;
 const EPOCH_DAYS = `${TX}/EpochDays`;
+const URI_PUBLISHER = `${TX}/UriPublisher`;
+const URI_PACKAGE = `${TX}/UriPackage`;
+const URI_NAME = `${TX}/UriName`;
 const STARTS_WITH = `${TX}/StartsWith`;
 
 /** The literal classes the kernel answers itself (see `literalValue`). */
@@ -939,6 +946,65 @@ function foldEpochCount(type: string, source: Value): number {
 }
 
 // ---------------------------------------------------------------------------
+// UriPublisher, UriPackage and UriName — a reference's three segments (1.5.0).
+// UriVersion is left to a host engine: a kernel ref is versionless, so it could
+// only ever answer the empty string, and an expression using it would look
+// checked and pass every value.
+// ---------------------------------------------------------------------------
+
+/** The segments of a ref, by the operator that reads each. */
+const URI_SEGMENTS: ReadonlyMap<string, { op: string; index: 0 | 1 | 2 }> = new Map([
+  [URI_PUBLISHER, { op: 'UriPublisher', index: 0 }],
+  [URI_PACKAGE, { op: 'UriPackage', index: 1 }],
+  [URI_NAME, { op: 'UriName', index: 2 }],
+]);
+
+/** The operand each reads its source from, as `transformations` names it. */
+const URI_SEGMENT_OPERAND: ReadonlyMap<string, string> = new Map([
+  [URI_PUBLISHER, 'uriPublisherOf'],
+  [URI_PACKAGE, 'uriPackageOf'],
+  [URI_NAME, 'uriNameOf'],
+]);
+
+/** A reference's three segments. */
+export interface UriSegments {
+  publisher: string;
+  package: string;
+  name: string;
+}
+
+/**
+ * A reference's publisher, package and local name, exactly as
+ * `tx.UriPublisher`, `tx.UriPackage` and `tx.UriName` read a ref: its
+ * canonical versionless URI split at its two `/`. A URI that isn't
+ * `publisher/package/name`, with three non-empty segments and no version on
+ * its package, is an `ExpressionError`.
+ *
+ * For a host engine that evaluates the three over its own value domain: it
+ * calls this rather than split a URI itself.
+ */
+export function uriSegments(uri: string): UriSegments {
+  return segmentsOf('uriSegments', uri);
+}
+
+function segmentsOf(op: string, uri: string): UriSegments {
+  const segments = uri.split('/');
+  if (segments.length !== 3 || segments.some((s) => s.length === 0) || segments[1]!.includes('@')) {
+    throw new ExpressionError(
+      `${op} requires a reference of the form publisher/package/name, with no version, got ${JSON.stringify(uri)}`,
+    );
+  }
+  return { publisher: segments[0]!, package: segments[1]!, name: segments[2]! };
+}
+
+function foldUriSegment(type: string, source: Value): Value {
+  const { op, index } = URI_SEGMENTS.get(type)!;
+  if (!isRef(source)) return [];
+  const segments = segmentsOf(op, source.ref);
+  return index === 0 ? segments.publisher : index === 1 ? segments.package : segments.name;
+}
+
+// ---------------------------------------------------------------------------
 // Ordered comparisons (unchanged from v1).
 // ---------------------------------------------------------------------------
 
@@ -1008,7 +1074,7 @@ const KERNEL_NODE_CLASSES: ReadonlySet<string> = new Set<string>([
   ...Object.keys(ITERATOR_BODY),
   ...Object.keys(KIND_PREDICATES),
   NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES, NAME_BASED_UUID,
-  EPOCH_MILLISECONDS, EPOCH_DAYS,
+  EPOCH_MILLISECONDS, EPOCH_DAYS, URI_PUBLISHER, URI_PACKAGE, URI_NAME,
   INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL,
 ]);
 
@@ -1207,6 +1273,11 @@ function evalNode<C>(
 
   if (node.type === EPOCH_MILLISECONDS || node.type === EPOCH_DAYS) {
     return foldEpochCount(node.type, evalNode(operand(node, 'temporalSource'), ctx, resolve, options, frames));
+  }
+
+  const segmentOperand = URI_SEGMENT_OPERAND.get(node.type);
+  if (segmentOperand !== undefined) {
+    return foldUriSegment(node.type, evalNode(operand(node, segmentOperand), ctx, resolve, options, frames));
   }
 
   const kind = KIND_PREDICATES[node.type];
@@ -1449,6 +1520,12 @@ export function explain<C = unknown>(
       return { type: n.type, value: foldEpochCount(n.type, source.value), children: [source] };
     }
 
+    const segmentOperand = URI_SEGMENT_OPERAND.get(n.type);
+    if (segmentOperand !== undefined) {
+      const source = trace(operand(n, segmentOperand), c, frames);
+      return { type: n.type, value: foldUriSegment(n.type, source.value), children: [source] };
+    }
+
     const kind = KIND_PREDICATES[n.type];
     if (kind) {
       const x = trace(operand(n, 'kindCheck'), c, frames);
@@ -1514,6 +1591,9 @@ const DIRECT_CHILDREN: Record<string, readonly string[]> = {
   [NAME_BASED_UUID]: ['uuidNamespace', 'uuidName'],
   [EPOCH_MILLISECONDS]: ['temporalSource'],
   [EPOCH_DAYS]: ['temporalSource'],
+  [URI_PUBLISHER]: ['uriPublisherOf'],
+  [URI_PACKAGE]: ['uriPackageOf'],
+  [URI_NAME]: ['uriNameOf'],
   [`${TX}/Count`]: ['source'],
   [`${TX}/Sum`]: ['source'],
   [`${TX}/Min`]: ['source'],

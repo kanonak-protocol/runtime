@@ -16,9 +16,12 @@
 //! aggregate over non-numeric elements, Min/Max/Average on empty, a nested
 //! list in Join, an out-of-subset Matches pattern, an
 //! `EpochMilliseconds`/`EpochDays` source that isn't a date-time or a date in
-//! its lexical form); predicates fail CLOSED
+//! its lexical form, a `UriPublisher`/`UriPackage`/`UriName` ref that isn't
+//! `publisher/package/name`); predicates fail CLOSED
 //! (`Equals` cross-kind, the ordering comparisons on non-numbers, and
 //! `StartsWith` on any operand but a string yield `0.0`, never an error).
+//! `UriPublisher`, `UriPackage` and `UriName` of anything but a ref fold to
+//! absence, the empty list: the spec's "undefined" for a source with no URI.
 //!
 //! LAMBDA BINDING: the iterating operators (Filter/ListMap/ForEach) bind
 //! their `loopVar` per element; within their bodies — and only there — a
@@ -193,6 +196,9 @@ const MATCHES: &str = "kanonak.org/transformations/Matches";
 const NAME_BASED_UUID: &str = "kanonak.org/transformations/NameBasedUuid";
 const EPOCH_MILLISECONDS: &str = "kanonak.org/transformations/EpochMilliseconds";
 const EPOCH_DAYS: &str = "kanonak.org/transformations/EpochDays";
+const URI_PUBLISHER: &str = "kanonak.org/transformations/UriPublisher";
+const URI_PACKAGE: &str = "kanonak.org/transformations/UriPackage";
+const URI_NAME: &str = "kanonak.org/transformations/UriName";
 const STARTS_WITH: &str = "kanonak.org/transformations/StartsWith";
 
 /// The literal classes the kernel answers itself (see `literal_value`).
@@ -1114,6 +1120,68 @@ fn fold_epoch_count(typ: &str, source: &EvalValue) -> Result<EvalValue, Expressi
 }
 
 // ---------------------------------------------------------------------------
+// UriPublisher, UriPackage and UriName — a reference's three segments (1.5.0).
+// UriVersion is left to a host engine: a kernel ref is versionless, so it could
+// only ever answer the empty string, and an expression using it would look
+// checked and pass every value.
+// ---------------------------------------------------------------------------
+
+/// The operand each reads its source from, as `transformations` names it.
+fn uri_segment_operand(typ: &str) -> Option<&'static str> {
+    match typ {
+        URI_PUBLISHER => Some("uriPublisherOf"),
+        URI_PACKAGE => Some("uriPackageOf"),
+        URI_NAME => Some("uriNameOf"),
+        _ => None,
+    }
+}
+
+/// A reference's three segments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UriSegments {
+    pub publisher: String,
+    pub package: String,
+    pub name: String,
+}
+
+/// A reference's publisher, package and local name, exactly as
+/// `tx.UriPublisher`, `tx.UriPackage` and `tx.UriName` read a ref: its
+/// canonical versionless URI split at its two `/`. A URI that isn't
+/// `publisher/package/name`, with three non-empty segments and no version on
+/// its package, is an [`ExpressionError`].
+///
+/// For a host engine that evaluates the three over its own value domain: it
+/// calls this rather than split a URI itself.
+pub fn uri_segments(uri: &str) -> Result<UriSegments, ExpressionError> {
+    segments_of("uri_segments", uri)
+}
+
+fn segments_of(op: &str, uri: &str) -> Result<UriSegments, ExpressionError> {
+    match uri.split('/').collect::<Vec<_>>()[..] {
+        [publisher, package, name]
+            if !publisher.is_empty() && !package.is_empty() && !name.is_empty() && !package.contains('@') =>
+        {
+            Ok(UriSegments { publisher: publisher.into(), package: package.into(), name: name.into() })
+        }
+        _ => err(format!(
+            "{op} requires a reference of the form publisher/package/name, with no version, got {uri:?}"
+        )),
+    }
+}
+
+fn fold_uri_segment(typ: &str, source: &EvalValue) -> Result<EvalValue, ExpressionError> {
+    let uri = match source {
+        EvalValue::Ref(uri) => uri,
+        _ => return Ok(EvalValue::List(Vec::new())),
+    };
+    Ok(EvalValue::Str(match typ {
+        URI_PUBLISHER => segments_of("UriPublisher", uri)?.publisher,
+        URI_PACKAGE => segments_of("UriPackage", uri)?.package,
+        _ => segments_of("UriName", uri)?.name,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Ordered comparisons (unchanged from v1).
 // ---------------------------------------------------------------------------
 
@@ -1181,7 +1249,7 @@ fn kernel_node_classes() -> &'static HashSet<&'static str> {
             .chain(KIND_PREDICATES.iter().copied())
             .chain([
                 NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES,
-                NAME_BASED_UUID, EPOCH_MILLISECONDS, EPOCH_DAYS,
+                NAME_BASED_UUID, EPOCH_MILLISECONDS, EPOCH_DAYS, URI_PUBLISHER, URI_PACKAGE, URI_NAME,
                 INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL,
             ])
             .collect()
@@ -1421,6 +1489,11 @@ fn go<C>(
     if typ == EPOCH_MILLISECONDS || typ == EPOCH_DAYS {
         let source = go(operand(node, typ, "temporalSource")?, ctx, resolve, options, frames)?;
         return fold_epoch_count(typ, &source);
+    }
+
+    if let Some(of) = uri_segment_operand(typ) {
+        let source = go(operand(node, typ, of)?, ctx, resolve, options, frames)?;
+        return fold_uri_segment(typ, &source);
     }
 
     if is_kind_predicate(typ) {
@@ -1683,6 +1756,12 @@ fn trace<C>(
         return Ok(parent(typ, v, vec![source]));
     }
 
+    if let Some(of) = uri_segment_operand(typ) {
+        let source = trace(operand(node, typ, of)?, ctx, resolve, options, frames)?;
+        let v = fold_uri_segment(typ, &source.value)?;
+        return Ok(parent(typ, v, vec![source]));
+    }
+
     if is_kind_predicate(typ) {
         let x = trace(operand(node, typ, "kindCheck")?, ctx, resolve, options, frames)?;
         let v = kind_predicate(typ, &x.value).unwrap();
@@ -1752,6 +1831,9 @@ fn direct_children(typ: &str) -> Option<&'static [&'static str]> {
         MATCHES => Some(&["matchSource"]),
         NAME_BASED_UUID => Some(&["uuidNamespace", "uuidName"]),
         EPOCH_MILLISECONDS | EPOCH_DAYS => Some(&["temporalSource"]),
+        URI_PUBLISHER => Some(&["uriPublisherOf"]),
+        URI_PACKAGE => Some(&["uriPackageOf"]),
+        URI_NAME => Some(&["uriNameOf"]),
         "kanonak.org/transformations/Count"
         | "kanonak.org/transformations/Sum"
         | "kanonak.org/transformations/Min"
