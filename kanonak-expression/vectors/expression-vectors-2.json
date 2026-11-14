@@ -1,6 +1,6 @@
 {
   "expressionRuntimeVersion": "2",
-  "description": "Behavior parity vectors for expressionRuntimeVersion 2 — the value-domain extension (number | string | ref | list), the list/aggregate/membership family, polymorphic Equals, kind predicates, lambda binding (Filter/ListMap/ForEach), Matches over the pinned RE2-compatible XSD-regex subset, NameBasedUuid, the RFC 9562 version 5 UUID of a name (1.2.0), and StartsWith, a prefix test of one string by another (1.3.0). Runs IN ADDITION to expression-vectors.json (v1), every vector of which must pass unchanged under a v2 kernel — that file is the numeric-regression gate. `expected` and `env` values are Values: JSON numbers, strings, arrays (lists), and {\"ref\": \"publisher/package/name\"} objects (refs). Normative list-family semantics are the SDK reference engine's: Sum on empty = 0; Min/Max/Average on empty = loud error; Count type-agnostic; absence is the empty list; predicates fail closed on type-confused operands, computations fail loud.",
+  "description": "Behavior parity vectors for expressionRuntimeVersion 2 — the value-domain extension (number | string | ref | list), the list/aggregate/membership family, polymorphic Equals, kind predicates, lambda binding (Filter/ListMap/ForEach), Matches over the pinned RE2-compatible XSD-regex subset, NameBasedUuid, the RFC 9562 version 5 UUID of a name (1.2.0), StartsWith, a prefix test of one string by another (1.3.0), and EpochMilliseconds and EpochDays, a date-time or a date read as the whole milliseconds or days since 1970-01-01 (1.4.0). Runs IN ADDITION to expression-vectors.json (v1), every vector of which must pass unchanged under a v2 kernel — that file is the numeric-regression gate. `expected` and `env` values are Values: JSON numbers, strings, arrays (lists), and {\"ref\": \"publisher/package/name\"} objects (refs). Normative list-family semantics are the SDK reference engine's: Sum on empty = 0; Min/Max/Average on empty = loud error; Count type-agnostic; absence is the empty list; predicates fail closed on type-confused operands, computations fail loud.",
   "vectors": [
     {
       "id": "string-literal",
@@ -2106,6 +2106,649 @@
       },
       "env": { "xs": ["abc"] },
       "expected": 0
+    },
+    {
+      "id": "epoch-milliseconds-utc",
+      "description": "The whole milliseconds since 1970-01-01T00:00:00Z",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T03:13:21Z" }
+      },
+      "expected": 1794626001000
+    },
+    {
+      "id": "epoch-milliseconds-the-epoch",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "1970-01-01T00:00:00Z" }
+      },
+      "expected": 0
+    },
+    {
+      "id": "epoch-milliseconds-positive-zone",
+      "description": "The local time is UTC plus the zone's offset, so the instant is the same as in UTC",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T08:43:21+05:30" }
+      },
+      "expected": 1794626001000
+    },
+    {
+      "id": "epoch-milliseconds-negative-zone",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-13T22:13:21-05:00" }
+      },
+      "expected": 1794626001000
+    },
+    {
+      "id": "epoch-milliseconds-zone-plus-fourteen",
+      "description": "+14:00 is the widest offset XSD allows",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T17:13:21+14:00" }
+      },
+      "expected": 1794626001000
+    },
+    {
+      "id": "epoch-milliseconds-zone-minus-fourteen",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-13T13:13:21-14:00" }
+      },
+      "expected": 1794626001000
+    },
+    {
+      "id": "epoch-milliseconds-fraction-tenths",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T03:13:21.5Z" }
+      },
+      "expected": 1794626001500
+    },
+    {
+      "id": "epoch-milliseconds-fraction-floored",
+      "description": "A fraction finer than a millisecond is floored, so every port gives the same whole number",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T03:13:21.9999Z" }
+      },
+      "expected": 1794626001999
+    },
+    {
+      "id": "epoch-milliseconds-before-1970-floors-to-the-earlier",
+      "description": "-0.5 ms floors toward the earlier instant, -1, never toward zero",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "1969-12-31T23:59:59.9995Z" }
+      },
+      "expected": -1
+    },
+    {
+      "id": "epoch-milliseconds-end-of-day",
+      "description": "24:00:00 is the first instant of the next day",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T24:00:00Z" }
+      },
+      "expected": 1794700800000
+    },
+    {
+      "id": "epoch-milliseconds-end-of-day-crosses-the-year",
+      "description": "24:00:00 may carry a fraction of zeros",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-12-31T24:00:00.000Z" }
+      },
+      "expected": 1798761600000
+    },
+    {
+      "id": "epoch-milliseconds-leap-day",
+      "description": "2000 is divisible by 400, so it has a 29 February",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2000-02-29T12:00:00Z" }
+      },
+      "expected": 951825600000
+    },
+    {
+      "id": "epoch-milliseconds-year-zero",
+      "description": "Year 0 is 1 BCE in XSD 1.1's proleptic Gregorian calendar",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "0000-01-01T00:00:00Z" }
+      },
+      "expected": -62167219200000
+    },
+    {
+      "id": "epoch-milliseconds-minus-zero-year",
+      "description": "-0000 is in the lexical form, and names year 0",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "-0000-01-01T00:00:00Z" }
+      },
+      "expected": -62167219200000
+    },
+    {
+      "id": "epoch-milliseconds-negative-year",
+      "description": "Year -1 is the year before year 0",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "-0001-12-31T23:59:59Z" }
+      },
+      "expected": -62167219201000
+    },
+    {
+      "id": "epoch-milliseconds-five-digit-year",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "10000-01-01T00:00:00Z" }
+      },
+      "expected": 253402300800000
+    },
+    {
+      "id": "epoch-milliseconds-largest-exact",
+      "description": "The latest instant whose count is at most 2^53 - 1, its sub-millisecond digit floored",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "287396-10-12T08:59:00.9919Z" }
+      },
+      "expected": 9007199254740991
+    },
+    {
+      "id": "epoch-milliseconds-smallest-exact",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "-283457-03-21T15:00:59.009Z" }
+      },
+      "expected": -9007199254740991
+    },
+    {
+      "id": "epoch-milliseconds-reads-a-bound-value",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/VarRef", "varName": "closedAt" }
+      },
+      "env": { "closedAt": "2026-11-14T03:13:21Z" },
+      "expected": 1794626001000
+    },
+    {
+      "id": "epoch-milliseconds-orders-two-date-times",
+      "description": "Read as numbers, two date-times order as their instants do",
+      "expr": {
+        "type": "kanonak.org/transformations/LessThan",
+        "compareLeft": {
+          "type": "kanonak.org/transformations/EpochMilliseconds",
+          "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-02-28T23:59:59Z" }
+        },
+        "compareRight": {
+          "type": "kanonak.org/transformations/EpochMilliseconds",
+          "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-03-01T00:00:00Z" }
+        }
+      },
+      "expected": 1
+    },
+    {
+      "id": "epoch-milliseconds-orders-across-zones",
+      "description": "09:00 at +01:00 is 08:00 in UTC, before 08:30 in UTC, though its text sorts after",
+      "expr": {
+        "type": "kanonak.org/transformations/LessThanOrEqual",
+        "compareLeft": {
+          "type": "kanonak.org/transformations/EpochMilliseconds",
+          "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T09:00:00+01:00" }
+        },
+        "compareRight": {
+          "type": "kanonak.org/transformations/EpochMilliseconds",
+          "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T08:30:00Z" }
+        }
+      },
+      "expected": 1
+    },
+    {
+      "id": "epoch-milliseconds-subtract-gives-the-wait",
+      "expr": {
+        "type": "kanonak.org/transformations/Subtract",
+        "arithLeft": {
+          "type": "kanonak.org/transformations/EpochMilliseconds",
+          "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T10:00:00+01:00" }
+        },
+        "arithRight": {
+          "type": "kanonak.org/transformations/EpochMilliseconds",
+          "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T08:00:00Z" }
+        }
+      },
+      "expected": 3600000
+    },
+    {
+      "id": "epoch-milliseconds-no-time-zone",
+      "description": "The instant of a date-time without a time zone is indeterminate",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T03:13:21" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-date-is-not-a-date-time",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-lower-case-separator",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14t03:13:21Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-lower-case-zone",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T03:13:21z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-space-separator",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14 03:13:21Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-leading-whitespace",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": " 2026-11-14T03:13:21Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-trailing-newline",
+      "description": "A $ that matches before a final newline would accept this",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T03:13:21Z\n" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-missing-seconds",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T03:13Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-fraction-without-digits",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T03:13:21.Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-leap-second",
+      "description": "XSD 1.1's seconds stop at 59",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2016-12-31T23:59:60Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-end-of-day-past-midnight",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T24:00:01Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-end-of-day-nonzero-fraction",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T24:00:00.5Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-not-a-leap-year",
+      "description": "2100 is divisible by 100 and not by 400",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2100-02-29T00:00:00Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-day-its-month-lacks",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-04-31T00:00:00Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-zone-past-fourteen",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T03:13:21+14:01" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-zone-without-colon",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T03:13:21+0530" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-year-with-extra-leading-zero",
+      "description": "Leading zeros only bring a year up to four digits",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "02026-11-14T03:13:21Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-three-digit-year",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "202-11-14T03:13:21Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-plus-signed-year",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "+2026-11-14T03:13:21Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-non-ascii-digits",
+      "description": "Only the ASCII digits 0-9 are digits here, never a class such as \\d that admits others",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "\u0662\u0660\u0662\u0666-11-14T03:13:21Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-past-the-largest-exact",
+      "description": "A count past 2^53 - 1 is refused, since a number no longer holds every whole value there",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "287396-10-12T08:59:00.992Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-past-the-smallest-exact",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "-283457-03-21T15:00:59.008Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-sixteen-digit-year",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "1000000000000000-01-01T00:00:00Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-year-past-64-bit-milliseconds",
+      "description": "Times 86400000 its day count wraps in 64 bits to -8000751616, a count in range: refused before multiplying",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "584556019-01-01T00:00:00Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-year-wraps-into-range",
+      "description": "Times 86400000 its day count wraps in 64 bits to 793450008870912, a count in range: refused before multiplying",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "10522000000-01-01T00:00:00Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-empty-string",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-absent",
+      "description": "Absence is the empty list, which isn't a date-time: a value that may be absent is guarded with IsSet",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/VarRef", "varName": "closedAt" }
+      },
+      "env": { "closedAt": [] },
+      "expectError": true
+    },
+    {
+      "id": "epoch-milliseconds-number",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochMilliseconds",
+        "temporalSource": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 1763090001000 }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-days-the-epoch",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "1970-01-01" }
+      },
+      "expected": 0
+    },
+    {
+      "id": "epoch-days-a-day",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14" }
+      },
+      "expected": 20771
+    },
+    {
+      "id": "epoch-days-before-1970",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "1969-12-31" }
+      },
+      "expected": -1
+    },
+    {
+      "id": "epoch-days-zone-ignored-plus",
+      "description": "A date's time zone is read and ignored, so it counts the day as written",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-03-01+14:00" }
+      },
+      "expected": 20513
+    },
+    {
+      "id": "epoch-days-zone-ignored-minus",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-03-01-12:00" }
+      },
+      "expected": 20513
+    },
+    {
+      "id": "epoch-days-zone-ignored-utc",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-03-01Z" }
+      },
+      "expected": 20513
+    },
+    {
+      "id": "epoch-days-leap-day",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2000-02-29" }
+      },
+      "expected": 11016
+    },
+    {
+      "id": "epoch-days-year-zero",
+      "description": "Year 0 is divisible by 400, so it's a leap year",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "0000-03-01" }
+      },
+      "expected": -719468
+    },
+    {
+      "id": "epoch-days-negative-leap-year",
+      "description": "-4 is divisible by 4, so it's a leap year",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "-0004-02-29" }
+      },
+      "expected": -720930
+    },
+    {
+      "id": "epoch-days-largest-exact",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "24660873954867-01-09" }
+      },
+      "expected": 9007199254740991
+    },
+    {
+      "id": "epoch-days-smallest-exact",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "-24660873950928-12-23" }
+      },
+      "expected": -9007199254740991
+    },
+    {
+      "id": "epoch-days-orders-two-dates",
+      "description": "The order that a LessThan over the two strings can never give",
+      "expr": {
+        "type": "kanonak.org/transformations/LessThan",
+        "compareLeft": {
+          "type": "kanonak.org/transformations/EpochDays",
+          "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-02-28" }
+        },
+        "compareRight": {
+          "type": "kanonak.org/transformations/EpochDays",
+          "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-03-01" }
+        }
+      },
+      "expected": 1
+    },
+    {
+      "id": "epoch-days-subtract-counts-the-days",
+      "expr": {
+        "type": "kanonak.org/transformations/Subtract",
+        "arithLeft": {
+          "type": "kanonak.org/transformations/EpochDays",
+          "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-03-01" }
+        },
+        "arithRight": {
+          "type": "kanonak.org/transformations/EpochDays",
+          "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-02-28" }
+        }
+      },
+      "expected": 1
+    },
+    {
+      "id": "epoch-days-date-time-is-not-a-date",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-11-14T00:00:00Z" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-days-not-a-leap-year",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "1900-02-29" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-days-negative-century-not-a-leap-year",
+      "description": "-100 is divisible by 100 and not by 400",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "-0100-02-29" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-days-day-its-month-lacks",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-02-30" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-days-zone-past-fourteen",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-03-01-14:30" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-days-trailing-newline",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "2026-03-01\n" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-days-past-the-largest-exact",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "24660873954867-01-10" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-days-past-the-smallest-exact",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "-24660873950928-12-22" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "epoch-days-absent",
+      "expr": {
+        "type": "kanonak.org/transformations/EpochDays",
+        "temporalSource": { "type": "kanonak.org/transformations/VarRef", "varName": "takesEffect" }
+      },
+      "env": { "takesEffect": [] },
+      "expectError": true
     }
   ]
 }

@@ -31,7 +31,7 @@ meta:
   go_module_versions:
     canonical: "1.3.0"
     codec: "3.3.2"
-    expression: "1.3.0"
+    expression: "1.4.0"
     wire: "1.0.0"
   # Swift package version — the ROOT `v<ver>` tag (SwiftPM resolves ONLY root
   # semver tags; ONE version covers all four products — KanonakCanonical,
@@ -80,7 +80,11 @@ meta:
   # 3.6.0: expression 1.3.0, whose KanonakExpression folds StartsWith, a prefix
   # test of one string by another, and exports startsWith for a host engine
   # (kanonak-protocol/typescript#141).
-  swift_package_version: "3.6.0"
+  # 3.7.0: expression 1.4.0, whose KanonakExpression folds EpochMilliseconds and
+  # EpochDays, a date-time or a date read as the whole milliseconds or days
+  # since 1970, and exports epochMilliseconds and epochDays for a host engine
+  # (kanonak-protocol/packages#60).
+  swift_package_version: "3.7.0"
   # GitHub Actions OIDC (no stored token) is preferred where supported. A workflow
   # using OIDC needs:  permissions: { id-token: write, contents: read, attestations: write }
   # All PUBLISH jobs run in the `production` GitHub environment (required by NuGet trusted
