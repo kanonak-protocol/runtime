@@ -15,9 +15,12 @@
 // ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an
 // aggregate over non-numeric elements, Min/Max/Average on empty, a nested list
 // in Join, an out-of-subset Matches pattern, an `EpochMilliseconds`/`EpochDays`
-// source that isn't a date-time or a date in its lexical form); predicates fail
-// CLOSED (`Equals` cross-kind, the ordering comparisons on non-numbers, and
-// `StartsWith` on any operand but a string yield `0`).
+// source that isn't a date-time or a date in its lexical form, a
+// `UriPublisher`/`UriPackage`/`UriName` ref that isn't `publisher/package/name`);
+// predicates fail CLOSED (`Equals` cross-kind, the ordering comparisons on
+// non-numbers, and `StartsWith` on any operand but a string yield `0`).
+// `UriPublisher`, `UriPackage` and `UriName` of anything but a ref fold to
+// absence, the empty list: the spec's "undefined" for a source with no URI.
 //
 // LAMBDA BINDING: Filter/ListMap/ForEach bind their `loopVar` per element;
 // within their bodies — and only there — a `tx.VarRef` naming a
@@ -65,6 +68,9 @@ private let matchesType = "\(tx)/Matches"
 private let nameBasedUuidType = "\(tx)/NameBasedUuid"
 private let epochMillisecondsType = "\(tx)/EpochMilliseconds"
 private let epochDaysType = "\(tx)/EpochDays"
+private let uriPublisherType = "\(tx)/UriPublisher"
+private let uriPackageType = "\(tx)/UriPackage"
+private let uriNameType = "\(tx)/UriName"
 private let startsWithType = "\(tx)/StartsWith"
 
 // The literal classes the kernel answers itself (see `literalValue`).
@@ -862,6 +868,62 @@ private func foldEpochCount(_ typ: String, _ source: EvalValue) throws -> EvalVa
     return .num(try epochDays(text))
 }
 
+// MARK: - UriPublisher, UriPackage and UriName: a reference's three segments (1.5.0)
+
+// UriVersion is left to a host engine: a kernel ref is versionless, so it could
+// only ever answer the empty string, and an expression using it would look
+// checked and pass every value.
+
+/// The operand each reads its source from, as `transformations` names it.
+private func uriSegmentOperand(_ typ: String) -> String? {
+    switch typ {
+    case uriPublisherType: return "uriPublisherOf"
+    case uriPackageType: return "uriPackageOf"
+    case uriNameType: return "uriNameOf"
+    default: return nil
+    }
+}
+
+/// A reference's three segments.
+public struct UriSegments: Equatable {
+    public let publisher: String
+    public let package: String
+    public let name: String
+}
+
+/// A reference's publisher, package and local name, exactly as
+/// `tx.UriPublisher`, `tx.UriPackage` and `tx.UriName` read a ref: its
+/// canonical versionless URI split at its two `/`. A URI that isn't
+/// `publisher/package/name`, with three non-empty segments and no version on
+/// its package, throws `ExpressionError`.
+///
+/// For a host engine that evaluates the three over its own value domain: it
+/// calls this rather than split a URI itself.
+public func uriSegments(_ uri: String) throws -> UriSegments {
+    try segmentsOf("uriSegments", uri)
+}
+
+private func segmentsOf(_ op: String, _ uri: String) throws -> UriSegments {
+    // Scalars, never Characters: a `/` followed by a combining mark is one grapheme cluster, not a `/`.
+    let segments = uri.unicodeScalars.split(separator: "/", omittingEmptySubsequences: false)
+    guard segments.count == 3, segments.allSatisfy({ !$0.isEmpty }), !segments[1].contains("@") else {
+        throw ExpressionError(
+            "\(op) requires a reference of the form publisher/package/name, with no version, got \(uri.debugDescription)"
+        )
+    }
+    let segment = { (i: Int) in String(Substring(segments[i])) }
+    return UriSegments(publisher: segment(0), package: segment(1), name: segment(2))
+}
+
+private func foldUriSegment(_ typ: String, _ source: EvalValue) throws -> EvalValue {
+    guard case let .ref(uri) = source else { return .list([]) }
+    switch typ {
+    case uriPublisherType: return .str(try segmentsOf("UriPublisher", uri).publisher)
+    case uriPackageType: return .str(try segmentsOf("UriPackage", uri).package)
+    default: return .str(try segmentsOf("UriName", uri).name)
+    }
+}
+
 // MARK: - Ordered comparisons (unchanged from v1)
 
 private func identityOf<C>(_ node: ExprNode, _ ctx: C, _ options: EvalOptions<C>?) throws -> String {
@@ -903,7 +965,7 @@ private func foldOrdered<C>(
 /// The operators the fold dispatches by name, and the literals it answers.
 private let byNameOperators: Set<String> = [
     notType, isAtLeastType, dominatesType, containsType, isSetType, listItemAtType, matchesType,
-    nameBasedUuidType, epochMillisecondsType, epochDaysType,
+    nameBasedUuidType, epochMillisecondsType, epochDaysType, uriPublisherType, uriPackageType, uriNameType,
 ]
 private let literalTypes: Set<String> = [
     integerLiteralType, decimalLiteralType, booleanLiteralType, stringLiteralType, uriLiteralType,
@@ -1083,6 +1145,11 @@ private func go<C>(
     if typ == epochMillisecondsType || typ == epochDaysType {
         let source = try go(try operand(node, typ, "temporalSource"), ctx, resolve, options, &frames)
         return try foldEpochCount(typ, source)
+    }
+
+    if let of = uriSegmentOperand(typ) {
+        let source = try go(try operand(node, typ, of), ctx, resolve, options, &frames)
+        return try foldUriSegment(typ, source)
     }
 
     if let v = try kindPredicateValue(typ, node, ctx, resolve, options, &frames) {
@@ -1287,6 +1354,11 @@ private func trace<C>(
         return TraceNode(typ, try foldEpochCount(typ, source.value), [source])
     }
 
+    if let of = uriSegmentOperand(typ) {
+        let source = try trace(try operand(node, typ, of), ctx, resolve, options, &frames)
+        return TraceNode(typ, try foldUriSegment(typ, source.value), [source])
+    }
+
     if kindPredicate(typ, .num(0)) != nil {
         let x = try trace(try operand(node, typ, "kindCheck"), ctx, resolve, options, &frames)
         return TraceNode(typ, .num(kindPredicate(typ, x.value)!), [x])
@@ -1358,6 +1430,9 @@ private func directChildren(_ typ: String) -> [String]? {
     case matchesType: return ["matchSource"]
     case nameBasedUuidType: return ["uuidNamespace", "uuidName"]
     case epochMillisecondsType, epochDaysType: return ["temporalSource"]
+    case uriPublisherType: return ["uriPublisherOf"]
+    case uriPackageType: return ["uriPackageOf"]
+    case uriNameType: return ["uriNameOf"]
     case "\(tx)/Count", "\(tx)/Sum", "\(tx)/Min", "\(tx)/Max", "\(tx)/Average", "\(tx)/Join", "\(tx)/Reverse":
         return ["source"]
     case "\(tx)/IsString", "\(tx)/IsNumber", "\(tx)/IsReference", "\(tx)/IsList":

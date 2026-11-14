@@ -113,7 +113,8 @@ The v2 extension splits by role:
   that isn't a UUID in canonical text, a non-string or ill-formed name, an
   unknown `uuidFormat`, an `EpochMilliseconds` or `EpochDays` source that
   isn't a date-time or a date in its lexical form, or whose count passes
-  2^53 - 1 — all raise, never coerce.
+  2^53 - 1, a `UriPublisher`, `UriPackage` or `UriName` ref that isn't
+  `publisher/package/name` — all raise, never coerce.
 - **Predicates fail CLOSED.** `Equals` on any cross-kind pair (a URI is never
   equal to the string spelling of it; lists are containers, never equal), the
   ordering comparisons (`GreaterThan` et al.) on non-numeric operands, and
@@ -153,6 +154,7 @@ those values are unreachable by construction.
 | (direct) | `matchSource`, `pattern` (data) | Matches |
 | (direct) | `uuidNamespace`, `uuidName`, `uuidFormat` (data, optional) | NameBasedUuid (1.2.0) |
 | `EpochCount` | `temporalSource` | EpochMilliseconds, EpochDays (1.4.0) |
+| (direct) | `uriPublisherOf`, `uriPackageOf`, `uriNameOf` | UriPublisher, UriPackage, UriName (1.5.0) |
 
 Literals: `IntegerLiteral`, `DecimalLiteral`, `BooleanLiteral` (→ `1`/`0`),
 `StringLiteral`, `UriLiteral` (→ a ref value; doubles as the identity leaf
@@ -177,7 +179,7 @@ everything `evaluate` hands to the caller's `resolve`: a binding (`VarRef`;
 the kernel binds only its own iterators' loop variables), a graph read
 (`PropertyRead`), a domain leaf, and an expression class only a host engine
 implements (`Let`, `When`, `Concat`, `Fallback`, `Traverse`, `DistinctBy`, the
-host kinds `IsBoolean` and `IsEmbedded`, …). A host that compiles authored
+host kinds `IsBoolean` and `IsEmbedded`, `UriVersion` and `SubjectUri`, …). A host that compiles authored
 expressions checks each tree against it — every node either `evaluates`, or
 is a leaf the host resolves — instead of probing `evaluate` class by class.
 Each port answers it from the fold's own dispatch, and
@@ -356,6 +358,30 @@ comparisons fail closed on strings. Read as numbers, two dates order with
 string exactly as the nodes fold it, so an engine evaluating either over its
 own value domain calls them rather than parse a date itself.
 
+## UriPublisher, UriPackage and UriName — a reference's segments (1.5.0)
+
+`UriPublisher`, `UriPackage` and `UriName` of a ref are its canonical
+versionless URI's three segments, `publisher/package/name`, each a string,
+so an expression can compare a reference's publisher or package with
+another's, or its name with an identifier.
+
+- **A source that isn't a ref folds to absence,** the empty list: a string,
+  even one spelling a URI, a number, a list (even of one ref), and absence
+  itself. That is `transformations`' "undefined for unrecognised sources" in
+  the kernel's terms, as the SDK's engine answers `undefined`. It fails closed
+  where a check uses it: absence is unset, and equal to nothing.
+- **A ref that isn't `publisher/package/name` raises:** fewer or more than two
+  `/`, an empty segment, or a version on its package. A kernel ref is
+  versionless, and each port splits on `/` alone, keeping empty segments, so
+  none reads a malformed one some way of its own.
+- **`UriVersion` is not folded,** and `evaluates` is false for it. A kernel
+  ref names no version, so it could only answer the empty string, and an
+  expression using it would look checked and pass every value. A host engine
+  whose references keep their version folds it there.
+
+**For a host engine.** `uriSegments(uri)` splits a URI exactly as the three
+fold a ref, so an engine evaluating them over its own value domain calls it.
+
 ## Ordered comparisons
 
 `IsAtLeast` / `Dominates` compare **ordered vocabulary members** — members of a
@@ -480,7 +506,9 @@ public surface:
   astral and operand-kind cases, and `EpochMilliseconds` and `EpochDays`
   (1.4.0), each value computed with Python's `datetime` and whole 400-year
   cycles rather than the ports' algorithm, with every edge XSD allows and a
-  refusal for each form it doesn't.
+  refusal for each form it doesn't, and `UriPublisher`, `UriPackage` and
+  `UriName` (1.5.0), with every kind of source that folds to absence and each
+  malformed ref refused.
 - [`vectors/expression-alignment-vectors.json`](./vectors/expression-alignment-vectors.json)
   — `align(expr, trace)`.
 - [`vectors/expression-surface-vectors.json`](./vectors/expression-surface-vectors.json)

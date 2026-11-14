@@ -1,6 +1,6 @@
 {
   "expressionRuntimeVersion": "2",
-  "description": "Behavior parity vectors for expressionRuntimeVersion 2 — the value-domain extension (number | string | ref | list), the list/aggregate/membership family, polymorphic Equals, kind predicates, lambda binding (Filter/ListMap/ForEach), Matches over the pinned RE2-compatible XSD-regex subset, NameBasedUuid, the RFC 9562 version 5 UUID of a name (1.2.0), StartsWith, a prefix test of one string by another (1.3.0), and EpochMilliseconds and EpochDays, a date-time or a date read as the whole milliseconds or days since 1970-01-01 (1.4.0). Runs IN ADDITION to expression-vectors.json (v1), every vector of which must pass unchanged under a v2 kernel — that file is the numeric-regression gate. `expected` and `env` values are Values: JSON numbers, strings, arrays (lists), and {\"ref\": \"publisher/package/name\"} objects (refs). Normative list-family semantics are the SDK reference engine's: Sum on empty = 0; Min/Max/Average on empty = loud error; Count type-agnostic; absence is the empty list; predicates fail closed on type-confused operands, computations fail loud.",
+  "description": "Behavior parity vectors for expressionRuntimeVersion 2 — the value-domain extension (number | string | ref | list), the list/aggregate/membership family, polymorphic Equals, kind predicates, lambda binding (Filter/ListMap/ForEach), Matches over the pinned RE2-compatible XSD-regex subset, NameBasedUuid, the RFC 9562 version 5 UUID of a name (1.2.0), StartsWith, a prefix test of one string by another (1.3.0), EpochMilliseconds and EpochDays, a date-time or a date read as the whole milliseconds or days since 1970-01-01 (1.4.0), and UriPublisher, UriPackage and UriName, a ref's three segments, absence for any other source (1.5.0). Runs IN ADDITION to expression-vectors.json (v1), every vector of which must pass unchanged under a v2 kernel — that file is the numeric-regression gate. `expected` and `env` values are Values: JSON numbers, strings, arrays (lists), and {\"ref\": \"publisher/package/name\"} objects (refs). Normative list-family semantics are the SDK reference engine's: Sum on empty = 0; Min/Max/Average on empty = loud error; Count type-agnostic; absence is the empty list; predicates fail closed on type-confused operands, computations fail loud.",
   "vectors": [
     {
       "id": "string-literal",
@@ -2748,6 +2748,204 @@
         "temporalSource": { "type": "kanonak.org/transformations/VarRef", "varName": "takesEffect" }
       },
       "env": { "takesEffect": [] },
+      "expectError": true
+    },
+    {
+      "id": "uri-publisher-of-a-ref",
+      "description": "A ref's segments are its canonical versionless URI split at its two /",
+      "expr": {
+        "type": "kanonak.org/transformations/UriPublisher",
+        "uriPublisherOf": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org/colors/red" }
+      },
+      "expected": "example.org"
+    },
+    {
+      "id": "uri-package-of-a-ref",
+      "expr": {
+        "type": "kanonak.org/transformations/UriPackage",
+        "uriPackageOf": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org/colors/red" }
+      },
+      "expected": "colors"
+    },
+    {
+      "id": "uri-name-of-a-ref",
+      "expr": {
+        "type": "kanonak.org/transformations/UriName",
+        "uriNameOf": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org/colors/red" }
+      },
+      "expected": "red"
+    },
+    {
+      "id": "uri-publisher-of-a-bound-ref",
+      "expr": {
+        "type": "kanonak.org/transformations/UriPublisher",
+        "uriPublisherOf": { "type": "kanonak.org/transformations/VarRef", "varName": "made" }
+      },
+      "env": {
+        "made": { "ref": "example.org/colors/red" }
+      },
+      "expected": "example.org"
+    },
+    {
+      "id": "uri-publishers-compared",
+      "description": "Two refs under one publisher",
+      "expr": {
+        "type": "kanonak.org/transformations/Equals",
+        "compareLeft": {
+          "type": "kanonak.org/transformations/UriPublisher",
+          "uriPublisherOf": { "type": "kanonak.org/transformations/VarRef", "varName": "made" }
+        },
+        "compareRight": {
+          "type": "kanonak.org/transformations/UriPublisher",
+          "uriPublisherOf": { "type": "kanonak.org/transformations/VarRef", "varName": "parent" }
+        }
+      },
+      "env": {
+        "made": { "ref": "example.org/colors/red" },
+        "parent": { "ref": "example.org/shapes/square" }
+      },
+      "expected": 1
+    },
+    {
+      "id": "uri-packages-compared",
+      "description": "Two refs in different packages",
+      "expr": {
+        "type": "kanonak.org/transformations/Equals",
+        "compareLeft": {
+          "type": "kanonak.org/transformations/UriPackage",
+          "uriPackageOf": { "type": "kanonak.org/transformations/VarRef", "varName": "made" }
+        },
+        "compareRight": {
+          "type": "kanonak.org/transformations/UriPackage",
+          "uriPackageOf": { "type": "kanonak.org/transformations/VarRef", "varName": "parent" }
+        }
+      },
+      "env": {
+        "made": { "ref": "example.org/colors/red" },
+        "parent": { "ref": "example.org/shapes/square" }
+      },
+      "expected": 0
+    },
+    {
+      "id": "uri-name-compared-with-an-id",
+      "description": "A ref's local name is a string, so it equals the identifier it was named by",
+      "expr": {
+        "type": "kanonak.org/transformations/Equals",
+        "compareLeft": {
+          "type": "kanonak.org/transformations/UriName",
+          "uriNameOf": { "type": "kanonak.org/transformations/VarRef", "varName": "made" }
+        },
+        "compareRight": { "type": "kanonak.org/transformations/VarRef", "varName": "id" }
+      },
+      "env": {
+        "made": { "ref": "example.org/colors/red" },
+        "id": "red"
+      },
+      "expected": 1
+    },
+    {
+      "id": "uri-publisher-of-a-string-is-absent",
+      "description": "A URI's spelling is not a reference: a source with no URI folds to absence, the spec's undefined",
+      "expr": {
+        "type": "kanonak.org/transformations/UriPublisher",
+        "uriPublisherOf": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "example.org/colors/red" }
+      },
+      "expected": []
+    },
+    {
+      "id": "uri-package-of-a-number-is-absent",
+      "expr": {
+        "type": "kanonak.org/transformations/UriPackage",
+        "uriPackageOf": { "type": "kanonak.org/transformations/IntegerLiteral", "integerLiteral": 7 }
+      },
+      "expected": []
+    },
+    {
+      "id": "uri-name-of-absence-is-absent",
+      "expr": {
+        "type": "kanonak.org/transformations/UriName",
+        "uriNameOf": { "type": "kanonak.org/transformations/VarRef", "varName": "made" }
+      },
+      "env": { "made": [] },
+      "expected": []
+    },
+    {
+      "id": "uri-name-of-a-list-is-absent",
+      "description": "A list of one ref is a container, not a ref",
+      "expr": {
+        "type": "kanonak.org/transformations/UriName",
+        "uriNameOf": { "type": "kanonak.org/transformations/VarRef", "varName": "made" }
+      },
+      "env": {
+        "made": [{"ref": "example.org/colors/red"}]
+      },
+      "expected": []
+    },
+    {
+      "id": "uri-publisher-of-a-string-is-unset",
+      "expr": {
+        "type": "kanonak.org/transformations/IsSet",
+        "checkExpr": {
+          "type": "kanonak.org/transformations/UriPublisher",
+          "uriPublisherOf": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "example.org/colors/red" }
+        }
+      },
+      "expected": 0
+    },
+    {
+      "id": "uri-publisher-of-a-string-never-equals",
+      "description": "Absence equals nothing, so a check of a source that isn't a ref fails closed",
+      "expr": {
+        "type": "kanonak.org/transformations/Equals",
+        "compareLeft": {
+          "type": "kanonak.org/transformations/UriPublisher",
+          "uriPublisherOf": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "example.org/colors/red" }
+        },
+        "compareRight": { "type": "kanonak.org/transformations/StringLiteral", "stringLiteral": "example.org" }
+      },
+      "expected": 0
+    },
+    {
+      "id": "uri-package-after-a-combining-mark",
+      "description": "A / followed by a combining mark is still a /: each port splits on the character itself, never on a grapheme cluster",
+      "expr": {
+        "type": "kanonak.org/transformations/UriPackage",
+        "uriPackageOf": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org/\u0301colors/red" }
+      },
+      "expected": "\u0301colors"
+    },
+    {
+      "id": "uri-publisher-of-a-two-segment-ref",
+      "description": "A ref that isn't publisher/package/name is refused, never split some other way",
+      "expr": {
+        "type": "kanonak.org/transformations/UriPublisher",
+        "uriPublisherOf": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org/red" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "uri-package-of-a-four-segment-ref",
+      "expr": {
+        "type": "kanonak.org/transformations/UriPackage",
+        "uriPackageOf": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org/colors/red/dark" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "uri-name-of-a-ref-with-an-empty-segment",
+      "expr": {
+        "type": "kanonak.org/transformations/UriName",
+        "uriNameOf": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org//red" }
+      },
+      "expectError": true
+    },
+    {
+      "id": "uri-package-of-a-versioned-ref",
+      "description": "A kernel ref is versionless, so one naming a version is refused rather than read as package colors@1.0.0",
+      "expr": {
+        "type": "kanonak.org/transformations/UriPackage",
+        "uriPackageOf": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org/colors@1.0.0/red" }
+      },
       "expectError": true
     }
   ]

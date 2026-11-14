@@ -15,9 +15,12 @@
 // aggregate over non-numeric elements, Min/Max/Average on empty, a nested
 // list in Join, an out-of-subset Matches pattern, an
 // EpochMilliseconds/EpochDays source that isn't a date-time or a date in its
-// lexical form); predicates fail CLOSED (Equals cross-kind, the ordering
-// comparisons on non-numbers, and StartsWith on any operand but a well-formed
-// string yield 0).
+// lexical form, a UriPublisher/UriPackage/UriName ref that isn't
+// publisher/package/name); predicates fail CLOSED (Equals cross-kind, the
+// ordering comparisons on non-numbers, and StartsWith on any operand but a
+// well-formed string yield 0). UriPublisher, UriPackage and UriName of
+// anything but a ref fold to absence, the empty list: the spec's "undefined"
+// for a source with no URI.
 //
 // LAMBDA BINDING: Filter/ListMap/ForEach bind their loopVar per element;
 // within their bodies — and only there — a tx.VarRef naming a
@@ -162,6 +165,9 @@ const (
 	opNameBasedUUID     = tx + "/NameBasedUuid"
 	opEpochMilliseconds = tx + "/EpochMilliseconds"
 	opEpochDays         = tx + "/EpochDays"
+	opURIPublisher      = tx + "/UriPublisher"
+	opURIPackage        = tx + "/UriPackage"
+	opURIName           = tx + "/UriName"
 	opStartsWith        = tx + "/StartsWith"
 )
 
@@ -1069,6 +1075,69 @@ func foldEpochCount(typ string, source Value) float64 {
 	return epochDays(text)
 }
 
+// --- UriPublisher, UriPackage and UriName: a reference's three segments
+// (1.5.0). UriVersion is left to a host engine: a kernel ref is versionless,
+// so it could only ever answer the empty string, and an expression using it
+// would look checked and pass every value.
+
+// uriSegmentRead is the segment of a ref each operator reads: the operator's
+// name and the segment's index.
+var uriSegmentRead = map[string]struct {
+	op    string
+	index int
+}{
+	opURIPublisher: {"UriPublisher", 0},
+	opURIPackage:   {"UriPackage", 1},
+	opURIName:      {"UriName", 2},
+}
+
+// uriSegmentOperand is the operand each reads its source from, as
+// transformations names it.
+var uriSegmentOperand = map[string]string{
+	opURIPublisher: "uriPublisherOf",
+	opURIPackage:   "uriPackageOf",
+	opURIName:      "uriNameOf",
+}
+
+// URISegments returns a reference's publisher, package and local name,
+// exactly as tx.UriPublisher, tx.UriPackage and tx.UriName read a ref: its
+// canonical versionless URI split at its two /. A URI that isn't
+// publisher/package/name, with three non-empty segments and no version on its
+// package, is an *Error.
+//
+// For a host engine that evaluates the three over its own value domain: it
+// calls this rather than split a URI itself.
+func URISegments(uri string) (publisher, pkg, name string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if e, ok := r.(*Error); ok {
+				err = e
+				return
+			}
+			panic(r)
+		}
+	}()
+	segments := segmentsOf("URISegments", uri)
+	return segments[0], segments[1], segments[2], nil
+}
+
+func segmentsOf(op, uri string) [3]string {
+	segments := strings.Split(uri, "/")
+	if len(segments) != 3 || segments[0] == "" || segments[1] == "" || segments[2] == "" || strings.Contains(segments[1], "@") {
+		raise("%s requires a reference of the form publisher/package/name, with no version, got %q", op, uri)
+	}
+	return [3]string{segments[0], segments[1], segments[2]}
+}
+
+func foldURISegment(typ string, source Value) Value {
+	read := uriSegmentRead[typ]
+	ref, ok := source.(Ref)
+	if !ok {
+		return []Value{}
+	}
+	return segmentsOf(read.op, ref.URI)[read.index]
+}
+
 // --- ordered comparisons (unchanged from v1) --------------------------------
 
 func operand(node Node, key string) Node {
@@ -1127,6 +1196,7 @@ var kernelByName = map[string]bool{
 	opNot: true, opIsAtLeast: true, opDominates: true, opContains: true,
 	opIsSet: true, opListItemAt: true, opMatches: true, opNameBasedUUID: true,
 	opEpochMilliseconds: true, opEpochDays: true,
+	opURIPublisher: true, opURIPackage: true, opURIName: true,
 	integerLiteral: true, decimalLiteral: true, booleanLiteral: true,
 	stringLiteral: true, uriLiteral: true,
 }
@@ -1342,6 +1412,10 @@ func evalNode(node Node, ctx interface{}, resolve Resolve, opts *Options, frames
 
 	if typ == opEpochMilliseconds || typ == opEpochDays {
 		return foldEpochCount(typ, evalNode(operand(node, "temporalSource"), ctx, resolve, opts, frames))
+	}
+
+	if operandKey, ok := uriSegmentOperand[typ]; ok {
+		return foldURISegment(typ, evalNode(operand(node, operandKey), ctx, resolve, opts, frames))
 	}
 
 	if v, ok := kindPredicate(typ, nil); ok {
@@ -1593,6 +1667,11 @@ func explainPanic(node Node, ctx interface{}, resolve Resolve, opts *Options, fr
 		return &TraceNode{Type: typ, Value: foldEpochCount(typ, source.Value), Children: []*TraceNode{source}}
 	}
 
+	if operandKey, ok := uriSegmentOperand[typ]; ok {
+		source := explainPanic(operand(node, operandKey), ctx, resolve, opts, frames)
+		return &TraceNode{Type: typ, Value: foldURISegment(typ, source.Value), Children: []*TraceNode{source}}
+	}
+
 	if _, ok := kindPredicate(typ, nil); ok {
 		x := explainPanic(operand(node, "kindCheck"), ctx, resolve, opts, frames)
 		v, _ := kindPredicate(typ, x.Value)
@@ -1681,6 +1760,9 @@ var directChildren = map[string][]string{
 	opNameBasedUUID:     {"uuidNamespace", "uuidName"},
 	opEpochMilliseconds: {"temporalSource"},
 	opEpochDays:         {"temporalSource"},
+	opURIPublisher:      {"uriPublisherOf"},
+	opURIPackage:        {"uriPackageOf"},
+	opURIName:           {"uriNameOf"},
 	tx + "/Count":       {"source"},
 	tx + "/Sum":         {"source"},
 	tx + "/Min":         {"source"},
