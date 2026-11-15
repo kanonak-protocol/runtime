@@ -5,7 +5,7 @@ extension). Every vector runs through ``evaluate`` AND ``explain`` and their
 values must agree; ``env`` bindings and ``expected`` are Values (numbers,
 strings, arrays, ``{"ref": …}`` objects); vectors with a ``trace`` assert the
 verdict tree structurally. ``expression-surface-vectors.json`` pins the public
-surface beside ``evaluate`` (``evaluates`` and ``matches``) and cross-checks
+surface beside ``evaluate`` (``evaluates``, ``matches`` and ``concat``) and cross-checks
 ``evaluates`` against every node class the evaluate vectors exercise.
 
 Run:  python conformance.py ../vectors
@@ -20,11 +20,13 @@ from typing import Any
 
 from kanonak_expression import (
     AlignedNode,
+    ConcatPart,
     EvalOptions,
     ExpressionError,
     Ref,
     TraceNode,
     align,
+    concat,
     evaluate,
     evaluates,
     explain,
@@ -237,8 +239,8 @@ def run_align_file(vectors_dir: Path, name: str) -> tuple[int, int]:
 
 
 def run_surface_file(vectors_dir: Path, name: str, exercised: list) -> tuple[int, int]:
-    """The public surface beside ``evaluate``: ``evaluates(type_uri)`` and
-    ``matches(input, pattern)``. Then a cross-check of ``evaluates`` against the
+    """The public surface beside ``evaluate``: ``evaluates(type_uri)``,
+    ``matches(input, pattern)`` and ``concat(parts)``. Then a cross-check of ``evaluates`` against the
     evaluate vectors themselves: every node class they exercise is either one
     the kernel folds, or a leaf this harness's ``resolve`` answers — so a class
     the fold handles cannot be missing from ``evaluates``."""
@@ -263,6 +265,19 @@ def run_surface_file(vectors_dir: Path, name: str, exercised: list) -> tuple[int
         else:
             failed += 1
             print(f"{name}/{v['id']}: matches gave {'an error' if threw else got!r}")
+    for v in data["concat"]:
+        error = None
+        got = None
+        try:
+            got = concat([ConcatPart(p["type"], value_of(p["value"])) for p in v["parts"]])
+        except ExpressionError as e:
+            error = str(e)
+        if (error is not None if v.get("expectError")
+                else error is None and values_deep_equal(got, value_of(v["expected"]))):
+            passed += 1
+        else:
+            failed += 1
+            print(f"{name}/{v['id']}: concat gave {error if error is not None else got!r}")
     for typ in dict.fromkeys(exercised):
         if typ in (VARREF, PROPERTY_READ) or evaluates(typ):
             passed += 1

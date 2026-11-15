@@ -21,6 +21,8 @@
 import { readFileSync } from 'node:fs';
 import {
   align,
+  concat,
+  type ConcatPart,
   evaluate,
   evaluates,
   explain,
@@ -211,11 +213,12 @@ function runAlignFile(relPath: string, label: string): { pass: number; fail: num
 interface SurfaceVectors {
   evaluates: { id: string; type: string; expected: boolean }[];
   matches: { id: string; input: string; pattern: string; expected?: boolean; expectError?: boolean }[];
+  concat: { id: string; parts: ConcatPart[]; expected?: Value; expectError?: boolean }[];
 }
 
 /**
- * The public surface beside `evaluate`: `evaluates(typeUri)` and
- * `matches(input, pattern)`. Then a cross-check of `evaluates` against the
+ * The public surface beside `evaluate`: `evaluates(typeUri)`,
+ * `matches(input, pattern)` and `concat(parts)`. Then a cross-check of `evaluates` against the
  * evaluate vectors themselves: every node class they exercise is either one
  * the kernel folds, or a leaf this harness's `resolve` answers — so a class
  * the fold handles cannot be missing from `evaluates`.
@@ -233,6 +236,16 @@ function runSurfaceFile(relPath: string, label: string, exercised: string[]): { 
     try { got = matches(v.input, v.pattern); } catch { threw = true; }
     if (v.expectError ? threw : !threw && got === v.expected) pass++;
     else { fail++; console.error(`${label}/${v.id}: matches gave ${threw ? 'an error' : got}`); }
+  }
+  for (const v of data.concat) {
+    let got: Value | undefined;
+    let error: string | undefined;
+    try { got = concat(v.parts); } catch (e) {
+      if (!(e instanceof ExpressionError)) throw e;
+      error = e.message;
+    }
+    if (v.expectError ? error !== undefined : error === undefined && valueEqual(got as Value, v.expected as Value)) pass++;
+    else { fail++; console.error(`${label}/${v.id}: concat gave ${error ?? JSON.stringify(got)}`); }
   }
   for (const type of new Set(exercised)) {
     if (type === VARREF || type === PROPERTY_READ || evaluates(type)) pass++;

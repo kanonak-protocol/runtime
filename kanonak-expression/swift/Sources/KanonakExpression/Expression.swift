@@ -16,7 +16,8 @@
 // aggregate over non-numeric elements, Min/Max/Average on empty, a nested list
 // in Join, an out-of-subset Matches pattern, an `EpochMilliseconds`/`EpochDays`
 // source that isn't a date-time or a date in its lexical form, a
-// `UriPublisher`/`UriPackage`/`UriName` ref that isn't `publisher/package/name`);
+// `UriPublisher`/`UriPackage`/`UriName` ref that isn't `publisher/package/name`,
+// a part given to `concat` that is a URI segment with no value);
 // predicates fail CLOSED (`Equals` cross-kind, the ordering comparisons on
 // non-numbers, and `StartsWith` on any operand but a string yield `0`).
 // `UriPublisher`, `UriPackage` and `UriName` of anything but a ref fold to
@@ -922,6 +923,44 @@ private func foldUriSegment(_ typ: String, _ source: EvalValue) throws -> EvalVa
     case uriPackageType: return .str(try segmentsOf("UriPackage", uri).package)
     default: return .str(try segmentsOf("UriName", uri).name)
     }
+}
+
+// MARK: - Concat (1.6.0), for a host engine
+
+// The kernel leaves `Concat` to the host, whose binding evaluates each part and
+// hands the values here.
+
+/// One part of a `Concat`, as a host evaluated it: the part's node type, and its value.
+public struct ConcatPart: Equatable {
+    public let type: String
+    public let value: EvalValue
+    public init(type: String, value: EvalValue) {
+        self.type = type
+        self.value = value
+    }
+}
+
+/// `Concat`'s parts' values, in order, as one list. A list part adds its
+/// elements, one level, and any other value adds itself. A URI segment of a
+/// source that isn't a ref has no value, and a part with no value throws
+/// `ExpressionError`; every other empty list adds nothing, as a `When` with no
+/// `elseBuild` does by design.
+public func concat(_ parts: [ConcatPart]) throws -> [EvalValue] {
+    var out: [EvalValue] = []
+    for (index, part) in parts.enumerated() {
+        guard case let .list(items) = part.value else {
+            out.append(part.value)
+            continue
+        }
+        if items.isEmpty && uriSegmentOperand(part.type) != nil {
+            throw ExpressionError(
+                "Concat: part \(index) (\(part.type)) has no value: its source isn't a reference. "
+                    + "A part that may be absent must say so: wrap it in a When, or give it a Fallback."
+            )
+        }
+        out.append(contentsOf: items)
+    }
+    return out
 }
 
 // MARK: - Ordered comparisons (unchanged from v1)

@@ -16,7 +16,8 @@ ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an
 aggregate over non-numeric elements, Min/Max/Average on empty, a nested list
 in Join, an out-of-subset Matches pattern, an EpochMilliseconds/EpochDays
 source that isn't a date-time or a date in its lexical form, a
-UriPublisher/UriPackage/UriName ref that isn't ``publisher/package/name``);
+UriPublisher/UriPackage/UriName ref that isn't ``publisher/package/name``, a
+part given to ``concat`` that is a URI segment with no value);
 predicates fail CLOSED (``Equals`` cross-kind, the ordering comparisons on
 non-numbers, and ``StartsWith`` on any operand but a well-formed string yield
 ``0.0``). UriPublisher, UriPackage and UriName of anything but a ref fold to
@@ -47,13 +48,14 @@ import hashlib
 import json
 import math
 import re as _re
-from typing import Any, Callable, Dict, FrozenSet, List, Literal, Mapping, NamedTuple, Optional, Tuple, Union
+from typing import Any, Callable, Dict, FrozenSet, List, Literal, Mapping, NamedTuple, Optional, Sequence, Tuple, Union
 
 # The public API — what a 1.x release keeps compatible (runtime#29). Everything
 # else here is an implementation detail and may change in any release.
 __all__ = [
     "AlignedNode",
     "ClosureTable",
+    "ConcatPart",
     "EXPRESSION_RUNTIME_VERSION",
     "EvalOptions",
     "ExprNode",
@@ -67,6 +69,7 @@ __all__ = [
     "UuidFormat",
     "Value",
     "align",
+    "concat",
     "epoch_days",
     "epoch_milliseconds",
     "evaluate",
@@ -883,6 +886,38 @@ def _fold_uri_segment(typ: str, source: Value) -> Value:
     if not isinstance(source, Ref):
         return []
     return _segments_of(op, source.ref)[index]
+
+
+# ---------------------------------------------------------------------------
+# Concat (1.6.0), for a host engine: the kernel leaves ``Concat`` to the host,
+# whose binding evaluates each part and hands the values here.
+# ---------------------------------------------------------------------------
+
+class ConcatPart(NamedTuple):
+    """One part of a ``Concat``, as a host evaluated it: the part's node type, and its value."""
+
+    type: str
+    value: Value
+
+
+def concat(parts: Sequence[ConcatPart]) -> List[Value]:
+    """``Concat``'s parts' values, in order, as one list. A list part adds its
+    elements, one level, and any other value adds itself. A URI segment of a
+    source that isn't a ref has no value, and a part with no value is an
+    :class:`ExpressionError`; every other empty list adds nothing, as a
+    ``When`` with no ``elseBuild`` does by design."""
+    out: List[Value] = []
+    for index, (typ, value) in enumerate(parts):
+        if typ in _URI_SEGMENTS and isinstance(value, list) and not value:
+            raise ExpressionError(
+                f"Concat: part {index} ({typ}) has no value: its source isn't a reference. "
+                "A part that may be absent must say so: wrap it in a When, or give it a Fallback."
+            )
+        if isinstance(value, list):
+            out.extend(value)
+        else:
+            out.append(value)
+    return out
 
 
 # ---------------------------------------------------------------------------

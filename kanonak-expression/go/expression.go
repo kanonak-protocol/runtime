@@ -16,9 +16,10 @@
 // list in Join, an out-of-subset Matches pattern, an
 // EpochMilliseconds/EpochDays source that isn't a date-time or a date in its
 // lexical form, a UriPublisher/UriPackage/UriName ref that isn't
-// publisher/package/name); predicates fail CLOSED (Equals cross-kind, the
-// ordering comparisons on non-numbers, and StartsWith on any operand but a
-// well-formed string yield 0). UriPublisher, UriPackage and UriName of
+// publisher/package/name, a part given to Concat that is a URI segment with
+// no value); predicates fail CLOSED (Equals cross-kind, the ordering
+// comparisons on non-numbers, and StartsWith on any operand but a well-formed
+// string yield 0). UriPublisher, UriPackage and UriName of
 // anything but a ref fold to absence, the empty list: the spec's "undefined"
 // for a source with no URI.
 //
@@ -1136,6 +1137,38 @@ func foldURISegment(typ string, source Value) Value {
 		return []Value{}
 	}
 	return segmentsOf(read.op, ref.URI)[read.index]
+}
+
+// --- Concat (1.6.0), for a host engine: the kernel leaves Concat to the
+// host, whose binding evaluates each part and hands the values here.
+
+// ConcatPart is one part of a Concat, as a host evaluated it: the part's node
+// type, and its value.
+type ConcatPart struct {
+	Type  string
+	Value Value
+}
+
+// Concat returns a Concat's parts' values, in order, as one list. A list part
+// adds its elements, one level, and any other value adds itself. A URI
+// segment of a source that isn't a ref has no value, and a part with no value
+// is an *Error; every other empty list adds nothing, as a When with no
+// elseBuild does by design.
+func Concat(parts []ConcatPart) (list []Value, err error) {
+	out := []Value{}
+	for i, part := range parts {
+		values, isList := part.Value.([]Value)
+		if _, segment := uriSegmentRead[part.Type]; segment && isList && len(values) == 0 {
+			return nil, &Error{Msg: fmt.Sprintf("Concat: part %d (%s) has no value: its source isn't a reference. "+
+				"A part that may be absent must say so: wrap it in a When, or give it a Fallback.", i, part.Type)}
+		}
+		if isList {
+			out = append(out, values...)
+		} else {
+			out = append(out, part.Value)
+		}
+	}
+	return out, nil
 }
 
 // --- ordered comparisons (unchanged from v1) --------------------------------

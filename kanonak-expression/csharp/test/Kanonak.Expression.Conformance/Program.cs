@@ -11,7 +11,7 @@ using Kanonak.Expression;
 // expected are Values (numbers, strings, arrays, {"ref": …} objects). Every
 // vector runs through Evaluate AND Explain and their values must agree; vectors
 // with a `trace` assert the verdict tree structurally. expression-surface-vectors.json
-// pins the public surface beside Evaluate (Expr.Evaluates, Expr.Matches) and
+// pins the public surface beside Evaluate (Expr.Evaluates, Expr.Matches, Expr.Concat) and
 // cross-checks Evaluates against every node class the evaluate vectors exercise.
 // Exits non-zero on any failure.
 //   dotnet run -- <vectors-dir>
@@ -394,7 +394,8 @@ class Program
         return fail;
     }
 
-    /// <summary>The public surface beside Evaluate: Expr.Evaluates(typeUri) and Expr.Matches(input, pattern).
+    /// <summary>The public surface beside Evaluate: Expr.Evaluates(typeUri), Expr.Matches(input, pattern) and
+    /// Expr.Concat(parts).
     /// Then a cross-check of Evaluates against the evaluate vectors themselves: every node class they exercise
     /// is either one the kernel folds, or a leaf this harness's resolve answers — so a class the fold handles
     /// cannot be missing from Evaluates. Returns the failure count.</summary>
@@ -403,12 +404,13 @@ class Program
         using var doc = JsonDocument.Parse(File.ReadAllText(path));
         var evaluates = doc.RootElement.GetProperty("evaluates");
         var matches = doc.RootElement.GetProperty("matches");
+        var concat = doc.RootElement.GetProperty("concat");
         var types = new HashSet<string>(exercised);
         string name = Path.GetFileName(path);
         int total = 0, pass = 0, fail = 0;
 
         // A gate that checks nothing — no cases, or a walk that found no node types — must never report green.
-        if (evaluates.GetArrayLength() == 0 || matches.GetArrayLength() == 0 || types.Count == 0)
+        if (evaluates.GetArrayLength() == 0 || matches.GetArrayLength() == 0 || concat.GetArrayLength() == 0 || types.Count == 0)
         {
             Console.Error.WriteLine($"FATAL: {path} has an empty section, or the evaluate vectors yielded no node types — refusing to report a passing gate");
             return 1;
@@ -436,6 +438,22 @@ class Program
             bool ok = expectError ? threw : !threw && got == v.GetProperty("expected").GetBoolean();
             if (ok) pass++;
             else { fail++; Console.WriteLine($"  FAIL [{name}/{id}] Matches gave {(threw ? "an error" : got.ToString())}"); }
+        }
+
+        foreach (var v in concat.EnumerateArray())
+        {
+            total++;
+            string id = v.GetProperty("id").GetString();
+            var parts = new List<ConcatPart>();
+            foreach (var p in v.GetProperty("parts").EnumerateArray())
+                parts.Add(new ConcatPart(p.GetProperty("type").GetString(), ValueOf(p.GetProperty("value"))));
+            bool expectError = v.TryGetProperty("expectError", out var ee) && ee.GetBoolean();
+            List<object> got = null;
+            string error = null;
+            try { got = Expr.Concat(parts); } catch (ExpressionError e) { error = e.Message; }
+            bool ok = expectError ? error != null : error == null && DeepEqual(got, ValueOf(v.GetProperty("expected")));
+            if (ok) pass++;
+            else { fail++; Console.WriteLine($"  FAIL [{name}/{id}] Concat gave {error ?? JsonSerializer.Serialize(got)}"); }
         }
 
         foreach (var type in types)
