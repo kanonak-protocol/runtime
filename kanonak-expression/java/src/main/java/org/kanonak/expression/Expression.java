@@ -30,7 +30,8 @@ import java.util.regex.PatternSyntaxException;
  * <p>ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an aggregate over
  * non-numeric elements, Min/Max/Average on empty, a nested list in Join, an out-of-subset
  * Matches pattern, an EpochMilliseconds/EpochDays source that isn't a date-time or a date in
- * its lexical form, a UriPublisher/UriPackage/UriName ref that isn't publisher/package/name);
+ * its lexical form, a UriPublisher/UriPackage/UriName ref that isn't publisher/package/name, a
+ * part given to {@code concat} that is a URI segment with no value);
  * UriPublisher, UriPackage and UriName of anything but a ref fold to absence, the empty list,
  * the spec's "undefined" for a source with no URI; predicates fail CLOSED (Equals cross-kind,
  * the ordering comparisons on non-numbers, and StartsWith on any operand but a string yield 0).
@@ -763,6 +764,34 @@ public final class Expression {
             case URI_PACKAGE: return segmentsOf("UriPackage", ref.uri).packageName();
             default: return segmentsOf("UriName", ref.uri).name();
         }
+    }
+
+    // -- Concat (1.6.0), for a host engine: the kernel leaves Concat to the host, whose binding
+    //    evaluates each part and hands the values here ---------------------------------------
+
+    /** One part of a {@code Concat}, as a host evaluated it: the part's node type, and its value. */
+    public record ConcatPart(String type, Object value) {}
+
+    /**
+     * {@code Concat}'s parts' values, in order, as one list. A list part adds its elements, one
+     * level, and any other value adds itself. A URI segment of a source that isn't a ref has no
+     * value, and a part with no value is an error; every other empty list adds nothing, as a
+     * {@code When} with no {@code elseBuild} does by design.
+     *
+     * @throws ExpressionError when a UriPublisher, UriPackage or UriName part's value is the empty list
+     */
+    public static List<Object> concat(List<ConcatPart> parts) {
+        List<Object> out = new ArrayList<>();
+        for (int index = 0; index < parts.size(); index++) {
+            ConcatPart part = parts.get(index);
+            if (URI_SEGMENT_OPERAND.containsKey(part.type()) && part.value() instanceof List<?> none && none.isEmpty()) {
+                throw err("Concat: part " + index + " (" + part.type() + ") has no value: its source isn't a reference. "
+                    + "A part that may be absent must say so: wrap it in a When, or give it a Fallback.");
+            }
+            if (part.value() instanceof List<?> items) out.addAll(items);
+            else out.add(part.value());
+        }
+        return out;
     }
 
     // -- ordered comparisons (unchanged from v1) ------------------------------

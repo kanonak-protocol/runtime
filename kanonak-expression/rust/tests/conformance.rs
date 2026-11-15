@@ -6,7 +6,7 @@
 //! Values (numbers, strings, arrays, `{"ref": …}` objects); vectors with a
 //! `trace` assert the verdict tree structurally. Then the alignment vectors,
 //! and the public surface beside `evaluate` (`expression-surface-vectors.json`:
-//! `evaluates` and `matches`).
+//! `evaluates`, `matches` and `concat`).
 
 use kanonak_expression::*;
 use serde_json::Value as J;
@@ -310,11 +310,11 @@ fn expression_vectors() {
     assert_eq!(p4, t4, "{} surface check(s) failed", t4 - p4);
 }
 
-/// The public surface beside `evaluate`: `evaluates(type_uri)` and
-/// `matches(input, pattern)`. Then a cross-check of `evaluates` against the
-/// evaluate vectors themselves: every node class they exercise is either one
-/// the kernel folds, or a leaf this harness's `resolve` answers — so a class
-/// the fold handles cannot be missing from `evaluates`.
+/// The public surface beside `evaluate`: `evaluates(type_uri)`,
+/// `matches(input, pattern)` and `concat(parts)`. Then a cross-check of
+/// `evaluates` against the evaluate vectors themselves: every node class they
+/// exercise is either one the kernel folds, or a leaf this harness's `resolve`
+/// answers — so a class the fold handles cannot be missing from `evaluates`.
 fn run_surface_file(name: &str, exercised: &BTreeSet<String>) -> (usize, usize) {
     let doc = read(name);
     let mut pass = 0;
@@ -348,6 +348,31 @@ fn run_surface_file(name: &str, exercised: &BTreeSet<String>) -> (usize, usize) 
             match got {
                 Ok(b) => eprintln!("FAIL [{name}/{id}] matches gave {b}"),
                 Err(e) => eprintln!("FAIL [{name}/{id}] matches gave an error: {}", e.0),
+            }
+        }
+    }
+    for v in doc["concat"].as_array().unwrap() {
+        let id = v["id"].as_str().unwrap();
+        let parts = v["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| ConcatPart { typ: p["type"].as_str().unwrap().to_string(), value: value_of(&p["value"]) })
+            .collect();
+        let expect_error = v.get("expectError").and_then(|x| x.as_bool()).unwrap_or(false);
+        let got = concat(parts).map(EvalValue::List);
+        let ok = if expect_error {
+            got.is_err()
+        } else {
+            matches!(&got, Ok(l) if values_deep_equal(l, &value_of(&v["expected"])))
+        };
+        if ok {
+            pass += 1;
+        } else {
+            fail += 1;
+            match got {
+                Ok(l) => eprintln!("FAIL [{name}/{id}] concat gave {l:?}"),
+                Err(e) => eprintln!("FAIL [{name}/{id}] concat gave an error: {}", e.0),
             }
         }
     }

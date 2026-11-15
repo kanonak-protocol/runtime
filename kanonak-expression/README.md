@@ -114,7 +114,8 @@ The v2 extension splits by role:
   unknown `uuidFormat`, an `EpochMilliseconds` or `EpochDays` source that
   isn't a date-time or a date in its lexical form, or whose count passes
   2^53 - 1, a `UriPublisher`, `UriPackage` or `UriName` ref that isn't
-  `publisher/package/name` — all raise, never coerce.
+  `publisher/package/name`, a part given to `concat` that is a URI segment
+  with no value — all raise, never coerce.
 - **Predicates fail CLOSED.** `Equals` on any cross-kind pair (a URI is never
   equal to the string spelling of it; lists are containers, never equal), the
   ordering comparisons (`GreaterThan` et al.) on non-numeric operands, and
@@ -382,6 +383,34 @@ another's, or its name with an identifier.
 **For a host engine.** `uriSegments(uri)` splits a URI exactly as the three
 fold a ref, so an engine evaluating them over its own value domain calls it.
 
+## Concat, for a host engine (1.6.0)
+
+`Concat` stays a host's: `evaluates` is false for it, as 1.5.0 published. The
+runtime gives a host its rule instead, defined once in each port.
+`concat(parts)` takes each part's node type and the value the host evaluated
+it to, and returns them, in order, as one list, as `transformations` defines
+it: "a part that yields a list adds its elements". So a host's binding answers
+`Concat` in its `resolve`: it evaluates each part with `evaluate`, then calls
+`concat`, and `Join` puts a separator between them.
+
+- **A list part adds its elements, one level:** a list inside it stays a list.
+  Any other value adds itself, and no parts give the empty list.
+- **An empty list adds nothing.** In the kernel it is also absence, and the
+  spec's `When` with no `elseBuild` yields it "deliberately: an empty list,
+  which Concat adds nothing for". `When` is a host's too, so `concat` sees
+  only the empty list it gives back, and can't tell it from any other.
+- **A part with no value raises,** as `transformations` has it: a
+  `UriPublisher`, `UriPackage` or `UriName` part whose value is the empty
+  list, since its source wasn't a ref. Those are the only kernel nodes that
+  fold to absence for a missing value, and the SDK's engine refuses the
+  `undefined` it gives there.
+- **A leaf that may have no value is guarded where it's a part.** By the caller
+  convention above, a leaf for a property with no values resolves to the empty
+  list, which `IsSet` and `Count` rely on, so `concat` adds nothing for it and
+  the joined text can look right with a value missing. Where a part must have
+  a value, say so as the spec does: `When` (`IsSet` of it) to make it optional
+  on purpose, or a `Fallback`, and a host refuses a missing value it can name.
+
 ## Ordered comparisons
 
 `IsAtLeast` / `Dominates` compare **ordered vocabulary members** — members of a
@@ -513,9 +542,11 @@ public surface:
   — `align(expr, trace)`.
 - [`vectors/expression-surface-vectors.json`](./vectors/expression-surface-vectors.json)
   — `evaluates(typeUri)` for every kernel class and for the leaves and host
-  classes it must refuse, and `matches(input, pattern)` over the v2 `Matches`
-  cases with a literal source. Each port also cross-checks `evaluates`
-  against the evaluation files: every class they fold must report true.
+  classes it must refuse, `matches(input, pattern)` over the v2 `Matches`
+  cases with a literal source, and `concat(parts)` (1.6.0), with each kind of
+  part, an empty one, and each URI segment with no value refused. Each port
+  also cross-checks `evaluates` against the evaluation files: every class they
+  fold must report true.
 
 `expr` is the tree; `env` binds `tx.VarRef` names for the conformance
 `resolve` hook (values are Values: numbers, strings, arrays, `{"ref": …}`

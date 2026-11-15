@@ -1,6 +1,6 @@
 {
   "expressionRuntimeVersion": "2",
-  "description": "The public surface every port exposes beside evaluate (runtime 1.1.0). `evaluates` pins evaluates(typeUri): true exactly for the node classes the kernel folds itself (operators and literals); false for a binding (VarRef), a graph read (PropertyRead), a domain leaf, and an expression class only a host engine implements - a host checks an authored tree against it instead of probing evaluate. `matches` pins matches(input, pattern): the pinned RE2-compatible XSD-regex subset under fn:matches semantics, exactly as tx.Matches evaluates it (the cases are the v2 Matches vectors with a literal source); expectError marks a pattern outside the subset, which is a loud error.",
+  "description": "The public surface every port exposes beside evaluate (runtime 1.1.0). `evaluates` pins evaluates(typeUri): true exactly for the node classes the kernel folds itself (operators and literals); false for a binding (VarRef), a graph read (PropertyRead), a domain leaf, and an expression class only a host engine implements - a host checks an authored tree against it instead of probing evaluate. `matches` pins matches(input, pattern): the pinned RE2-compatible XSD-regex subset under fn:matches semantics, exactly as tx.Matches evaluates it (the cases are the v2 Matches vectors with a literal source); expectError marks a pattern outside the subset, which is a loud error. `concat` pins concat(parts) (1.6.0): a `Concat`'s parts, each its node type and the value a host evaluated it to, in order as one list. A list part adds its elements, one level, any other value adds itself, and an empty list adds nothing; a UriPublisher, UriPackage or UriName part with no value (the empty list) is a loud error (expectError). The kernel leaves `Concat` itself to a host (`evaluates-not-Concat`), whose binding evaluates each part and calls concat.",
   "evaluates": [
     {
       "id": "evaluates-tx-IntegerLiteral",
@@ -549,6 +549,217 @@
       "input": "É",
       "pattern": "(?i)é",
       "expected": true
+    }
+  ],
+  "concat": [
+    {
+      "id": "concat-parts-in-order",
+      "description": "Concat yields its parts' values, in order, as one list",
+      "parts": [
+        {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "value": "a"
+        },
+        {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "value": "b"
+        },
+        {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "value": "c"
+        }
+      ],
+      "expected": [
+        "a",
+        "b",
+        "c"
+      ]
+    },
+    {
+      "id": "concat-a-list-part-adds-its-elements",
+      "parts": [
+        {
+          "type": "kanonak.org/transformations/VarRef",
+          "value": [
+            "a",
+            "b"
+          ]
+        },
+        {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "value": "c"
+        }
+      ],
+      "expected": [
+        "a",
+        "b",
+        "c"
+      ]
+    },
+    {
+      "id": "concat-flattens-one-level",
+      "description": "A list inside a list part stays a list: Concat adds a part's elements, never theirs",
+      "parts": [
+        {
+          "type": "kanonak.org/transformations/VarRef",
+          "value": [
+            [
+              "a"
+            ],
+            "b"
+          ]
+        }
+      ],
+      "expected": [
+        [
+          "a"
+        ],
+        "b"
+      ]
+    },
+    {
+      "id": "concat-an-empty-list-part-adds-nothing",
+      "description": "An empty list adds nothing, as a When with no elseBuild does by design",
+      "parts": [
+        {
+          "type": "kanonak.org/transformations/VarRef",
+          "value": []
+        },
+        {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "value": "a"
+        },
+        {
+          "type": "kanonak.org/transformations/VarRef",
+          "value": []
+        }
+      ],
+      "expected": [
+        "a"
+      ]
+    },
+    {
+      "id": "concat-of-each-kind",
+      "parts": [
+        {
+          "type": "kanonak.org/transformations/IntegerLiteral",
+          "value": 7
+        },
+        {
+          "type": "kanonak.org/transformations/UriLiteral",
+          "value": {
+            "ref": "example.org/colors/red"
+          }
+        },
+        {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "value": "x"
+        }
+      ],
+      "expected": [
+        7,
+        {
+          "ref": "example.org/colors/red"
+        },
+        "x"
+      ]
+    },
+    {
+      "id": "concat-of-no-parts",
+      "parts": [],
+      "expected": []
+    },
+    {
+      "id": "concat-a-reference-s-segments-and-an-identifier",
+      "description": "The common shape, before a Join puts a separator between them: a name's parts, from a reference's segments and an identifier",
+      "parts": [
+        {
+          "type": "kanonak.org/transformations/UriPublisher",
+          "value": "example.com"
+        },
+        {
+          "type": "kanonak.org/transformations/UriPackage",
+          "value": "acme"
+        },
+        {
+          "type": "kanonak.org/transformations/VarRef",
+          "value": "usr-1"
+        }
+      ],
+      "expected": [
+        "example.com",
+        "acme",
+        "usr-1"
+      ]
+    },
+    {
+      "id": "concat-each-uri-segment-with-a-value-adds-it",
+      "parts": [
+        {
+          "type": "kanonak.org/transformations/UriPublisher",
+          "value": "example.com"
+        },
+        {
+          "type": "kanonak.org/transformations/UriPackage",
+          "value": "acme"
+        },
+        {
+          "type": "kanonak.org/transformations/UriName",
+          "value": "team"
+        }
+      ],
+      "expected": [
+        "example.com",
+        "acme",
+        "team"
+      ]
+    },
+    {
+      "id": "concat-a-uri-publisher-with-no-value-is-refused",
+      "description": "A URI segment of a source that isn't a ref has no value, and a part with no value is an error, never skipped",
+      "parts": [
+        {
+          "type": "kanonak.org/transformations/UriPublisher",
+          "value": []
+        },
+        {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "value": "usr-1"
+        }
+      ],
+      "expectError": true
+    },
+    {
+      "id": "concat-a-uri-package-with-no-value-is-refused",
+      "parts": [
+        {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "value": "x"
+        },
+        {
+          "type": "kanonak.org/transformations/UriPackage",
+          "value": []
+        }
+      ],
+      "expectError": true
+    },
+    {
+      "id": "concat-a-uri-name-with-no-value-is-refused",
+      "parts": [
+        {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "value": "x"
+        },
+        {
+          "type": "kanonak.org/transformations/UriName",
+          "value": []
+        },
+        {
+          "type": "kanonak.org/transformations/StringLiteral",
+          "value": "y"
+        }
+      ],
+      "expectError": true
     }
   ]
 }

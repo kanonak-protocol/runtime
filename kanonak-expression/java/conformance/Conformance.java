@@ -17,8 +17,8 @@ import org.kanonak.expression.Expression.Ref;
  * evaluate AND explain and their values must agree; env bindings and expected are Values
  * (numbers, strings, arrays, {"ref": ...} objects); vectors with a trace assert the verdict
  * tree structurally. Then the alignment vectors, and the public surface beside evaluate
- * (expression-surface-vectors.json: evaluates + matches, cross-checked against the node classes
- * the evaluate vectors exercise).
+ * (expression-surface-vectors.json: evaluates + matches + concat, cross-checked against the node
+ * classes the evaluate vectors exercise).
  */
 public final class Conformance {
     /** The harness's own leaves: the node classes {@link #resolve} answers. */
@@ -392,7 +392,8 @@ public final class Conformance {
         }
     }
 
-    /** The public surface beside evaluate: {@code evaluates(typeUri)} and {@code matches(input, pattern)}.
+    /** The public surface beside evaluate: {@code evaluates(typeUri)}, {@code matches(input, pattern)} and
+     *  {@code concat(parts)}.
      *  Then a cross-check of evaluates against the evaluate vectors themselves: every node class they
      *  exercise is either one the kernel folds, or a leaf this harness's resolve answers — so a class
      *  the fold handles cannot be missing from evaluates. Returns the failure count. */
@@ -420,6 +421,24 @@ public final class Conformance {
                 : error == null && v.get("expected") instanceof Boolean want && got.booleanValue() == want;
             if (ok) pass++;
             else { fail++; System.out.println("  FAIL [" + name + "/" + v.get("id") + "] matches gave " + (error != null ? error : got)); }
+        }
+        for (Object o : (List<Object>) doc.get("concat")) {
+            Map<String, Object> v = (Map<String, Object>) o;
+            List<Expression.ConcatPart> parts = new ArrayList<>();
+            for (Object p : (List<Object>) v.get("parts")) {
+                Map<String, Object> part = (Map<String, Object>) p;
+                parts.add(new Expression.ConcatPart((String) part.get("type"), valueOf(part.get("value"))));
+            }
+            List<Object> got = null;
+            String error = null;
+            try { got = Expression.concat(parts); }
+            catch (ExpressionError e) { error = "ExpressionError"; }
+            catch (RuntimeException e) { error = e.getClass().getSimpleName() + ": " + e.getMessage(); }
+            boolean ok = Boolean.TRUE.equals(v.get("expectError"))
+                ? "ExpressionError".equals(error)
+                : error == null && deepEqual(got, valueOf(v.get("expected")));
+            if (ok) pass++;
+            else { fail++; System.out.println("  FAIL [" + name + "/" + v.get("id") + "] concat gave " + (error != null ? error : got)); }
         }
         for (String type : new java.util.LinkedHashSet<>(exercised)) {
             if (VARREF.equals(type) || PROPERTY_READ.equals(type) || Expression.evaluates(type)) pass++;

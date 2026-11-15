@@ -102,7 +102,8 @@ namespace Kanonak.Expression
     /// value. The kernel NEVER touches a graph.</para>
     ///
     /// <para>ERROR CONTRACT: computations fail LOUD, a UriPublisher/UriPackage/UriName ref
-    /// that isn't publisher/package/name among them; UriPublisher, UriPackage and UriName of
+    /// that isn't publisher/package/name and a part given to <c>Concat</c> that is a URI segment
+    /// with no value among them; UriPublisher, UriPackage and UriName of
     /// anything but a ref fold to absence, the empty list, the spec's "undefined" for a source
     /// with no URI; predicates fail CLOSED (Equals cross-kind, the ordering comparisons on
     /// non-numbers, and StartsWith on any operand but a string yield 0).</para>
@@ -135,6 +136,20 @@ namespace Kanonak.Expression
         public int? Index;
         public AlignedElement Element;
         public List<AlignedNode> Children = new List<AlignedNode>();
+    }
+
+    /// <summary>One part of a <c>Concat</c>, as a host evaluated it: the part's node type, and its value.</summary>
+    public sealed class ConcatPart
+    {
+        public readonly string Type;
+        public readonly object Value;
+
+        /// <exception cref="ArgumentNullException"><paramref name="type"/> or <paramref name="value"/> is null.</exception>
+        public ConcatPart(string type, object value)
+        {
+            Type = type ?? throw new ArgumentNullException(nameof(type));
+            Value = value ?? throw new ArgumentNullException(nameof(value));
+        }
     }
 
     public static class Expr
@@ -1007,6 +1022,35 @@ namespace Kanonak.Expression
                 case URI_PACKAGE: return SegmentsOf("UriPackage", r.Uri).Package;
                 default: return SegmentsOf("UriName", r.Uri).Name;
             }
+        }
+
+        // -- Concat (1.6.0), for a host engine: the kernel leaves Concat to the host, whose
+        //    binding evaluates each part and hands the values here ------------------------
+
+        /// <summary>
+        /// <c>Concat</c>'s parts' values, in order, as one list. A list part adds its elements, one
+        /// level, and any other value adds itself. A URI segment of a source that isn't a ref has no
+        /// value, and a part with no value is an error; every other empty list adds nothing, as a
+        /// <c>When</c> with no <c>elseBuild</c> does by design.
+        /// </summary>
+        /// <exception cref="ExpressionError">A UriPublisher, UriPackage or UriName part's value is the
+        /// empty list.</exception>
+        /// <exception cref="ArgumentNullException"><paramref name="parts"/> is null.</exception>
+        /// <exception cref="ArgumentException">A part is null.</exception>
+        public static List<object> Concat(IReadOnlyList<ConcatPart> parts)
+        {
+            if (parts == null) throw new ArgumentNullException(nameof(parts));
+            var output = new List<object>();
+            for (int index = 0; index < parts.Count; index++)
+            {
+                var part = parts[index] ?? throw new ArgumentException("part " + index + " is null", nameof(parts));
+                if (UriSegmentOperands.ContainsKey(part.Type) && part.Value is List<object> none && none.Count == 0)
+                    throw Err("Concat: part " + index + " (" + part.Type + ") has no value: its source isn't a reference. "
+                        + "A part that may be absent must say so: wrap it in a When, or give it a Fallback.");
+                if (part.Value is List<object> items) output.AddRange(items);
+                else output.Add(part.Value);
+            }
+            return output;
         }
 
         // -- ordered comparisons (unchanged from v1) ---------------------------

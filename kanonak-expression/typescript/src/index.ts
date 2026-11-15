@@ -49,7 +49,8 @@
  *     `Join`, a non-string `Matches` source, an out-of-subset `Matches`
  *     pattern, an `EpochMilliseconds`/`EpochDays` source that isn't a date-time
  *     or a date in its lexical form, a `UriPublisher`/`UriPackage`/`UriName`
- *     ref that isn't `publisher/package/name` — all raise `ExpressionError`,
+ *     ref that isn't `publisher/package/name`, a part given to `concat` that
+ *     is a URI segment with no value — all raise `ExpressionError`,
  *     never coerce.
  *   - `UriPublisher`, `UriPackage` and `UriName` of anything but a ref fold to
  *     absence, the empty list: the spec's "undefined" for a source with no URI.
@@ -1002,6 +1003,39 @@ function foldUriSegment(type: string, source: Value): Value {
   if (!isRef(source)) return [];
   const segments = segmentsOf(op, source.ref);
   return index === 0 ? segments.publisher : index === 1 ? segments.package : segments.name;
+}
+
+// ---------------------------------------------------------------------------
+// Concat (1.6.0), for a host engine: the kernel leaves `Concat` to the host,
+// whose binding evaluates each part and hands the values here.
+// ---------------------------------------------------------------------------
+
+/** One part of a `Concat`, as a host evaluated it: the part's node type, and its value. */
+export interface ConcatPart {
+  readonly type: string;
+  readonly value: Value;
+}
+
+/**
+ * `Concat`'s parts' values, in order, as one list. A list part adds its
+ * elements, one level, and any other value adds itself. A URI segment of a
+ * source that isn't a ref has no value, and a part with no value is an error;
+ * every other empty list adds nothing, as a `When` with no `elseBuild` does by
+ * design.
+ */
+export function concat(parts: readonly ConcatPart[]): Value[] {
+  const out: Value[] = [];
+  parts.forEach(({ type, value }, index) => {
+    if (URI_SEGMENTS.has(type) && Array.isArray(value) && value.length === 0) {
+      throw new ExpressionError(
+        `Concat: part ${index} (${type}) has no value: its source isn't a reference. ` +
+        'A part that may be absent must say so: wrap it in a When, or give it a Fallback.',
+      );
+    }
+    if (Array.isArray(value)) out.push(...value);
+    else out.push(value);
+  });
+  return out;
 }
 
 // ---------------------------------------------------------------------------

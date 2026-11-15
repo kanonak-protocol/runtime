@@ -296,10 +296,19 @@ type surfaceFile struct {
 		Expected    *bool  `json:"expected"`
 		ExpectError bool   `json:"expectError"`
 	} `json:"matches"`
+	Concat []struct {
+		ID    string `json:"id"`
+		Parts []struct {
+			Type  string      `json:"type"`
+			Value interface{} `json:"value"`
+		} `json:"parts"`
+		Expected    interface{} `json:"expected"`
+		ExpectError bool        `json:"expectError"`
+	} `json:"concat"`
 }
 
-// runSurfaceFile drives the public surface beside Evaluate: Evaluates(typeURI)
-// and Matches(input, pattern). Then a cross-check of Evaluates against the
+// runSurfaceFile drives the public surface beside Evaluate: Evaluates(typeURI),
+// Matches(input, pattern) and Concat(parts). Then a cross-check of Evaluates against the
 // evaluate vectors themselves: every node class they exercise is either one
 // the kernel folds, or a leaf this harness's resolve answers — so a class the
 // fold handles cannot be missing from Evaluates.
@@ -332,6 +341,24 @@ func runSurfaceFile(name string, exercised []string) (pass, total int) {
 			}
 		} else if err != nil || v.Expected == nil || got != *v.Expected {
 			fmt.Fprintf(os.Stderr, "%s/%s: Matches gave %v (err %v)\n", name, v.ID, got, err)
+			continue
+		}
+		pass++
+	}
+	for _, v := range doc.Concat {
+		total++
+		parts := make([]expr.ConcatPart, len(v.Parts))
+		for i, part := range v.Parts {
+			parts[i] = expr.ConcatPart{Type: part.Type, Value: valueOf(part.Value)}
+		}
+		got, err := expr.Concat(parts)
+		if v.ExpectError {
+			if _, ok := err.(*expr.Error); !ok {
+				fmt.Fprintf(os.Stderr, "%s/%s: expected an *Error, got %v (err %v)\n", name, v.ID, got, err)
+				continue
+			}
+		} else if err != nil || !deepEqual(got, valueOf(v.Expected)) {
+			fmt.Fprintf(os.Stderr, "%s/%s: Concat gave %v (err %v)\n", name, v.ID, got, err)
 			continue
 		}
 		pass++

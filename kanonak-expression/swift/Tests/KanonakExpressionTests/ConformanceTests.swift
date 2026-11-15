@@ -307,15 +307,16 @@ private func nodeTypes(_ name: String) throws -> [String] {
 }
 
 final class ExpressionSurfaceTests: XCTestCase {
-    /// The public surface beside `evaluate`: `evaluates(_:)` and
-    /// `matches(_:_:)`. Then a cross-check of `evaluates` against the evaluate
+    /// The public surface beside `evaluate`: `evaluates(_:)`, `matches(_:_:)`
+    /// and `concat(_:)`. Then a cross-check of `evaluates` against the evaluate
     /// vectors themselves: every node class they exercise is either one the
     /// kernel folds, or a leaf this harness's `resolve` answers.
     func testSurfaceVectors() throws {
         let name = "expression-surface-vectors.json"
         let doc = try loadJSON(name)
         guard let evaluatesCases = doc["evaluates"] as? [[String: Any]], !evaluatesCases.isEmpty,
-              let matchesCases = doc["matches"] as? [[String: Any]], !matchesCases.isEmpty else {
+              let matchesCases = doc["matches"] as? [[String: Any]], !matchesCases.isEmpty,
+              let concatCases = doc["concat"] as? [[String: Any]], !concatCases.isEmpty else {
             XCTFail("\(name): no vectors loaded — refusing to report a passing gate")
             return
         }
@@ -348,6 +349,31 @@ final class ExpressionSurfaceTests: XCTestCase {
             } catch {
                 XCTFail("[\(name)/\(id)] matches threw \(error)")
             }
+        }
+        for v in concatCases {
+            total += 1
+            let id = v["id"] as? String ?? "(no id)"
+            guard let rawParts = v["parts"] as? [[String: Any]] else {
+                XCTFail("[\(name)/\(id)] malformed concat case"); continue
+            }
+            let parts = try rawParts.map { p -> ConcatPart in
+                guard let type = p["type"] as? String, let value = p["value"] else {
+                    throw ExpressionError("[\(name)/\(id)] malformed concat part")
+                }
+                return ConcatPart(type: type, value: try valueOf(value))
+            }
+            let expectError = v["expectError"] as? Bool ?? false
+            let got: [EvalValue]
+            do {
+                got = try concat(parts)
+            } catch let error as ExpressionError {
+                if expectError { pass += 1 }
+                else { XCTFail("[\(name)/\(id)] concat threw \(error)") }
+                continue
+            }
+            if expectError { XCTFail("[\(name)/\(id)] expected an ExpressionError, concat gave \(got)") }
+            else if deepEqual(.list(got), try valueOf(v["expected"] ?? NSNull())) { pass += 1 }
+            else { XCTFail("[\(name)/\(id)] concat gave \(got)") }
         }
         let exercised = Set(try nodeTypes("expression-vectors.json") + nodeTypes("expression-vectors-2.json"))
         for typ in exercised {

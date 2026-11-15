@@ -17,7 +17,8 @@
 //! list in Join, an out-of-subset Matches pattern, an
 //! `EpochMilliseconds`/`EpochDays` source that isn't a date-time or a date in
 //! its lexical form, a `UriPublisher`/`UriPackage`/`UriName` ref that isn't
-//! `publisher/package/name`); predicates fail CLOSED
+//! `publisher/package/name`, a part given to [`concat`] that is a URI segment
+//! with no value); predicates fail CLOSED
 //! (`Equals` cross-kind, the ordering comparisons on non-numbers, and
 //! `StartsWith` on any operand but a string yield `0.0`, never an error).
 //! `UriPublisher`, `UriPackage` and `UriName` of anything but a ref fold to
@@ -1179,6 +1180,40 @@ fn fold_uri_segment(typ: &str, source: &EvalValue) -> Result<EvalValue, Expressi
         URI_PACKAGE => segments_of("UriPackage", uri)?.package,
         _ => segments_of("UriName", uri)?.name,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Concat (1.6.0), for a host engine: the kernel leaves `Concat` to the host,
+// whose binding evaluates each part and hands the values here.
+// ---------------------------------------------------------------------------
+
+/// One part of a `Concat`, as a host evaluated it: the part's node type, and its value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConcatPart {
+    pub typ: String,
+    pub value: EvalValue,
+}
+
+/// `Concat`'s parts' values, in order, as one list. A list part adds its
+/// elements, one level, and any other value adds itself. A URI segment of a
+/// source that isn't a ref has no value, and a part with no value is an
+/// [`ExpressionError`]; every other empty list adds nothing, as a `When` with
+/// no `elseBuild` does by design.
+pub fn concat(parts: Vec<ConcatPart>) -> Result<Vec<EvalValue>, ExpressionError> {
+    let mut out = Vec::new();
+    for (index, ConcatPart { typ, value }) in parts.into_iter().enumerate() {
+        match value {
+            EvalValue::List(l) if l.is_empty() && uri_segment_operand(&typ).is_some() => {
+                return err(format!(
+                    "Concat: part {index} ({typ}) has no value: its source isn't a reference. \
+                     A part that may be absent must say so: wrap it in a When, or give it a Fallback."
+                ))
+            }
+            EvalValue::List(l) => out.extend(l),
+            scalar => out.push(scalar),
+        }
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
