@@ -16,7 +16,8 @@ ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an
 aggregate over non-numeric elements, Min/Max/Average on empty, a nested list
 in Join, an out-of-subset Matches pattern, an EpochMilliseconds/EpochDays
 source that isn't a date-time or a date in its lexical form, a
-UriPublisher/UriPackage/UriName ref that isn't ``publisher/package/name``);
+UriPublisher/UriPackage/UriName ref that isn't ``publisher/package/name``, a
+Concat part that is a URI segment of a source that isn't a ref);
 predicates fail CLOSED (``Equals`` cross-kind, the ordering comparisons on
 non-numbers, and ``StartsWith`` on any operand but a well-formed string yield
 ``0.0``). UriPublisher, UriPackage and UriName of anything but a ref fold to
@@ -210,6 +211,7 @@ _EPOCH_DAYS = f"{TX}/EpochDays"
 _URI_PUBLISHER = f"{TX}/UriPublisher"
 _URI_PACKAGE = f"{TX}/UriPackage"
 _URI_NAME = f"{TX}/UriName"
+_CONCAT = f"{TX}/Concat"
 _STARTS_WITH = f"{TX}/StartsWith"
 
 # The literal classes the kernel answers itself (see ``_literal_value``).
@@ -886,6 +888,35 @@ def _fold_uri_segment(typ: str, source: Value) -> Value:
 
 
 # ---------------------------------------------------------------------------
+# Concat (1.6.0) — its parts' values, in order, as one list.
+# ---------------------------------------------------------------------------
+
+def _concat_parts(node: ExprNode) -> List[ExprNode]:
+    """The parts of a ``Concat`` node: a list of expressions."""
+    parts = node.get("parts")
+    if not isinstance(parts, list):
+        raise ExpressionError(f"{_CONCAT} expects a 'parts' list")
+    return parts
+
+
+def _concat_part(part: ExprNode, index: int, value: Value, out: List[Value]) -> None:
+    """One part's contribution: a list adds its elements (one level), anything
+    else itself. A URI segment of a source that isn't a ref has no value, and a
+    part with no value is an error; every other empty list adds nothing, as a
+    ``When`` with no ``elseBuild`` does by design."""
+    typ = part.get("type")
+    if typ in _URI_SEGMENTS and isinstance(value, list) and not value:
+        raise ExpressionError(
+            f"Concat: part {index} ({typ}) has no value: its source isn't a reference. "
+            "A part that may be absent must say so: wrap it in a When, or give it a Fallback."
+        )
+    if isinstance(value, list):
+        out.extend(value)
+    else:
+        out.append(value)
+
+
+# ---------------------------------------------------------------------------
 # Ordered comparisons (unchanged from v1).
 # ---------------------------------------------------------------------------
 
@@ -938,7 +969,7 @@ _KERNEL_NODE_CLASSES: FrozenSet[str] = frozenset((
     *_ITERATOR_BODY,
     *_KIND_PREDICATES,
     _NOT, _IS_AT_LEAST, _DOMINATES, _CONTAINS, _IS_SET, _LIST_ITEM_AT, _MATCHES, _NAME_BASED_UUID,
-    _EPOCH_MILLISECONDS, _EPOCH_DAYS, _URI_PUBLISHER, _URI_PACKAGE, _URI_NAME,
+    _EPOCH_MILLISECONDS, _EPOCH_DAYS, _URI_PUBLISHER, _URI_PACKAGE, _URI_NAME, _CONCAT,
     _INTEGER_LITERAL, _DECIMAL_LITERAL, _BOOLEAN_LITERAL, _STRING_LITERAL, _URI_LITERAL,
 ))
 
@@ -1116,6 +1147,12 @@ def _go(
     segment_operand = _URI_SEGMENT_OPERAND.get(typ)
     if segment_operand is not None:
         return _fold_uri_segment(typ, _go(_operand(node, typ, segment_operand), ctx, resolve, options, frames))
+
+    if typ == _CONCAT:
+        concat: List[Value] = []
+        for i, part in enumerate(_concat_parts(node)):
+            _concat_part(part, i, _go(part, ctx, resolve, options, frames), concat)
+        return concat
 
     kind_pred = _KIND_PREDICATES.get(typ)
     if kind_pred is not None:
@@ -1323,6 +1360,15 @@ def _trace(
         source = _trace(_operand(node, typ, segment_operand), ctx, resolve, options, frames)
         return TraceNode(typ, _fold_uri_segment(typ, source.value), [source])
 
+    if typ == _CONCAT:
+        concat: List[Value] = []
+        traces: List[TraceNode] = []
+        for i, part in enumerate(_concat_parts(node)):
+            child = _trace(part, ctx, resolve, options, frames)
+            _concat_part(part, i, child.value, concat)
+            traces.append(child)
+        return TraceNode(typ, concat, traces)
+
     kind_pred = _KIND_PREDICATES.get(typ)
     if kind_pred is not None:
         x = _trace(_operand(node, typ, "kindCheck"), ctx, resolve, options, frames)
@@ -1450,6 +1496,17 @@ def _align(expr: ExprNode, trace: TraceNode, operand_key: Optional[str], index: 
                 f"align: {typ} trace has {len(trace.children)} children for {len(operands)} operands {where}")
         for i, child in enumerate(trace.children):
             node.children.append(_align(operands[i], child, arity[1], i, None))
+        return node
+    # Concat: every part, in order.
+    if typ == _CONCAT:
+        parts = expr.get("parts")
+        if not isinstance(parts, list):
+            raise ExpressionError(f"align: {typ} is missing list operand 'parts'")
+        if len(trace.children) != len(parts):
+            raise ExpressionError(
+                f"align: {typ} trace has {len(trace.children)} children for {len(parts)} parts {where}")
+        for i, child in enumerate(trace.children):
+            node.children.append(_align(parts[i], child, "parts", i, None))
         return node
     # OrderedComparison: nothing beneath is traced.
     if typ in _ORDERED_COMPARISON:

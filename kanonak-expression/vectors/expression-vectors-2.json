@@ -2947,6 +2947,256 @@
         "uriPackageOf": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org/colors@1.0.0/red" }
       },
       "expectError": true
+    },
+    {
+      "id": "concat-parts-in-order",
+      "description": "Concat yields its parts' values, in order, as one list",
+      "expr": {
+        "type": "kanonak.org/transformations/Concat",
+        "parts": [
+          {
+            "type": "kanonak.org/transformations/StringLiteral",
+            "stringLiteral": "a"
+          },
+          {
+            "type": "kanonak.org/transformations/StringLiteral",
+            "stringLiteral": "b"
+          },
+          {
+            "type": "kanonak.org/transformations/StringLiteral",
+            "stringLiteral": "c"
+          }
+        ]
+      },
+      "expected": [
+        "a",
+        "b",
+        "c"
+      ]
+    },
+    {
+      "id": "concat-a-list-part-adds-its-elements",
+      "expr": {
+        "type": "kanonak.org/transformations/Concat",
+        "parts": [
+          {
+            "type": "kanonak.org/transformations/VarRef",
+            "varName": "xs"
+          },
+          {
+            "type": "kanonak.org/transformations/StringLiteral",
+            "stringLiteral": "c"
+          }
+        ]
+      },
+      "env": {
+        "xs": [
+          "a",
+          "b"
+        ]
+      },
+      "expected": [
+        "a",
+        "b",
+        "c"
+      ]
+    },
+    {
+      "id": "concat-flattens-one-level",
+      "description": "A list inside a list part stays a list: Concat adds a part's elements, never theirs",
+      "expr": {
+        "type": "kanonak.org/transformations/Concat",
+        "parts": [
+          {
+            "type": "kanonak.org/transformations/VarRef",
+            "varName": "xs"
+          }
+        ]
+      },
+      "env": {
+        "xs": [
+          [
+            "a"
+          ],
+          "b"
+        ]
+      },
+      "expected": [
+        [
+          "a"
+        ],
+        "b"
+      ]
+    },
+    {
+      "id": "concat-an-empty-list-part-adds-nothing",
+      "description": "An empty list adds nothing, as a When with no elseBuild does by design",
+      "expr": {
+        "type": "kanonak.org/transformations/Concat",
+        "parts": [
+          {
+            "type": "kanonak.org/transformations/VarRef",
+            "varName": "none"
+          },
+          {
+            "type": "kanonak.org/transformations/StringLiteral",
+            "stringLiteral": "a"
+          },
+          {
+            "type": "kanonak.org/transformations/VarRef",
+            "varName": "none"
+          }
+        ]
+      },
+      "env": {
+        "none": []
+      },
+      "expected": [
+        "a"
+      ]
+    },
+    {
+      "id": "concat-of-each-kind",
+      "expr": {
+        "type": "kanonak.org/transformations/Concat",
+        "parts": [
+          {
+            "type": "kanonak.org/transformations/IntegerLiteral",
+            "integerLiteral": 7
+          },
+          {
+            "type": "kanonak.org/transformations/UriLiteral",
+            "refTo": "example.org/colors/red"
+          },
+          {
+            "type": "kanonak.org/transformations/StringLiteral",
+            "stringLiteral": "x"
+          }
+        ]
+      },
+      "expected": [
+        7,
+        {
+          "ref": "example.org/colors/red"
+        },
+        "x"
+      ]
+    },
+    {
+      "id": "concat-of-no-parts",
+      "expr": {
+        "type": "kanonak.org/transformations/Concat",
+        "parts": []
+      },
+      "expected": []
+    },
+    {
+      "id": "concat-joined-into-a-name",
+      "description": "The common shape: a name built from a reference's segments and an identifier",
+      "expr": {
+        "type": "kanonak.org/transformations/Join",
+        "source": {
+          "type": "kanonak.org/transformations/Concat",
+          "parts": [
+            {
+              "type": "kanonak.org/transformations/UriPublisher",
+              "uriPublisherOf": {
+                "type": "kanonak.org/transformations/VarRef",
+                "varName": "owner"
+              }
+            },
+            {
+              "type": "kanonak.org/transformations/UriPackage",
+              "uriPackageOf": {
+                "type": "kanonak.org/transformations/VarRef",
+                "varName": "owner"
+              }
+            },
+            {
+              "type": "kanonak.org/transformations/VarRef",
+              "varName": "id"
+            }
+          ]
+        },
+        "separator": "/"
+      },
+      "env": {
+        "owner": {
+          "ref": "example.com/acme/team"
+        },
+        "id": "usr-1"
+      },
+      "expected": "example.com/acme/usr-1"
+    },
+    {
+      "id": "concat-counted",
+      "expr": {
+        "type": "kanonak.org/transformations/Count",
+        "source": {
+          "type": "kanonak.org/transformations/Concat",
+          "parts": [
+            {
+              "type": "kanonak.org/transformations/VarRef",
+              "varName": "xs"
+            },
+            {
+              "type": "kanonak.org/transformations/StringLiteral",
+              "stringLiteral": "c"
+            }
+          ]
+        }
+      },
+      "env": {
+        "xs": [
+          "a",
+          "b"
+        ]
+      },
+      "expected": 3
+    },
+    {
+      "id": "concat-a-uri-segment-with-no-value-is-refused",
+      "description": "A URI segment of a source that isn't a ref has no value, and a part with no value is an error, never skipped",
+      "expr": {
+        "type": "kanonak.org/transformations/Concat",
+        "parts": [
+          {
+            "type": "kanonak.org/transformations/UriPublisher",
+            "uriPublisherOf": {
+              "type": "kanonak.org/transformations/StringLiteral",
+              "stringLiteral": "example.com/acme/acme"
+            }
+          },
+          {
+            "type": "kanonak.org/transformations/StringLiteral",
+            "stringLiteral": "usr-1"
+          }
+        ]
+      },
+      "expectError": true
+    },
+    {
+      "id": "concat-a-uri-segment-of-absence-is-refused",
+      "expr": {
+        "type": "kanonak.org/transformations/Concat",
+        "parts": [
+          {
+            "type": "kanonak.org/transformations/StringLiteral",
+            "stringLiteral": "x"
+          },
+          {
+            "type": "kanonak.org/transformations/UriName",
+            "uriNameOf": {
+              "type": "kanonak.org/transformations/VarRef",
+              "varName": "made"
+            }
+          }
+        ]
+      },
+      "env": {
+        "made": []
+      },
+      "expectError": true
     }
   ]
 }

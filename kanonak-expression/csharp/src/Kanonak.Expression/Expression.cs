@@ -102,7 +102,8 @@ namespace Kanonak.Expression
     /// value. The kernel NEVER touches a graph.</para>
     ///
     /// <para>ERROR CONTRACT: computations fail LOUD, a UriPublisher/UriPackage/UriName ref
-    /// that isn't publisher/package/name among them; UriPublisher, UriPackage and UriName of
+    /// that isn't publisher/package/name and a Concat part that is a URI segment of a source
+    /// that isn't a ref among them; UriPublisher, UriPackage and UriName of
     /// anything but a ref fold to absence, the empty list, the spec's "undefined" for a source
     /// with no URI; predicates fail CLOSED (Equals cross-kind, the ordering comparisons on
     /// non-numbers, and StartsWith on any operand but a string yield 0).</para>
@@ -327,6 +328,7 @@ namespace Kanonak.Expression
         const string URI_PUBLISHER = TX + "/UriPublisher";
         const string URI_PACKAGE = TX + "/UriPackage";
         const string URI_NAME = TX + "/UriName";
+        const string CONCAT = TX + "/Concat";
         const string STARTS_WITH = TX + "/StartsWith";
 
         // The literal classes the kernel answers itself (see LiteralValue).
@@ -1009,6 +1011,33 @@ namespace Kanonak.Expression
             }
         }
 
+        // -- Concat (1.6.0): its parts' values, in order, as one list -----------
+
+        /// <summary>The parts of a <c>Concat</c> node: a list of expressions.</summary>
+        static List<object> ConcatParts(ExprNode node)
+        {
+            if (node.Get("parts") is List<object> parts) return parts;
+            throw Err(CONCAT + " expects a 'parts' list");
+        }
+
+        static ExprNode ConcatPartAt(List<object> parts, int index)
+            => parts[index] as ExprNode ?? throw Err(CONCAT + " part " + index + " is not a node");
+
+        /// <summary>
+        /// One part's contribution: a list adds its elements (one level), anything else itself. A
+        /// URI segment of a source that isn't a ref has no value, and a part with no value is an
+        /// error; every other empty list adds nothing, as a <c>When</c> with no <c>elseBuild</c>
+        /// does by design.
+        /// </summary>
+        static void ConcatPart(ExprNode part, int index, object value, List<object> output)
+        {
+            if (UriSegmentOperands.ContainsKey(part.Type) && value is List<object> none && none.Count == 0)
+                throw Err("Concat: part " + index + " (" + part.Type + ") has no value: its source isn't a reference. "
+                    + "A part that may be absent must say so: wrap it in a When, or give it a Fallback.");
+            if (value is List<object> items) output.AddRange(items);
+            else output.Add(value);
+        }
+
         // -- ordered comparisons (unchanged from v1) ---------------------------
 
         static string IdentityOf(ExprNode node, object ctx, EvalOptions opts)
@@ -1060,7 +1089,7 @@ namespace Kanonak.Expression
             set.UnionWith(new[]
             {
                 NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES, NAME_BASED_UUID,
-                EPOCH_MILLISECONDS, EPOCH_DAYS, URI_PUBLISHER, URI_PACKAGE, URI_NAME,
+                EPOCH_MILLISECONDS, EPOCH_DAYS, URI_PUBLISHER, URI_PACKAGE, URI_NAME, CONCAT,
                 INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL,
             });
             return set;
@@ -1272,6 +1301,18 @@ namespace Kanonak.Expression
                 return FoldUriSegment(typ, Go(Operand(node, segmentOperand), ctx, resolve, options, frames));
             }
 
+            if (typ == CONCAT)
+            {
+                var parts = ConcatParts(node);
+                var output = new List<object>();
+                for (int i = 0; i < parts.Count; i++)
+                {
+                    var part = ConcatPartAt(parts, i);
+                    ConcatPart(part, i, Go(part, ctx, resolve, options, frames), output);
+                }
+                return output;
+            }
+
             if (IsKindPredicate(typ))
             {
                 var x = Go(Operand(node, "kindCheck"), ctx, resolve, options, frames);
@@ -1374,6 +1415,19 @@ namespace Kanonak.Expression
                 {
                     if (!(raw[i] is ExprNode sub)) throw Err("align: " + typ + " operand '" + a.Value.A + "'[" + i + "] is not a node");
                     node.Children.Add(AlignNode(sub, trace.Children[i], a.Value.A, i, null));
+                }
+                return node;
+            }
+            // Concat: every part, in order.
+            if (typ == CONCAT)
+            {
+                if (!(expr.Get("parts") is List<object> parts)) throw Err("align: " + typ + " is missing list operand 'parts'");
+                if (trace.Children.Count != parts.Count)
+                    throw Err("align: " + typ + " trace has " + trace.Children.Count + " children for " + parts.Count + " parts " + at);
+                for (int i = 0; i < parts.Count; i++)
+                {
+                    if (!(parts[i] is ExprNode sub)) throw Err("align: " + typ + " operand 'parts'[" + i + "] is not a node");
+                    node.Children.Add(AlignNode(sub, trace.Children[i], "parts", i, null));
                 }
                 return node;
             }
@@ -1596,6 +1650,22 @@ namespace Kanonak.Expression
             {
                 var source = Trace(Operand(node, segmentOperand), ctx, resolve, options, frames);
                 return Parent(typ, FoldUriSegment(typ, source.Value), source);
+            }
+
+            if (typ == CONCAT)
+            {
+                var parts = ConcatParts(node);
+                var t = new TraceNode { Type = typ };
+                var output = new List<object>();
+                for (int i = 0; i < parts.Count; i++)
+                {
+                    var part = ConcatPartAt(parts, i);
+                    var child = Trace(part, ctx, resolve, options, frames);
+                    ConcatPart(part, i, child.Value, output);
+                    t.Children.Add(child);
+                }
+                t.Value = output;
+                return t;
             }
 
             if (IsKindPredicate(typ))

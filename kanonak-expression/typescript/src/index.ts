@@ -49,7 +49,8 @@
  *     `Join`, a non-string `Matches` source, an out-of-subset `Matches`
  *     pattern, an `EpochMilliseconds`/`EpochDays` source that isn't a date-time
  *     or a date in its lexical form, a `UriPublisher`/`UriPackage`/`UriName`
- *     ref that isn't `publisher/package/name` — all raise `ExpressionError`,
+ *     ref that isn't `publisher/package/name`, a `Concat` part that is a URI
+ *     segment of a source that isn't a ref — all raise `ExpressionError`,
  *     never coerce.
  *   - `UriPublisher`, `UriPackage` and `UriName` of anything but a ref fold to
  *     absence, the empty list: the spec's "undefined" for a source with no URI.
@@ -230,6 +231,7 @@ const EPOCH_DAYS = `${TX}/EpochDays`;
 const URI_PUBLISHER = `${TX}/UriPublisher`;
 const URI_PACKAGE = `${TX}/UriPackage`;
 const URI_NAME = `${TX}/UriName`;
+const CONCAT = `${TX}/Concat`;
 const STARTS_WITH = `${TX}/StartsWith`;
 
 /** The literal classes the kernel answers itself (see `literalValue`). */
@@ -1005,6 +1007,34 @@ function foldUriSegment(type: string, source: Value): Value {
 }
 
 // ---------------------------------------------------------------------------
+// Concat (1.6.0) — its parts' values, in order, as one list.
+// ---------------------------------------------------------------------------
+
+/** The parts of a `Concat` node: a list of expressions. */
+function concatParts(node: ExprNode): ExprNode[] {
+  const parts = node.parts;
+  if (!Array.isArray(parts)) throw new ExpressionError(`${CONCAT} expects a 'parts' list`);
+  return parts as ExprNode[];
+}
+
+/**
+ * One part's contribution: a list adds its elements (one level), anything else
+ * itself. A URI segment of a source that isn't a ref has no value, and a part
+ * with no value is an error; every other empty list adds nothing, as a `When`
+ * with no `elseBuild` does by design.
+ */
+function concatPart(part: ExprNode, index: number, value: Value, out: Value[]): void {
+  if (URI_SEGMENTS.has(part.type) && Array.isArray(value) && value.length === 0) {
+    throw new ExpressionError(
+      `Concat: part ${index} (${part.type}) has no value: its source isn't a reference. ` +
+      'A part that may be absent must say so: wrap it in a When, or give it a Fallback.',
+    );
+  }
+  if (Array.isArray(value)) out.push(...value);
+  else out.push(value);
+}
+
+// ---------------------------------------------------------------------------
 // Ordered comparisons (unchanged from v1).
 // ---------------------------------------------------------------------------
 
@@ -1074,7 +1104,7 @@ const KERNEL_NODE_CLASSES: ReadonlySet<string> = new Set<string>([
   ...Object.keys(ITERATOR_BODY),
   ...Object.keys(KIND_PREDICATES),
   NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES, NAME_BASED_UUID,
-  EPOCH_MILLISECONDS, EPOCH_DAYS, URI_PUBLISHER, URI_PACKAGE, URI_NAME,
+  EPOCH_MILLISECONDS, EPOCH_DAYS, URI_PUBLISHER, URI_PACKAGE, URI_NAME, CONCAT,
   INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL,
 ]);
 
@@ -1278,6 +1308,12 @@ function evalNode<C>(
   const segmentOperand = URI_SEGMENT_OPERAND.get(node.type);
   if (segmentOperand !== undefined) {
     return foldUriSegment(node.type, evalNode(operand(node, segmentOperand), ctx, resolve, options, frames));
+  }
+
+  if (node.type === CONCAT) {
+    const out: Value[] = [];
+    concatParts(node).forEach((part, i) => concatPart(part, i, evalNode(part, ctx, resolve, options, frames), out));
+    return out;
   }
 
   const kind = KIND_PREDICATES[node.type];
@@ -1526,6 +1562,16 @@ export function explain<C = unknown>(
       return { type: n.type, value: foldUriSegment(n.type, source.value), children: [source] };
     }
 
+    if (n.type === CONCAT) {
+      const out: Value[] = [];
+      const children = concatParts(n).map((part, i) => {
+        const child = trace(part, c, frames);
+        concatPart(part, i, child.value, out);
+        return child;
+      });
+      return { type: n.type, value: out, children };
+    }
+
     const kind = KIND_PREDICATES[n.type];
     if (kind) {
       const x = trace(operand(n, 'kindCheck'), c, frames);
@@ -1661,6 +1707,18 @@ function alignNode(
     }
     trace.children.forEach((child, i) => {
       node.children.push(alignNode(operands[i] as ExprNode, child, arity.operands, i, undefined));
+    });
+    return node;
+  }
+  // Concat: every part, in order.
+  if (expr.type === CONCAT) {
+    const parts = expr.parts;
+    if (!Array.isArray(parts)) throw new ExpressionError(`align: ${expr.type} is missing list operand 'parts'`);
+    if (trace.children.length !== parts.length) {
+      throw new ExpressionError(`align: ${expr.type} trace has ${trace.children.length} children for ${parts.length} parts ${where}`);
+    }
+    trace.children.forEach((child, i) => {
+      node.children.push(alignNode(parts[i] as ExprNode, child, 'parts', i, undefined));
     });
     return node;
   }

@@ -16,7 +16,8 @@
 // list in Join, an out-of-subset Matches pattern, an
 // EpochMilliseconds/EpochDays source that isn't a date-time or a date in its
 // lexical form, a UriPublisher/UriPackage/UriName ref that isn't
-// publisher/package/name); predicates fail CLOSED (Equals cross-kind, the
+// publisher/package/name, a Concat part that is a URI segment of a source
+// that isn't a ref); predicates fail CLOSED (Equals cross-kind, the
 // ordering comparisons on non-numbers, and StartsWith on any operand but a
 // well-formed string yield 0). UriPublisher, UriPackage and UriName of
 // anything but a ref fold to absence, the empty list: the spec's "undefined"
@@ -168,6 +169,7 @@ const (
 	opURIPublisher      = tx + "/UriPublisher"
 	opURIPackage        = tx + "/UriPackage"
 	opURIName           = tx + "/UriName"
+	opConcat            = tx + "/Concat"
 	opStartsWith        = tx + "/StartsWith"
 )
 
@@ -1138,6 +1140,42 @@ func foldURISegment(typ string, source Value) Value {
 	return segmentsOf(read.op, ref.URI)[read.index]
 }
 
+// --- Concat (1.6.0): its parts' values, in order, as one list. --------------
+
+// concatParts returns the parts of a Concat node: a list of expressions.
+func concatParts(node Node) []interface{} {
+	parts, ok := node["parts"].([]interface{})
+	if !ok {
+		raise("%s expects a 'parts' list", opConcat)
+	}
+	return parts
+}
+
+// concatPartNode returns part i of a Concat node, which must be a node.
+func concatPartNode(part interface{}, i int) Node {
+	sub, ok := part.(map[string]interface{})
+	if !ok {
+		raise("%s part %d is not a node", opConcat, i)
+	}
+	return Node(sub)
+}
+
+// concatPart appends one part's contribution to out: a list adds its elements
+// (one level), anything else itself. A URI segment of a source that isn't a
+// ref has no value, and a part with no value is an error; every other empty
+// list adds nothing, as a When with no elseBuild does by design.
+func concatPart(part Node, i int, value Value, out []Value) []Value {
+	list, isList := value.([]Value)
+	if _, segment := uriSegmentRead[part.Type()]; segment && isList && len(list) == 0 {
+		raise("Concat: part %d (%s) has no value: its source isn't a reference. "+
+			"A part that may be absent must say so: wrap it in a When, or give it a Fallback.", i, part.Type())
+	}
+	if isList {
+		return append(out, list...)
+	}
+	return append(out, value)
+}
+
 // --- ordered comparisons (unchanged from v1) --------------------------------
 
 func operand(node Node, key string) Node {
@@ -1196,7 +1234,7 @@ var kernelByName = map[string]bool{
 	opNot: true, opIsAtLeast: true, opDominates: true, opContains: true,
 	opIsSet: true, opListItemAt: true, opMatches: true, opNameBasedUUID: true,
 	opEpochMilliseconds: true, opEpochDays: true,
-	opURIPublisher: true, opURIPackage: true, opURIName: true,
+	opURIPublisher: true, opURIPackage: true, opURIName: true, opConcat: true,
 	integerLiteral: true, decimalLiteral: true, booleanLiteral: true,
 	stringLiteral: true, uriLiteral: true,
 }
@@ -1416,6 +1454,15 @@ func evalNode(node Node, ctx interface{}, resolve Resolve, opts *Options, frames
 
 	if operandKey, ok := uriSegmentOperand[typ]; ok {
 		return foldURISegment(typ, evalNode(operand(node, operandKey), ctx, resolve, opts, frames))
+	}
+
+	if typ == opConcat {
+		out := []Value{}
+		for i, raw := range concatParts(node) {
+			part := concatPartNode(raw, i)
+			out = concatPart(part, i, evalNode(part, ctx, resolve, opts, frames), out)
+		}
+		return out
 	}
 
 	if v, ok := kindPredicate(typ, nil); ok {
@@ -1672,6 +1719,18 @@ func explainPanic(node Node, ctx interface{}, resolve Resolve, opts *Options, fr
 		return &TraceNode{Type: typ, Value: foldURISegment(typ, source.Value), Children: []*TraceNode{source}}
 	}
 
+	if typ == opConcat {
+		out := []Value{}
+		children := []*TraceNode{}
+		for i, raw := range concatParts(node) {
+			part := concatPartNode(raw, i)
+			child := explainPanic(part, ctx, resolve, opts, frames)
+			out = concatPart(part, i, child.Value, out)
+			children = append(children, child)
+		}
+		return &TraceNode{Type: typ, Value: out, Children: children}
+	}
+
 	if _, ok := kindPredicate(typ, nil); ok {
 		x := explainPanic(operand(node, "kindCheck"), ctx, resolve, opts, frames)
 		v, _ := kindPredicate(typ, x.Value)
@@ -1842,6 +1901,24 @@ func alignNode(expr Node, trace *TraceNode, operandKey string, index int, elemen
 				raise("align: %s operand '%s'[%d] is not a node", typ, a.a, i)
 			}
 			node.Children = append(node.Children, alignNode(Node(sub), child, a.a, i, nil))
+		}
+		return node
+	}
+	// Concat: every part, in order.
+	if typ == opConcat {
+		raw, ok := expr["parts"].([]interface{})
+		if !ok {
+			raise("align: %s is missing list operand 'parts'", typ)
+		}
+		if len(trace.Children) != len(raw) {
+			raise("align: %s trace has %d children for %d parts %s", typ, len(trace.Children), len(raw), where)
+		}
+		for i, child := range trace.Children {
+			sub, ok := raw[i].(map[string]interface{})
+			if !ok {
+				raise("align: %s operand 'parts'[%d] is not a node", typ, i)
+			}
+			node.Children = append(node.Children, alignNode(Node(sub), child, "parts", i, nil))
 		}
 		return node
 	}

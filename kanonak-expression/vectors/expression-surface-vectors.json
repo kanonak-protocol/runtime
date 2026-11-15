@@ -233,6 +233,11 @@
       "expected": true
     },
     {
+      "id": "evaluates-tx-Concat",
+      "type": "kanonak.org/transformations/Concat",
+      "expected": true
+    },
+    {
       "id": "evaluates-tx-UriVersion",
       "type": "kanonak.org/transformations/UriVersion",
       "expected": false
@@ -335,12 +340,6 @@
     {
       "id": "evaluates-not-When",
       "type": "kanonak.org/transformations/When",
-      "expected": false,
-      "description": "not a kernel operator"
-    },
-    {
-      "id": "evaluates-not-Concat",
-      "type": "kanonak.org/transformations/Concat",
       "expected": false,
       "description": "not a kernel operator"
     },

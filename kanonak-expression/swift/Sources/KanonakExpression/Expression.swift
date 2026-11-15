@@ -16,7 +16,8 @@
 // aggregate over non-numeric elements, Min/Max/Average on empty, a nested list
 // in Join, an out-of-subset Matches pattern, an `EpochMilliseconds`/`EpochDays`
 // source that isn't a date-time or a date in its lexical form, a
-// `UriPublisher`/`UriPackage`/`UriName` ref that isn't `publisher/package/name`);
+// `UriPublisher`/`UriPackage`/`UriName` ref that isn't `publisher/package/name`,
+// a `Concat` part that is a URI segment of a source that isn't a ref);
 // predicates fail CLOSED (`Equals` cross-kind, the ordering comparisons on
 // non-numbers, and `StartsWith` on any operand but a string yield `0`).
 // `UriPublisher`, `UriPackage` and `UriName` of anything but a ref fold to
@@ -71,6 +72,7 @@ private let epochDaysType = "\(tx)/EpochDays"
 private let uriPublisherType = "\(tx)/UriPublisher"
 private let uriPackageType = "\(tx)/UriPackage"
 private let uriNameType = "\(tx)/UriName"
+private let concatType = "\(tx)/Concat"
 private let startsWithType = "\(tx)/StartsWith"
 
 // The literal classes the kernel answers itself (see `literalValue`).
@@ -924,6 +926,40 @@ private func foldUriSegment(_ typ: String, _ source: EvalValue) throws -> EvalVa
     }
 }
 
+// MARK: - Concat (1.6.0): its parts' values, in order, as one list
+
+/// The parts of a `Concat` node: a list of expressions.
+private func concatParts(_ node: ExprNode) throws -> [ExprNode] {
+    guard let parts = node["parts"] as? [Any] else {
+        throw ExpressionError("\(concatType) expects a 'parts' list")
+    }
+    return try parts.enumerated().map { i, part in
+        guard let sub = part as? ExprNode else {
+            throw ExpressionError("\(concatType) part \(i) is not a node")
+        }
+        return sub
+    }
+}
+
+/// One part's contribution: a list adds its elements (one level), anything else
+/// itself. A URI segment of a source that isn't a ref has no value, and a part
+/// with no value is an error; every other empty list adds nothing, as a `When`
+/// with no `elseBuild` does by design.
+private func concatPart(_ part: ExprNode, _ index: Int, _ value: EvalValue, _ out: inout [EvalValue]) throws {
+    let typ = try nodeType(part)
+    guard case let .list(items) = value else {
+        out.append(value)
+        return
+    }
+    if items.isEmpty && uriSegmentOperand(typ) != nil {
+        throw ExpressionError(
+            "Concat: part \(index) (\(typ)) has no value: its source isn't a reference. "
+                + "A part that may be absent must say so: wrap it in a When, or give it a Fallback."
+        )
+    }
+    out.append(contentsOf: items)
+}
+
 // MARK: - Ordered comparisons (unchanged from v1)
 
 private func identityOf<C>(_ node: ExprNode, _ ctx: C, _ options: EvalOptions<C>?) throws -> String {
@@ -966,6 +1002,7 @@ private func foldOrdered<C>(
 private let byNameOperators: Set<String> = [
     notType, isAtLeastType, dominatesType, containsType, isSetType, listItemAtType, matchesType,
     nameBasedUuidType, epochMillisecondsType, epochDaysType, uriPublisherType, uriPackageType, uriNameType,
+    concatType,
 ]
 private let literalTypes: Set<String> = [
     integerLiteralType, decimalLiteralType, booleanLiteralType, stringLiteralType, uriLiteralType,
@@ -1150,6 +1187,14 @@ private func go<C>(
     if let of = uriSegmentOperand(typ) {
         let source = try go(try operand(node, typ, of), ctx, resolve, options, &frames)
         return try foldUriSegment(typ, source)
+    }
+
+    if typ == concatType {
+        var out: [EvalValue] = []
+        for (i, part) in try concatParts(node).enumerated() {
+            try concatPart(part, i, try go(part, ctx, resolve, options, &frames), &out)
+        }
+        return .list(out)
     }
 
     if let v = try kindPredicateValue(typ, node, ctx, resolve, options, &frames) {
@@ -1359,6 +1404,17 @@ private func trace<C>(
         return TraceNode(typ, try foldUriSegment(typ, source.value), [source])
     }
 
+    if typ == concatType {
+        var out: [EvalValue] = []
+        var children: [TraceNode] = []
+        for (i, part) in try concatParts(node).enumerated() {
+            let child = try trace(part, ctx, resolve, options, &frames)
+            try concatPart(part, i, child.value, &out)
+            children.append(child)
+        }
+        return TraceNode(typ, .list(out), children)
+    }
+
     if kindPredicate(typ, .num(0)) != nil {
         let x = try trace(try operand(node, typ, "kindCheck"), ctx, resolve, options, &frames)
         return TraceNode(typ, .num(kindPredicate(typ, x.value)!), [x])
@@ -1486,6 +1542,18 @@ private func alignNode(
         for (i, child) in trace.children.enumerated() {
             guard let sub = operands[i] as? ExprNode else { throw ExpressionError("align: \(typ) operand '\(key)'[\(i)] is not a node") }
             children.append(try alignNode(sub, child, key, i, nil))
+        }
+        return AlignedNode(expr: expr, trace: trace, operand: operandKey, index: index, element: element, children: children)
+    }
+    // Concat: every part, in order.
+    if typ == concatType {
+        guard let parts = expr["parts"] as? [Any] else { throw ExpressionError("align: \(typ) is missing list operand 'parts'") }
+        guard trace.children.count == parts.count else {
+            throw ExpressionError("align: \(typ) trace has \(trace.children.count) children for \(parts.count) parts \(at)")
+        }
+        for (i, child) in trace.children.enumerated() {
+            guard let sub = parts[i] as? ExprNode else { throw ExpressionError("align: \(typ) operand 'parts'[\(i)] is not a node") }
+            children.append(try alignNode(sub, child, "parts", i, nil))
         }
         return AlignedNode(expr: expr, trace: trace, operand: operandKey, index: index, element: element, children: children)
     }

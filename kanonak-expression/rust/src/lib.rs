@@ -17,7 +17,8 @@
 //! list in Join, an out-of-subset Matches pattern, an
 //! `EpochMilliseconds`/`EpochDays` source that isn't a date-time or a date in
 //! its lexical form, a `UriPublisher`/`UriPackage`/`UriName` ref that isn't
-//! `publisher/package/name`); predicates fail CLOSED
+//! `publisher/package/name`, a `Concat` part that is a URI segment of a source
+//! that isn't a ref); predicates fail CLOSED
 //! (`Equals` cross-kind, the ordering comparisons on non-numbers, and
 //! `StartsWith` on any operand but a string yield `0.0`, never an error).
 //! `UriPublisher`, `UriPackage` and `UriName` of anything but a ref fold to
@@ -199,6 +200,7 @@ const EPOCH_DAYS: &str = "kanonak.org/transformations/EpochDays";
 const URI_PUBLISHER: &str = "kanonak.org/transformations/UriPublisher";
 const URI_PACKAGE: &str = "kanonak.org/transformations/UriPackage";
 const URI_NAME: &str = "kanonak.org/transformations/UriName";
+const CONCAT: &str = "kanonak.org/transformations/Concat";
 const STARTS_WITH: &str = "kanonak.org/transformations/StartsWith";
 
 /// The literal classes the kernel answers itself (see `literal_value`).
@@ -1182,6 +1184,45 @@ fn fold_uri_segment(typ: &str, source: &EvalValue) -> Result<EvalValue, Expressi
 }
 
 // ---------------------------------------------------------------------------
+// Concat (1.6.0) — its parts' values, in order, as one list.
+// ---------------------------------------------------------------------------
+
+/// The parts of a `Concat` node: a list of expressions.
+fn concat_parts(node: &Json) -> Result<&[Json], ExpressionError> {
+    match node.get("parts") {
+        Some(Json::Array(parts)) => Ok(parts),
+        _ => err(format!("{CONCAT} expects a 'parts' list")),
+    }
+}
+
+/// One part's contribution: a list adds its elements (one level), anything else
+/// itself. A URI segment of a source that isn't a ref has no value, and a part
+/// with no value is an error; every other empty list adds nothing, as a `When`
+/// with no `elseBuild` does by design.
+fn concat_part(
+    part: &Json,
+    index: usize,
+    value: EvalValue,
+    out: &mut Vec<EvalValue>,
+) -> Result<(), ExpressionError> {
+    let typ = node_type(part)?;
+    match value {
+        EvalValue::List(l) if l.is_empty() && uri_segment_operand(typ).is_some() => err(format!(
+            "Concat: part {index} ({typ}) has no value: its source isn't a reference. \
+             A part that may be absent must say so: wrap it in a When, or give it a Fallback."
+        )),
+        EvalValue::List(l) => {
+            out.extend(l);
+            Ok(())
+        }
+        scalar => {
+            out.push(scalar);
+            Ok(())
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Ordered comparisons (unchanged from v1).
 // ---------------------------------------------------------------------------
 
@@ -1249,7 +1290,7 @@ fn kernel_node_classes() -> &'static HashSet<&'static str> {
             .chain(KIND_PREDICATES.iter().copied())
             .chain([
                 NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES,
-                NAME_BASED_UUID, EPOCH_MILLISECONDS, EPOCH_DAYS, URI_PUBLISHER, URI_PACKAGE, URI_NAME,
+                NAME_BASED_UUID, EPOCH_MILLISECONDS, EPOCH_DAYS, URI_PUBLISHER, URI_PACKAGE, URI_NAME, CONCAT,
                 INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL,
             ])
             .collect()
@@ -1494,6 +1535,15 @@ fn go<C>(
     if let Some(of) = uri_segment_operand(typ) {
         let source = go(operand(node, typ, of)?, ctx, resolve, options, frames)?;
         return fold_uri_segment(typ, &source);
+    }
+
+    if typ == CONCAT {
+        let mut out = Vec::new();
+        for (i, part) in concat_parts(node)?.iter().enumerate() {
+            let value = go(part, ctx, resolve, options, frames)?;
+            concat_part(part, i, value, &mut out)?;
+        }
+        return Ok(EvalValue::List(out));
     }
 
     if is_kind_predicate(typ) {
@@ -1762,6 +1812,17 @@ fn trace<C>(
         return Ok(parent(typ, v, vec![source]));
     }
 
+    if typ == CONCAT {
+        let mut out = Vec::new();
+        let mut children = Vec::new();
+        for (i, part) in concat_parts(node)?.iter().enumerate() {
+            let child = trace(part, ctx, resolve, options, frames)?;
+            concat_part(part, i, child.value.clone(), &mut out)?;
+            children.push(child);
+        }
+        return Ok(parent(typ, EvalValue::List(out), children));
+    }
+
     if is_kind_predicate(typ) {
         let x = trace(operand(node, typ, "kindCheck")?, ctx, resolve, options, frames)?;
         let v = kind_predicate(typ, &x.value).unwrap();
@@ -1931,6 +1992,24 @@ fn align_node<'a>(
         }
         for (i, child) in trace.children.iter().enumerate() {
             node.children.push(align_node(&list[i], child, Some(operands), Some(i), None)?);
+        }
+        return Ok(node);
+    }
+    // Concat: every part, in order.
+    if typ == CONCAT {
+        let parts = expr
+            .get("parts")
+            .and_then(|p| p.as_array())
+            .ok_or_else(|| ExpressionError(format!("align: {typ} is missing list operand 'parts'")))?;
+        if trace.children.len() != parts.len() {
+            return Err(ExpressionError(format!(
+                "align: {typ} trace has {} children for {} parts {at}",
+                trace.children.len(),
+                parts.len()
+            )));
+        }
+        for (i, child) in trace.children.iter().enumerate() {
+            node.children.push(align_node(&parts[i], child, Some("parts"), Some(i), None)?);
         }
         return Ok(node);
     }

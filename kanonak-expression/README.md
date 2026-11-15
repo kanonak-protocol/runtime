@@ -114,7 +114,8 @@ The v2 extension splits by role:
   unknown `uuidFormat`, an `EpochMilliseconds` or `EpochDays` source that
   isn't a date-time or a date in its lexical form, or whose count passes
   2^53 - 1, a `UriPublisher`, `UriPackage` or `UriName` ref that isn't
-  `publisher/package/name` — all raise, never coerce.
+  `publisher/package/name`, a `Concat` part that is a URI segment of a source
+  that isn't a ref — all raise, never coerce.
 - **Predicates fail CLOSED.** `Equals` on any cross-kind pair (a URI is never
   equal to the string spelling of it; lists are containers, never equal), the
   ordering comparisons (`GreaterThan` et al.) on non-numeric operands, and
@@ -155,6 +156,7 @@ those values are unreachable by construction.
 | (direct) | `uuidNamespace`, `uuidName`, `uuidFormat` (data, optional) | NameBasedUuid (1.2.0) |
 | `EpochCount` | `temporalSource` | EpochMilliseconds, EpochDays (1.4.0) |
 | (direct) | `uriPublisherOf`, `uriPackageOf`, `uriNameOf` | UriPublisher, UriPackage, UriName (1.5.0) |
+| (direct) | `parts` (a list) | Concat (1.6.0) |
 
 Literals: `IntegerLiteral`, `DecimalLiteral`, `BooleanLiteral` (→ `1`/`0`),
 `StringLiteral`, `UriLiteral` (→ a ref value; doubles as the identity leaf
@@ -178,7 +180,7 @@ the literals: the node classes the kernel folds itself. It is false for
 everything `evaluate` hands to the caller's `resolve`: a binding (`VarRef`;
 the kernel binds only its own iterators' loop variables), a graph read
 (`PropertyRead`), a domain leaf, and an expression class only a host engine
-implements (`Let`, `When`, `Concat`, `Fallback`, `Traverse`, `DistinctBy`, the
+implements (`Let`, `When`, `Fallback`, `Traverse`, `DistinctBy`, the
 host kinds `IsBoolean` and `IsEmbedded`, `UriVersion` and `SubjectUri`, …). A host that compiles authored
 expressions checks each tree against it — every node either `evaluates`, or
 is a leaf the host resolves — instead of probing `evaluate` class by class.
@@ -382,6 +384,30 @@ another's, or its name with an identifier.
 **For a host engine.** `uriSegments(uri)` splits a URI exactly as the three
 fold a ref, so an engine evaluating them over its own value domain calls it.
 
+## Concat — its parts' values as one list (1.6.0)
+
+`Concat` folds its `parts`, every one, in order, into one list, as
+`transformations` defines it: "a part that yields a list adds its elements".
+`Join` then puts a separator between them, so a name or a URI built from parts
+folds in the kernel alone.
+
+- **A list part adds its elements, one level:** a list inside it stays a list.
+  Any other value adds itself, and no parts give the empty list.
+- **An empty list adds nothing.** In the kernel it is also absence, and the
+  spec's `When` with no `elseBuild` yields it "deliberately: an empty list,
+  which Concat adds nothing for". `When` is a host's, so the kernel sees only
+  the empty list it hands back, and can't tell it from any other.
+- **A part with no value raises,** as `transformations` has it: a `UriPublisher`,
+  `UriPackage` or `UriName` part whose source isn't a ref. Those are the only
+  kernel nodes that fold to absence for a missing value, and the SDK's engine
+  refuses the `undefined` it gives there.
+- **A leaf that may have no value is guarded where it's a part.** By the caller
+  convention above, a leaf for a property with no values resolves to the empty
+  list, which `IsSet` and `Count` rely on, so `Concat` adds nothing for it and
+  the joined text can look right with a value missing. Where a part must have
+  a value, say so as the spec does: `When` (`IsSet` of it) to make it optional
+  on purpose, or a `Fallback`, and a host refuses a missing value it can name.
+
 ## Ordered comparisons
 
 `IsAtLeast` / `Dominates` compare **ordered vocabulary members** — members of a
@@ -508,7 +534,8 @@ public surface:
   cycles rather than the ports' algorithm, with every edge XSD allows and a
   refusal for each form it doesn't, and `UriPublisher`, `UriPackage` and
   `UriName` (1.5.0), with every kind of source that folds to absence and each
-  malformed ref refused.
+  malformed ref refused, and `Concat` (1.6.0), with each kind of part, an
+  empty one, and each URI segment with no value refused.
 - [`vectors/expression-alignment-vectors.json`](./vectors/expression-alignment-vectors.json)
   — `align(expr, trace)`.
 - [`vectors/expression-surface-vectors.json`](./vectors/expression-surface-vectors.json)

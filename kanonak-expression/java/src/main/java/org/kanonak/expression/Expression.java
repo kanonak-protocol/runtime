@@ -30,7 +30,8 @@ import java.util.regex.PatternSyntaxException;
  * <p>ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an aggregate over
  * non-numeric elements, Min/Max/Average on empty, a nested list in Join, an out-of-subset
  * Matches pattern, an EpochMilliseconds/EpochDays source that isn't a date-time or a date in
- * its lexical form, a UriPublisher/UriPackage/UriName ref that isn't publisher/package/name);
+ * its lexical form, a UriPublisher/UriPackage/UriName ref that isn't publisher/package/name, a
+ * Concat part that is a URI segment of a source that isn't a ref);
  * UriPublisher, UriPackage and UriName of anything but a ref fold to absence, the empty list,
  * the spec's "undefined" for a source with no URI; predicates fail CLOSED (Equals cross-kind,
  * the ordering comparisons on non-numbers, and StartsWith on any operand but a string yield 0).
@@ -74,6 +75,7 @@ public final class Expression {
     private static final String URI_PUBLISHER = TX + "/UriPublisher";
     private static final String URI_PACKAGE = TX + "/UriPackage";
     private static final String URI_NAME = TX + "/UriName";
+    private static final String CONCAT = TX + "/Concat";
     private static final String STARTS_WITH = TX + "/StartsWith";
 
     /** The literal classes the kernel answers itself (see {@code literalValue}). */
@@ -765,6 +767,32 @@ public final class Expression {
         }
     }
 
+    // -- Concat (1.6.0): its parts' values, in order, as one list ------------
+
+    /** The parts of a {@code Concat} node: a list of expressions. */
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> concatParts(Map<String, Object> node) {
+        Object parts = node.get("parts");
+        if (!(parts instanceof List)) throw err(CONCAT + " expects a 'parts' list");
+        return (List<Map<String, Object>>) parts;
+    }
+
+    /**
+     * One part's contribution: a list adds its elements (one level), anything else itself. A URI
+     * segment of a source that isn't a ref has no value, and a part with no value is an error;
+     * every other empty list adds nothing, as a {@code When} with no {@code elseBuild} does by design.
+     */
+    @SuppressWarnings("unchecked")
+    private static void concatPart(Map<String, Object> part, int index, Object value, List<Object> out) {
+        String typ = typeOf(part);
+        if (URI_SEGMENT_OPERAND.containsKey(typ) && value instanceof List<?> list && list.isEmpty()) {
+            throw err("Concat: part " + index + " (" + typ + ") has no value: its source isn't a reference. "
+                + "A part that may be absent must say so: wrap it in a When, or give it a Fallback.");
+        }
+        if (value instanceof List) out.addAll((List<Object>) value);
+        else out.add(value);
+    }
+
     // -- ordered comparisons (unchanged from v1) ------------------------------
 
     private static <C> String identityOf(Map<String, Object> node, C ctx, EvalOptions<C> opts) {
@@ -980,7 +1008,7 @@ public final class Expression {
         classes.addAll(KIND_PREDICATES);
         Collections.addAll(classes,
             NOT, IS_AT_LEAST, DOMINATES, CONTAINS, IS_SET, LIST_ITEM_AT, MATCHES, NAME_BASED_UUID,
-            EPOCH_MILLISECONDS, EPOCH_DAYS, URI_PUBLISHER, URI_PACKAGE, URI_NAME,
+            EPOCH_MILLISECONDS, EPOCH_DAYS, URI_PUBLISHER, URI_PACKAGE, URI_NAME, CONCAT,
             INTEGER_LITERAL, DECIMAL_LITERAL, BOOLEAN_LITERAL, STRING_LITERAL, URI_LITERAL);
         KERNEL_NODE_CLASSES = Collections.unmodifiableSet(classes);
     }
@@ -1167,6 +1195,15 @@ public final class Expression {
         String segmentOperand = URI_SEGMENT_OPERAND.get(typ);
         if (segmentOperand != null) {
             return foldUriSegment(typ, go(operand(node, typ, segmentOperand), ctx, resolve, options, frames));
+        }
+
+        if (typ.equals(CONCAT)) {
+            List<Map<String, Object>> parts = concatParts(node);
+            List<Object> out = new ArrayList<>();
+            for (int i = 0; i < parts.size(); i++) {
+                concatPart(parts.get(i), i, go(parts.get(i), ctx, resolve, options, frames), out);
+            }
+            return out;
         }
 
         if (isKindPredicate(typ)) {
@@ -1369,6 +1406,18 @@ public final class Expression {
             return parent(typ, foldUriSegment(typ, source.value), listOf(source));
         }
 
+        if (typ.equals(CONCAT)) {
+            List<Map<String, Object>> parts = concatParts(node);
+            List<TraceNode> children = new ArrayList<>();
+            List<Object> out = new ArrayList<>();
+            for (int i = 0; i < parts.size(); i++) {
+                TraceNode child = trace(parts.get(i), ctx, resolve, options, frames);
+                concatPart(parts.get(i), i, child.value, out);
+                children.add(child);
+            }
+            return parent(typ, out, children);
+        }
+
         if (isKindPredicate(typ)) {
             TraceNode x = trace(operand(node, typ, "kindCheck"), ctx, resolve, options, frames);
             return parent(typ, bool(kindPredicate(typ, x.value)), listOf(x));
@@ -1500,6 +1549,18 @@ public final class Expression {
             }
             for (int i = 0; i < trace.children.size(); i++) {
                 node.children.add(alignNode((Map<String, Object>) raw.get(i), trace.children.get(i), a.a, i, null));
+            }
+            return node;
+        }
+        // Concat: every part, in order.
+        if (typ.equals(CONCAT)) {
+            if (!(expr.get("parts") instanceof List<?> parts)) throw err("align: " + typ + " is missing list operand 'parts'");
+            if (trace.children.size() != parts.size()) {
+                throw err("align: " + typ + " trace has " + trace.children.size() + " children for " + parts.size()
+                    + " parts " + at);
+            }
+            for (int i = 0; i < parts.size(); i++) {
+                node.children.add(alignNode((Map<String, Object>) parts.get(i), trace.children.get(i), "parts", i, null));
             }
             return node;
         }
