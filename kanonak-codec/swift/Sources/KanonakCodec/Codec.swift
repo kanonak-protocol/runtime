@@ -5,8 +5,8 @@
 // references and the `kanonak hash` CLI produce. It also (de)serializes the
 // normalized-JSON wire form.
 //
-// A node is a plain [String: Any] (the $-envelope plus alias-collapsed
-// local-name fields). Values: String, Bool, JSONNumber (lexical-preserving —
+// A node is a plain [String: Any] (the $-envelope plus fields keyed as its
+// class's props are). Values: String, Bool, JSONNumber (lexical-preserving —
 // what parseJSON produces), Int/Int64/Double for programmatic construction,
 // [Any] for lists, [String: Any] for references/embeddeds, NSNull for null.
 
@@ -40,7 +40,10 @@ public struct CodecProp: Decodable {
     }
 }
 
-/// A modeled type: its URI and its properties keyed by local name.
+/// A modeled type: its URI and its properties keyed by wire field name, a
+/// property's local name or, where the class holds two properties of one local
+/// name, the versionless URI of each but the one declared by the package of the
+/// class where the two first meet (runtime#81).
 public struct CodecClass: Decodable {
     public let typeUri: String
     public let props: [String: CodecProp]

@@ -11,7 +11,7 @@ also (de)serializes the normalized-JSON wire form.
 ## Node representation
 
 A node is a plain `map[string]interface{}`: the `$`-envelope (`$type`, `$id`,
-optional `$extra`) plus alias-collapsed local-name fields. Decode JSON with a
+optional `$extra`) plus fields keyed as its class's `Props` are. Decode JSON with a
 `json.Decoder` configured via `UseNumber()` so numeric lexicals survive as
 `json.Number` (e.g. `"5"`, `"1.5"`) rather than being widened to `float64`:
 

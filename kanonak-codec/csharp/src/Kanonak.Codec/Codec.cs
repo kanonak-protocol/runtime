@@ -15,8 +15,8 @@ namespace Kanonak.Codec
     /// reference ports and the <c>kanonak hash</c> CLI produce. It also (de)serializes
     /// the normalized-JSON wire form.
     ///
-    /// A node is a plain map (the <c>$</c>-envelope plus alias-collapsed local-name
-    /// fields). Field values are CLR primitives (<see cref="string"/>, <see cref="bool"/>,
+    /// A node is a plain map (the <c>$</c>-envelope plus fields keyed as its class's
+    /// <c>Props</c> are). Field values are CLR primitives (<see cref="string"/>, <see cref="bool"/>,
     /// numeric), an <see cref="IReadOnlyList{T}"/> of those, a reference map
     /// (<c>{ "$ref": uri }</c>), or an embedded node (a map without <c>$ref</c>/<c>$id</c>).
     /// <c>$extra</c> is a map keyed by predicate URI.

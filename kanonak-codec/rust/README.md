@@ -8,8 +8,8 @@ producing the exact content hash the `kanonak hash` CLI emits. It also
 (de)serializes the normalized-JSON wire form.
 
 A **node** is a plain JSON object (`serde_json::Map<String, serde_json::Value>`):
-the `$`-envelope (`$type`, `$id`, optional `$extra`, …) plus alias-collapsed
-local-name fields. A generated typed model serializes to one.
+the `$`-envelope (`$type`, `$id`, optional `$extra`, …) plus fields keyed as
+its class's `props` are. A generated typed model serializes to one.
 
 ## API
 
