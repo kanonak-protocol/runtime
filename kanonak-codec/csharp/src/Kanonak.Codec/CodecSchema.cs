@@ -29,7 +29,12 @@ namespace Kanonak.Codec
         /// <summary>The class's durable canonical URI — the value of the synthesized type triple.</summary>
         public string TypeUri;
 
-        /// <summary>Properties keyed by local name (the wire field name).</summary>
+        /// <summary>
+        /// Properties keyed by wire field name: a property's local name, or, where the
+        /// class holds two properties of one local name, the versionless URI of each
+        /// but the one declared by the package of the class where the two first meet
+        /// (runtime#81).
+        /// </summary>
         public Dictionary<string, CodecProp> Props = new Dictionary<string, CodecProp>();
 
         /// <summary>

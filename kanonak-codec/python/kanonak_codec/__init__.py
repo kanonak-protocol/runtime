@@ -8,8 +8,8 @@ form. Self-contained: carriers come from the schema's datatype URIs, and the
 resolved foundation URIs are embedded by the generator, so hashing needs no
 runtime ontology resolution.
 
-A node is a plain ``dict`` (the ``$``-envelope plus alias-collapsed local-name
-fields); a generated Pydantic model serializes to one via ``model_dump``.
+A node is a plain ``dict`` (the ``$``-envelope plus fields keyed as its class's
+``props`` are); a generated Pydantic model serializes to one via ``model_dump``.
 
 The typed SDK-facing surface (0.3.0) — ``to_node``, ``ref``, ``embed`` — binds
 a generated model to that same node contract, duck-typed so the runtime stays

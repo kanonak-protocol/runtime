@@ -116,7 +116,12 @@ export interface CodecEnum {
 export interface CodecClass {
   /** The class's durable canonical URI — the value of the synthesized type triple. */
   typeUri: string;
-  /** Properties keyed by local name (the wire field name). */
+  /**
+   * Properties keyed by wire field name: a property's local name, or, where the
+   * class holds two properties of one local name, the versionless URI of each
+   * but the one declared by the package of the class where the two first meet
+   * (runtime#81).
+   */
   props: Record<string, CodecProp>;
   /**
    * Every superclass of the class, transitively, by durable VERSIONED URI
@@ -164,7 +169,7 @@ export interface CodecSchema {
 }
 
 /**
- * A typed node: the `$`-envelope plus alias-collapsed local-name fields.
+ * A typed node: the `$`-envelope plus fields keyed as its class's `props` are.
  *
  * No index signature — a generated interface (which has none) would not be
  * assignable to one that does. Concrete generated types (e.g. `Account`) are
@@ -748,7 +753,7 @@ export function packageContentHash(
 
 /**
  * A node's normalized-JSON wire projection. The node is already
- * the wire shape (`$`-envelope + alias-collapsed local-name fields + `Ref<T>`
+ * the wire shape (`$`-envelope + fields keyed as its class's `props` + `Ref<T>`
  * values), so this is a shallow projection that (a) drops `undefined`, and (b)
  * spreads `$extra` entries back to TOP LEVEL — the open-world assertions ride
  * as sibling fields on the wire (`[JsonExtensionData]` semantics), not under a

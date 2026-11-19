@@ -75,7 +75,7 @@ The YAML / Package wire (`toPackage`/`fromPackage`) is out of scope for this por
 ## Node shape
 
 A node is a plain `IReadOnlyDictionary<string, object>`: the `$`-envelope
-(`$type`, `$id`, optional `$extra`) plus alias-collapsed local-name fields.
+(`$type`, `$id`, optional `$extra`) plus fields keyed as its class's `Props` are.
 Field values are CLR primitives (`string`, `bool`, numeric), an
 `IReadOnlyList` of those, or a reference map (`{ "$ref": uri }`). `$extra` is a
 map keyed by predicate URI. A reference must address a named resource

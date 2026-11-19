@@ -9,7 +9,7 @@
 //! so hashing needs no runtime ontology resolution.
 //!
 //! A node is a plain JSON object (`serde_json::Map<String, serde_json::Value>`) —
-//! the `$`-envelope plus alias-collapsed local-name fields. A generated typed
+//! the `$`-envelope plus fields keyed as its class's `props` are. A generated typed
 //! model serializes to one. Note: `serde_json::Value` (the node field model) is
 //! distinct from `kanonak_canonical::Value` (the canonical-input value enum).
 

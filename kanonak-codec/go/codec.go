@@ -5,8 +5,8 @@
 // TypeScript/Python references and the `kanonak hash` CLI produce. It also
 // (de)serializes the normalized-JSON wire form.
 //
-// A node is a plain map[string]interface{} (the $-envelope plus alias-collapsed
-// local-name fields). Decode it with a json.Decoder configured via UseNumber()
+// A node is a plain map[string]interface{} (the $-envelope plus fields keyed as
+// its class's Props are). Decode it with a json.Decoder configured via UseNumber()
 // so numeric lexicals survive as json.Number (e.g. "5", "1.5") rather than
 // being widened to float64.
 package codec
@@ -159,7 +159,10 @@ type Prop struct {
 	Range     string `json:"range,omitempty"`
 }
 
-// Class describes a modeled type: its URI and its properties keyed by local name.
+// Class describes a modeled type: its URI and its properties keyed by wire field
+// name, a property's local name or, where the class holds two properties of one
+// local name, the versionless URI of each but the one declared by the package of
+// the class where the two first meet (runtime#81).
 type Class struct {
 	TypeURI string          `json:"typeUri"`
 	Props   map[string]Prop `json:"props"`

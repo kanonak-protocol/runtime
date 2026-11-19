@@ -49,6 +49,21 @@
             "datatype": "kanonak.org/core-xsd/string"
           }
         }
+      },
+      "probe.example.com/schema@1.0.0/Note": {
+        "typeUri": "probe.example.com/schema@1.0.0/Note",
+        "props": {
+          "text": {
+            "predicate": "probe.example.com/schema@1.0.0/text",
+            "kind": "datatype",
+            "datatype": "kanonak.org/core-xsd/string"
+          },
+          "style.example.com/tokens/text": {
+            "predicate": "style.example.com/tokens@1.0.0/text",
+            "kind": "datatype",
+            "datatype": "kanonak.org/core-xsd/string"
+          }
+        }
       }
     }
   },
@@ -161,6 +176,33 @@
           "$id": "probe.example.com/data@1.0.0/a3",
           "accountCode": "acme",
           "toString": "written by a later minor"
+        }
+      ]
+    },
+    {
+      "id": "two-properties-of-one-local-name",
+      "pkg": {
+        "publisher": "probe.example.com",
+        "packageName": "data",
+        "version": "1.0.0"
+      },
+      "nodes": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Note",
+          "$id": "probe.example.com/data@1.0.0/n1",
+          "text": "Open and free to use.",
+          "style.example.com/tokens/text": "#333333"
+        }
+      ],
+      "why": "A class holds two properties of one local name: its own package's keeps the name, and the other is keyed by its versionless URI, so each is written and hashed under its own predicate (runtime#81)",
+      "expectedCanonicalForm": "{\"subjects\":[{\"uri\":\"probe.example.com/data@1.0.0/data\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"kanonak.org/core-kanonak@1.0.0/Package\"}]},{\"uri\":\"probe.example.com/data@1.0.0/n1\",\"statements\":[{\"predicate\":\"kanonak.org/core-rdf@1.1.0/type\",\"type\":\"ref\",\"value\":\"probe.example.com/schema@1.0.0/Note\"},{\"predicate\":\"probe.example.com/schema@1.0.0/text\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"Open and free to use.\"},{\"predicate\":\"style.example.com/tokens@1.0.0/text\",\"type\":\"typed\",\"carrier\":\"string\",\"value\":\"#333333\"}]}]}",
+      "expectedHash": "sha256:092ff00ba309e4e1f31994044e06ad91ae15f01178c3f05a287241abc0a39b69",
+      "expectedSerialize": [
+        {
+          "$type": "probe.example.com/schema@1.0.0/Note",
+          "$id": "probe.example.com/data@1.0.0/n1",
+          "text": "Open and free to use.",
+          "style.example.com/tokens/text": "#333333"
         }
       ]
     }
