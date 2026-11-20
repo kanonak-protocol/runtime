@@ -11,6 +11,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
@@ -456,6 +457,19 @@ public final class Expression {
     /** fn:matches semantics: UNANCHORED. Java's Pattern counts code points natively;
      * case folding adds UNICODE_CASE per the pinned Unicode simple folding. */
     private static boolean matchesPattern(String input, String pattern) {
+        return compileMatches(pattern).test(input);
+    }
+
+    /**
+     * Compile a {@code Matches} pattern once, for testing many inputs against it: the returned
+     * test gives exactly what {@link #matches matches(input, pattern)} gives. Compiling refuses
+     * exactly what {@code matches} refuses, with the same {@link ExpressionError}, so a pattern
+     * outside the pinned subset fails here, never later at a test. The test holds no state
+     * between calls, and is safe to share between threads.
+     *
+     * @throws ExpressionError when the pattern is outside the pinned subset
+     */
+    public static Predicate<String> compileMatches(String pattern) {
         MatchesPattern parsed = parseMatchesPattern(pattern);
         String flags = parsed.flags();
         String body = parsed.body();
@@ -470,7 +484,7 @@ public final class Expression {
         } catch (PatternSyntaxException e) {
             throw err("Matches pattern does not compile: " + pattern);
         }
-        return compiled.matcher(input).find();
+        return input -> compiled.matcher(input).find();
     }
 
     /**
@@ -481,7 +495,8 @@ public final class Expression {
      *
      * <p>For a host engine that evaluates {@code Matches} over its own value domain: it calls
      * this rather than re-implement the dialect, and pre-flights an authored pattern with
-     * {@link #validateMatchesPattern}, which applies the same rules.
+     * {@link #validateMatchesPattern}, which applies the same rules. A host testing one pattern
+     * many times compiles it once with {@link #compileMatches}.
      *
      * @throws ExpressionError when the pattern is outside the pinned subset
      */

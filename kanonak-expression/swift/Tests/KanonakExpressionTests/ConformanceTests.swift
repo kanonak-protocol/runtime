@@ -306,11 +306,33 @@ private func nodeTypes(_ name: String) throws -> [String] {
     return out
 }
 
+/// Where `compileMatches` disagrees with a `matches` vector, how; nil where it
+/// agrees. A pattern `matches` refuses is refused when compiled, with the same
+/// message. Any other gives the vector's answer, twice in a row, so a test that
+/// kept state between calls would show.
+private func compiledMatchesDisagreement(_ v: [String: Any], _ input: String, _ pattern: String) throws -> String? {
+    var compiled: ((String) -> Bool)?
+    var compileError: String?
+    do { compiled = try compileMatches(pattern) } catch let e as ExpressionError { compileError = e.message }
+    if v["expectError"] as? Bool ?? false {
+        guard let refused = compileError else { return "compiled a pattern matches refuses" }
+        var matchesError: String?
+        do { _ = try matches(input, pattern) } catch { matchesError = "\(error)" }
+        return refused == matchesError
+            ? nil : "refused with \"\(refused)\", where matches refused with \"\(matchesError ?? "nothing")\""
+    }
+    guard let test = compiled else { return "refused a pattern matches accepts: \(compileError ?? "")" }
+    let expected = v["expected"] as? Bool ?? false
+    let first = test(input)
+    let second = test(input)
+    return first == expected && second == expected ? nil : "gave \(first), then \(second)"
+}
+
 final class ExpressionSurfaceTests: XCTestCase {
-    /// The public surface beside `evaluate`: `evaluates(_:)`, `matches(_:_:)`
-    /// and `concat(_:)`. Then a cross-check of `evaluates` against the evaluate
-    /// vectors themselves: every node class they exercise is either one the
-    /// kernel folds, or a leaf this harness's `resolve` answers.
+    /// The public surface beside `evaluate`: `evaluates(_:)`, `matches(_:_:)`,
+    /// `compileMatches(_:)` and `concat(_:)`. Then a cross-check of `evaluates`
+    /// against the evaluate vectors themselves: every node class they exercise
+    /// is either one the kernel folds, or a leaf this harness's `resolve` answers.
     func testSurfaceVectors() throws {
         let name = "expression-surface-vectors.json"
         let doc = try loadJSON(name)
@@ -336,6 +358,12 @@ final class ExpressionSurfaceTests: XCTestCase {
             let id = v["id"] as? String ?? "(no id)"
             guard let input = v["input"] as? String, let pattern = v["pattern"] as? String else {
                 XCTFail("[\(name)/\(id)] malformed matches case"); continue
+            }
+            total += 1
+            if let disagreement = try compiledMatchesDisagreement(v, input, pattern) {
+                XCTFail("[\(name)/\(id)] compileMatches \(disagreement)")
+            } else {
+                pass += 1
             }
             if v["expectError"] as? Bool ?? false {
                 if (try? matches(input, pattern)) == nil { pass += 1 }

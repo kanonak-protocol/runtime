@@ -652,6 +652,17 @@ function expandShorthandClasses(body: string, dotAll: boolean): string {
  * `u` also rejects a bare literal `{`, turning an engine-divergent lenient
  * reading into the subset's loud error. */
 function matchesPattern(input: string, pattern: string): boolean {
+  return compileMatches(pattern)(input);
+}
+
+/**
+ * Compile a `Matches` pattern once, for testing many inputs against it: the
+ * returned test gives exactly what `matches(input, pattern)` gives. Compiling
+ * refuses exactly what `matches` refuses, with the same `ExpressionError`, so a
+ * pattern outside the pinned subset fails here, never later at a test. The
+ * test holds no state between calls.
+ */
+export function compileMatches(pattern: string): (input: string) => boolean {
   const { flags, body } = parseMatchesPattern(pattern);
   let re: RegExp;
   try {
@@ -659,7 +670,7 @@ function matchesPattern(input: string, pattern: string): boolean {
   } catch {
     throw new ExpressionError(`Matches pattern does not compile: ${pattern}`);
   }
-  return re.test(input);
+  return (input) => re.test(input);
 }
 
 /**
@@ -671,6 +682,8 @@ function matchesPattern(input: string, pattern: string): boolean {
  * For a host engine that evaluates `Matches` over its own value domain: it
  * calls this rather than re-implement the dialect, and pre-flights an authored
  * pattern with {@link validateMatchesPattern}, which applies the same rules.
+ * A host testing one pattern many times compiles it once with
+ * {@link compileMatches}.
  */
 export function matches(input: string, pattern: string): boolean {
   return matchesPattern(input, pattern);

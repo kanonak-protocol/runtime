@@ -271,6 +271,29 @@ its own value domain — the SDK's look and transformation engine, say — calls
 these rather than re-implement the dialect: the subset is defined once per
 port, here.
 
+**Compiled once, tested many times (1.7.0).** A host that tests one pattern
+against many inputs compiles it once, and `matches` is itself that compile
+followed by one test. Compiling refuses exactly what `matches` refuses, with
+the same error, so an out-of-subset pattern fails when it is compiled, never
+at a later test. The test gives exactly what `matches(input, pattern)` gives
+and keeps no state between calls, so one compiled pattern serves every
+input.
+
+| Port | Compile | Test |
+|---|---|---|
+| TypeScript | `compileMatches(pattern)` | the function it returns |
+| Python | `compile_matches(pattern)` | the function it returns |
+| Rust | `MatchesPattern::new(pattern)` | `is_match(&self, input)` |
+| Go | `CompileMatches(pattern)` | the function it returns |
+| Java | `Expression.compileMatches(pattern)` | the `Predicate<String>` it returns |
+| C# | `Expr.CompileMatches(pattern)` | the `Func<string, bool>` it returns |
+| Swift | `compileMatches(pattern)` | the closure it returns |
+
+The `matches` cases of `expression-surface-vectors.json` run through both
+forms in every port: an error case must be refused when compiled with the
+message `matches` gives, and any other case must give its answer twice in a
+row from one compiled pattern.
+
 ## NameBasedUuid — RFC 9562 version 5 (1.2.0)
 
 `NameBasedUuid(uuidNamespace, uuidName)` yields the version 5 UUID of a name

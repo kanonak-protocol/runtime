@@ -69,6 +69,7 @@ __all__ = [
     "UuidFormat",
     "Value",
     "align",
+    "compile_matches",
     "concat",
     "epoch_days",
     "epoch_milliseconds",
@@ -571,6 +572,17 @@ def _matches_pattern(text: str, pattern: str) -> bool:
     everything but ``\\n`` (both native here); case folding under ``i`` is
     Unicode simple folding (native — which is why ``re.ASCII`` must NOT be
     passed; the ASCII pins ride the textual expansions instead)."""
+    return compile_matches(pattern)(text)
+
+
+def compile_matches(pattern: str) -> Callable[[str], bool]:
+    """Compile a ``Matches`` pattern once, for testing many inputs against it.
+
+    The returned test gives exactly what ``matches(input, pattern)`` gives.
+    Compiling refuses exactly what :func:`matches` refuses, with the same
+    :class:`ExpressionError`, so a pattern outside the pinned subset fails
+    here, never later at a test. The test holds no state between calls, and is
+    safe to call from several threads at once."""
     flags_str, body = _parse_matches_pattern(pattern)
     flags = 0
     if "i" in flags_str:
@@ -583,7 +595,7 @@ def _matches_pattern(text: str, pattern: str) -> bool:
         compiled = _re.compile(_expand_shorthand_classes(body), flags)
     except _re.error as exc:
         raise ExpressionError(f"Matches pattern does not compile: {pattern}") from exc
-    return compiled.search(text) is not None
+    return lambda input: compiled.search(input) is not None
 
 
 def matches(input: str, pattern: str) -> bool:
@@ -597,7 +609,8 @@ def matches(input: str, pattern: str) -> bool:
     For a host engine that evaluates ``Matches`` over its own value domain: it
     calls this rather than re-implement the dialect, and pre-flights an
     authored pattern with :func:`validate_matches_pattern`, which applies the
-    same rules."""
+    same rules. A host testing one pattern many times compiles it once with
+    :func:`compile_matches`."""
     return _matches_pattern(input, pattern)
 
 

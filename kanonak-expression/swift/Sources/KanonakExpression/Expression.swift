@@ -587,6 +587,16 @@ private func expandShorthandClasses(_ body: String, dotAll: Bool) -> String {
 /// fn:matches semantics: UNANCHORED. ICU counts code points natively; `(?i)`
 /// is ICU's Unicode case folding, matching the pin.
 private func matchesPattern(_ input: String, _ pattern: String) throws -> Bool {
+    try compileMatches(pattern)(input)
+}
+
+/// Compile a `Matches` pattern once, for testing many inputs against it: the
+/// returned test gives exactly what `matches(input, pattern)` gives. Compiling
+/// refuses exactly what `matches` refuses, with the same `ExpressionError`, so a
+/// pattern outside the pinned subset throws here, never later at a test. The
+/// test holds no state between calls, and may be called from several threads
+/// at once.
+public func compileMatches(_ pattern: String) throws -> (String) -> Bool {
     let (flags, body) = try parseMatchesPattern(pattern)
     let dotAll = flags.contains("s")
     var options: NSRegularExpression.Options = []
@@ -600,8 +610,9 @@ private func matchesPattern(_ input: String, _ pattern: String) throws -> Bool {
     } catch {
         throw ExpressionError("Matches pattern does not compile: \(pattern)")
     }
-    let range = NSRange(input.startIndex..., in: input)
-    return re.firstMatch(in: input, options: [], range: range) != nil
+    return { input in
+        re.firstMatch(in: input, options: [], range: NSRange(input.startIndex..., in: input)) != nil
+    }
 }
 
 /// Test `input` against `pattern` exactly as `tx.Matches` evaluates it: the
@@ -611,7 +622,8 @@ private func matchesPattern(_ input: String, _ pattern: String) throws -> Bool {
 ///
 /// For a host engine that evaluates `Matches` over its own value domain: it
 /// calls this rather than re-implement the dialect, and pre-flights an authored
-/// pattern with `validateMatchesPattern`, which applies the same rules.
+/// pattern with `validateMatchesPattern`, which applies the same rules. A host
+/// testing one pattern many times compiles it once with `compileMatches`.
 public func matches(_ input: String, _ pattern: String) throws -> Bool {
     try matchesPattern(input, pattern)
 }

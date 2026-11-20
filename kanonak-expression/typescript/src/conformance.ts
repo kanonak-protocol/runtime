@@ -26,6 +26,7 @@ import {
   evaluate,
   evaluates,
   explain,
+  compileMatches,
   matches,
   type AlignedNode,
   ExpressionError,
@@ -218,7 +219,7 @@ interface SurfaceVectors {
 
 /**
  * The public surface beside `evaluate`: `evaluates(typeUri)`,
- * `matches(input, pattern)` and `concat(parts)`. Then a cross-check of `evaluates` against the
+ * `matches(input, pattern)`, `compileMatches(pattern)` and `concat(parts)`. Then a cross-check of `evaluates` against the
  * evaluate vectors themselves: every node class they exercise is either one
  * the kernel folds, or a leaf this harness's `resolve` answers — so a class
  * the fold handles cannot be missing from `evaluates`.
@@ -236,6 +237,9 @@ function runSurfaceFile(relPath: string, label: string, exercised: string[]): { 
     try { got = matches(v.input, v.pattern); } catch { threw = true; }
     if (v.expectError ? threw : !threw && got === v.expected) pass++;
     else { fail++; console.error(`${label}/${v.id}: matches gave ${threw ? 'an error' : got}`); }
+    const disagreement = compiledMatchesDisagreement(v);
+    if (disagreement === undefined) pass++;
+    else { fail++; console.error(`${label}/${v.id}: compileMatches ${disagreement}`); }
   }
   for (const v of data.concat) {
     let got: Value | undefined;
@@ -254,6 +258,31 @@ function runSurfaceFile(relPath: string, label: string, exercised: string[]): { 
   const total = pass + fail;
   console.log(`${label}: ${pass}/${total} pass`);
   return { pass, fail, total };
+}
+
+/**
+ * Where `compileMatches` disagrees with a `matches` vector, how; undefined where
+ * it agrees. A pattern `matches` refuses is refused when compiled, with the same
+ * message. Any other gives the vector's answer, twice in a row, so a test that
+ * kept state between calls would show.
+ */
+function compiledMatchesDisagreement(v: SurfaceVectors['matches'][number]): string | undefined {
+  let test: ((input: string) => boolean) | undefined;
+  let compileError: string | undefined;
+  try { test = compileMatches(v.pattern); } catch (e) {
+    if (!(e instanceof ExpressionError)) throw e;
+    compileError = e.message;
+  }
+  if (v.expectError) {
+    if (compileError === undefined) return 'compiled a pattern matches refuses';
+    let matchesError: string | undefined;
+    try { matches(v.input, v.pattern); } catch (e) { matchesError = (e as Error).message; }
+    return compileError === matchesError ? undefined : `refused with "${compileError}", where matches refused with "${matchesError}"`;
+  }
+  if (test === undefined) return `refused a pattern matches accepts: ${compileError}`;
+  const first = test(v.input);
+  const second = test(v.input);
+  return first === v.expected && second === v.expected ? undefined : `gave ${first}, then ${second}`;
 }
 
 /** Every node `type` in a vector file's expression trees. */
