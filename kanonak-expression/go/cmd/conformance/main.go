@@ -289,14 +289,8 @@ type surfaceFile struct {
 		Type     string `json:"type"`
 		Expected bool   `json:"expected"`
 	} `json:"evaluates"`
-	Matches []struct {
-		ID          string `json:"id"`
-		Input       string `json:"input"`
-		Pattern     string `json:"pattern"`
-		Expected    *bool  `json:"expected"`
-		ExpectError bool   `json:"expectError"`
-	} `json:"matches"`
-	Concat []struct {
+	Matches []matchesVector `json:"matches"`
+	Concat  []struct {
 		ID    string `json:"id"`
 		Parts []struct {
 			Type  string      `json:"type"`
@@ -307,8 +301,16 @@ type surfaceFile struct {
 	} `json:"concat"`
 }
 
+type matchesVector struct {
+	ID          string `json:"id"`
+	Input       string `json:"input"`
+	Pattern     string `json:"pattern"`
+	Expected    *bool  `json:"expected"`
+	ExpectError bool   `json:"expectError"`
+}
+
 // runSurfaceFile drives the public surface beside Evaluate: Evaluates(typeURI),
-// Matches(input, pattern) and Concat(parts). Then a cross-check of Evaluates against the
+// Matches(input, pattern), CompileMatches(pattern) and Concat(parts). Then a cross-check of Evaluates against the
 // evaluate vectors themselves: every node class they exercise is either one
 // the kernel folds, or a leaf this harness's resolve answers — so a class the
 // fold handles cannot be missing from Evaluates.
@@ -332,6 +334,12 @@ func runSurfaceFile(name string, exercised []string) (pass, total int) {
 		pass++
 	}
 	for _, v := range doc.Matches {
+		total++
+		if disagreement := compiledMatchesDisagreement(v); disagreement != "" {
+			fmt.Fprintf(os.Stderr, "%s/%s: CompileMatches %s\n", name, v.ID, disagreement)
+		} else {
+			pass++
+		}
 		total++
 		got, err := expr.Matches(v.Input, v.Pattern)
 		if v.ExpectError {
@@ -378,6 +386,41 @@ func runSurfaceFile(name string, exercised []string) (pass, total int) {
 	}
 	fmt.Printf("%s: %d/%d pass\n", name, pass, total)
 	return pass, total
+}
+
+// compiledMatchesDisagreement says where CompileMatches disagrees with a Matches
+// vector, and how; "" where it agrees. A pattern Matches refuses is refused when
+// compiled, with the same message. Any other gives the vector's answer, twice in
+// a row, so a test that kept state between calls would show.
+func compiledMatchesDisagreement(v matchesVector) string {
+	test, err := expr.CompileMatches(v.Pattern)
+	if err != nil {
+		if _, ok := err.(*expr.Error); !ok {
+			panic(err)
+		}
+	}
+	if v.ExpectError {
+		if err == nil {
+			return "compiled a pattern Matches refuses"
+		}
+		_, matchesErr := expr.Matches(v.Input, v.Pattern)
+		if matchesErr == nil {
+			return fmt.Sprintf("refused with %q, where Matches accepted it", err.Error())
+		}
+		if err.Error() != matchesErr.Error() {
+			return fmt.Sprintf("refused with %q, where Matches refused with %q", err.Error(), matchesErr.Error())
+		}
+		return ""
+	}
+	if err != nil {
+		return "refused a pattern Matches accepts: " + err.Error()
+	}
+	first := test(v.Input)
+	second := test(v.Input)
+	if v.Expected == nil || first != *v.Expected || second != *v.Expected {
+		return fmt.Sprintf("gave %v, then %v", first, second)
+	}
+	return ""
 }
 
 // nodeTypes collects every node "type" in a vector file's expression trees.

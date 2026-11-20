@@ -722,16 +722,38 @@ func expandShorthandClasses(body string) string {
 // matchesPattern — fn:matches semantics: UNANCHORED. This engine is the RE2
 // family: runes (code points) are the native counting unit.
 func matchesPattern(input, pattern string) bool {
+	test, err := CompileMatches(pattern)
+	if err != nil {
+		panic(err)
+	}
+	return test(input)
+}
+
+// CompileMatches compiles a Matches pattern once, for testing many inputs
+// against it: the returned test gives exactly what Matches(input, pattern)
+// gives. Compiling refuses exactly what Matches refuses, with the same *Error,
+// so a pattern outside the pinned subset fails here, never later at a test.
+// The test holds no state between calls, and is safe for concurrent use.
+func CompileMatches(pattern string) (test func(input string) bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if e, ok := r.(*Error); ok {
+				err = e
+				return
+			}
+			panic(r)
+		}
+	}()
 	flags, body := parseMatchesPattern(pattern)
 	expanded := expandShorthandClasses(body)
 	if flags != "" {
 		expanded = "(?" + flags + ")" + expanded
 	}
-	re, err := regexp.Compile(expanded)
-	if err != nil {
+	re, compileErr := regexp.Compile(expanded)
+	if compileErr != nil {
 		raise("Matches pattern does not compile: %s", pattern)
 	}
-	return re.MatchString(input)
+	return re.MatchString, nil
 }
 
 // Matches tests input against pattern exactly as tx.Matches evaluates it: the
@@ -741,7 +763,8 @@ func matchesPattern(input, pattern string) bool {
 //
 // For a host engine that evaluates Matches over its own value domain: it
 // calls this rather than re-implement the dialect, and pre-flights an authored
-// pattern with ValidateMatchesPattern, which applies the same rules.
+// pattern with ValidateMatchesPattern, which applies the same rules. A host
+// testing one pattern many times compiles it once with CompileMatches.
 func Matches(input, pattern string) (matched bool, err error) {
 	defer func() {
 		if r := recover(); r != nil {

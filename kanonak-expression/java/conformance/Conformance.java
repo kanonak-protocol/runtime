@@ -5,6 +5,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
 
 import org.kanonak.expression.Expression;
 import org.kanonak.expression.Expression.ExpressionError;
@@ -392,8 +393,8 @@ public final class Conformance {
         }
     }
 
-    /** The public surface beside evaluate: {@code evaluates(typeUri)}, {@code matches(input, pattern)} and
-     *  {@code concat(parts)}.
+    /** The public surface beside evaluate: {@code evaluates(typeUri)}, {@code matches(input, pattern)},
+     *  {@code compileMatches(pattern)} and {@code concat(parts)}.
      *  Then a cross-check of evaluates against the evaluate vectors themselves: every node class they
      *  exercise is either one the kernel folds, or a leaf this harness's resolve answers — so a class
      *  the fold handles cannot be missing from evaluates. Returns the failure count. */
@@ -421,6 +422,9 @@ public final class Conformance {
                 : error == null && v.get("expected") instanceof Boolean want && got.booleanValue() == want;
             if (ok) pass++;
             else { fail++; System.out.println("  FAIL [" + name + "/" + v.get("id") + "] matches gave " + (error != null ? error : got)); }
+            String disagreement = compiledMatchesDisagreement(v);
+            if (disagreement == null) pass++;
+            else { fail++; System.out.println("  FAIL [" + name + "/" + v.get("id") + "] compileMatches " + disagreement); }
         }
         for (Object o : (List<Object>) doc.get("concat")) {
             Map<String, Object> v = (Map<String, Object>) o;
@@ -446,5 +450,32 @@ public final class Conformance {
         }
         System.out.println(name + ": " + pass + "/" + (pass + fail) + " pass" + (fail == 0 ? "" : ", " + fail + " fail"));
         return fail;
+    }
+
+    /** Where {@code compileMatches} disagrees with a {@code matches} vector, how; null where it agrees.
+     *  A pattern {@code matches} refuses is refused when compiled, with the same message. Any other
+     *  gives the vector's answer, twice in a row, so a test that kept state between calls would show. */
+    static String compiledMatchesDisagreement(Map<String, Object> v) {
+        String input = (String) v.get("input");
+        String pattern = (String) v.get("pattern");
+        Predicate<String> test = null;
+        String compileError = null;
+        try { test = Expression.compileMatches(pattern); }
+        catch (ExpressionError e) { compileError = e.getMessage(); }
+        if (Boolean.TRUE.equals(v.get("expectError"))) {
+            if (compileError == null) return "compiled a pattern matches refuses";
+            String matchesError = null;
+            try { Expression.matches(input, pattern); }
+            catch (RuntimeException e) { matchesError = e.getMessage(); }
+            return compileError.equals(matchesError)
+                ? null
+                : "refused with \"" + compileError + "\", where matches refused with \"" + matchesError + "\"";
+        }
+        if (test == null) return "refused a pattern matches accepts: " + compileError;
+        boolean first = test.test(input);
+        boolean second = test.test(input);
+        return v.get("expected") instanceof Boolean want && first == want && second == want
+            ? null
+            : "gave " + first + ", then " + second;
     }
 }

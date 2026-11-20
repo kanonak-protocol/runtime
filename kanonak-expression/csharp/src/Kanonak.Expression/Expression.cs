@@ -694,8 +694,23 @@ namespace Kanonak.Expression
 
         /// <summary>fn:matches semantics: UNANCHORED. Case folding pins to Unicode simple
         /// folding via IgnoreCase|CultureInvariant.</summary>
-        static bool MatchesPattern(string input, string pattern)
+        static bool MatchesPattern(string input, string pattern) => CompileMatches(pattern)(input);
+
+        /// <summary>
+        /// Compile a <c>Matches</c> pattern once, for testing many inputs against it: the
+        /// returned test gives exactly what <see cref="Matches"/> gives for the same input and
+        /// pattern. Compiling refuses exactly what <see cref="Matches"/> refuses, with the same
+        /// <see cref="ExpressionError"/>, so a pattern outside the pinned subset fails here, never
+        /// later at a test. The test holds no state between calls, and may be called from several
+        /// threads at once.
+        /// </summary>
+        /// <param name="pattern">The whole authored pattern, flag prefix included.</param>
+        /// <exception cref="ExpressionError">The pattern is outside the pinned subset.</exception>
+        /// <exception cref="ArgumentNullException"><paramref name="pattern"/> is null, or the
+        /// input handed to the returned test is.</exception>
+        public static Func<string, bool> CompileMatches(string pattern)
         {
+            if (pattern == null) throw new ArgumentNullException(nameof(pattern));
             var (flags, body) = ParseMatchesPattern(pattern);
             bool dotAll = flags.IndexOf('s') >= 0;
             var opts = RegexOptions.None;
@@ -711,7 +726,11 @@ namespace Kanonak.Expression
             {
                 throw Err("Matches pattern does not compile: " + pattern);
             }
-            return compiled.IsMatch(input);
+            return input =>
+            {
+                if (input == null) throw new ArgumentNullException(nameof(input));
+                return compiled.IsMatch(input);
+            };
         }
 
         /// <summary>
@@ -723,7 +742,8 @@ namespace Kanonak.Expression
         /// </summary>
         /// <remarks>For a host engine that evaluates <c>Matches</c> over its own value domain: it
         /// calls this rather than re-implement the dialect, and pre-flights an authored pattern
-        /// with <see cref="ValidateMatchesPattern"/>, which applies the same rules.</remarks>
+        /// with <see cref="ValidateMatchesPattern"/>, which applies the same rules. A host testing
+        /// one pattern many times compiles it once with <see cref="CompileMatches"/>.</remarks>
         /// <exception cref="ExpressionError">The pattern is outside the pinned subset.</exception>
         /// <exception cref="ArgumentNullException"><paramref name="input"/> or
         /// <paramref name="pattern"/> is null.</exception>

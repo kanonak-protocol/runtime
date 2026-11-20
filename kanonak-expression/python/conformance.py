@@ -26,6 +26,7 @@ from kanonak_expression import (
     Ref,
     TraceNode,
     align,
+    compile_matches,
     concat,
     evaluate,
     evaluates,
@@ -240,7 +241,7 @@ def run_align_file(vectors_dir: Path, name: str) -> tuple[int, int]:
 
 def run_surface_file(vectors_dir: Path, name: str, exercised: list) -> tuple[int, int]:
     """The public surface beside ``evaluate``: ``evaluates(type_uri)``,
-    ``matches(input, pattern)`` and ``concat(parts)``. Then a cross-check of ``evaluates`` against the
+    ``matches(input, pattern)``, ``compile_matches(pattern)`` and ``concat(parts)``. Then a cross-check of ``evaluates`` against the
     evaluate vectors themselves: every node class they exercise is either one
     the kernel folds, or a leaf this harness's ``resolve`` answers — so a class
     the fold handles cannot be missing from ``evaluates``."""
@@ -265,6 +266,12 @@ def run_surface_file(vectors_dir: Path, name: str, exercised: list) -> tuple[int
         else:
             failed += 1
             print(f"{name}/{v['id']}: matches gave {'an error' if threw else got!r}")
+        disagreement = compiled_matches_disagreement(v)
+        if disagreement is None:
+            passed += 1
+        else:
+            failed += 1
+            print(f"{name}/{v['id']}: compile_matches {disagreement}")
     for v in data["concat"]:
         error = None
         got = None
@@ -287,6 +294,37 @@ def run_surface_file(vectors_dir: Path, name: str, exercised: list) -> tuple[int
     total = passed + failed
     print(f"{name}: {passed}/{total} pass")
     return passed, total
+
+
+def compiled_matches_disagreement(v: dict) -> str | None:
+    """Where ``compile_matches`` disagrees with a ``matches`` vector, how; None
+    where it agrees. A pattern ``matches`` refuses is refused when compiled,
+    with the same message. Any other gives the vector's answer, twice in a row,
+    so a test that kept state between calls would show."""
+    test = None
+    compile_error = None
+    try:
+        test = compile_matches(v["pattern"])
+    except ExpressionError as e:
+        compile_error = str(e)
+    if v.get("expectError"):
+        if compile_error is None:
+            return "compiled a pattern matches refuses"
+        matches_error = None
+        try:
+            matches(v["input"], v["pattern"])
+        except ExpressionError as e:
+            matches_error = str(e)
+        if compile_error == matches_error:
+            return None
+        return f"refused with {compile_error!r}, where matches refused with {matches_error!r}"
+    if test is None:
+        return f"refused a pattern matches accepts: {compile_error}"
+    first = test(v["input"])
+    second = test(v["input"])
+    if first == v["expected"] and second == v["expected"]:
+        return None
+    return f"gave {first}, then {second}"
 
 
 def node_types(vectors_dir: Path, name: str) -> list:

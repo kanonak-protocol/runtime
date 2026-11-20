@@ -784,15 +784,36 @@ fn expand_shorthand_classes(body: &str) -> String {
 /// count code points (this engine's native model); flags translate via
 /// RegexBuilder.
 fn matches_pattern(input: &str, pattern: &str) -> Result<bool, ExpressionError> {
-    let (flags, body) = parse_matches_pattern(pattern)?;
-    let expanded = expand_shorthand_classes(body);
-    let re = regex::RegexBuilder::new(&expanded)
-        .case_insensitive(flags.contains('i'))
-        .multi_line(flags.contains('m'))
-        .dot_matches_new_line(flags.contains('s'))
-        .build()
-        .map_err(|_| ExpressionError(format!("Matches pattern does not compile: {pattern}")))?;
-    Ok(re.is_match(input))
+    Ok(MatchesPattern::new(pattern)?.is_match(input))
+}
+
+/// A `Matches` pattern compiled once, for testing many inputs against it:
+/// [`MatchesPattern::is_match`] gives exactly what [`matches()`] gives for the
+/// same input and pattern. Compiling refuses exactly what [`matches()`] refuses,
+/// with the same [`ExpressionError`], so a pattern outside the pinned subset
+/// fails at [`MatchesPattern::new`], never later at a test. The test holds no
+/// state between calls, and one compiled pattern may be shared across threads.
+#[derive(Debug, Clone)]
+pub struct MatchesPattern {
+    re: regex::Regex,
+}
+
+impl MatchesPattern {
+    pub fn new(pattern: &str) -> Result<MatchesPattern, ExpressionError> {
+        let (flags, body) = parse_matches_pattern(pattern)?;
+        let expanded = expand_shorthand_classes(body);
+        let re = regex::RegexBuilder::new(&expanded)
+            .case_insensitive(flags.contains('i'))
+            .multi_line(flags.contains('m'))
+            .dot_matches_new_line(flags.contains('s'))
+            .build()
+            .map_err(|_| ExpressionError(format!("Matches pattern does not compile: {pattern}")))?;
+        Ok(MatchesPattern { re })
+    }
+
+    pub fn is_match(&self, input: &str) -> bool {
+        self.re.is_match(input)
+    }
 }
 
 /// Test `input` against `pattern` exactly as `tx.Matches` evaluates it: the
@@ -803,6 +824,8 @@ fn matches_pattern(input: &str, pattern: &str) -> Result<bool, ExpressionError> 
 /// For a host engine that evaluates `Matches` over its own value domain: it
 /// calls this rather than re-implement the dialect, and pre-flights an authored
 /// pattern with [`validate_matches_pattern`], which applies the same rules.
+/// A host testing one pattern many times compiles it once with
+/// [`MatchesPattern::new`].
 pub fn matches(input: &str, pattern: &str) -> Result<bool, ExpressionError> {
     matches_pattern(input, pattern)
 }

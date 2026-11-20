@@ -394,8 +394,8 @@ class Program
         return fail;
     }
 
-    /// <summary>The public surface beside Evaluate: Expr.Evaluates(typeUri), Expr.Matches(input, pattern) and
-    /// Expr.Concat(parts).
+    /// <summary>The public surface beside Evaluate: Expr.Evaluates(typeUri), Expr.Matches(input, pattern),
+    /// Expr.CompileMatches(pattern) and Expr.Concat(parts).
     /// Then a cross-check of Evaluates against the evaluate vectors themselves: every node class they exercise
     /// is either one the kernel folds, or a leaf this harness's resolve answers — so a class the fold handles
     /// cannot be missing from Evaluates. Returns the failure count.</summary>
@@ -438,6 +438,10 @@ class Program
             bool ok = expectError ? threw : !threw && got == v.GetProperty("expected").GetBoolean();
             if (ok) pass++;
             else { fail++; Console.WriteLine($"  FAIL [{name}/{id}] Matches gave {(threw ? "an error" : got.ToString())}"); }
+            total++;
+            string disagreement = CompiledMatchesDisagreement(input, pattern, expectError ? (bool?)null : v.GetProperty("expected").GetBoolean());
+            if (disagreement == null) pass++;
+            else { fail++; Console.WriteLine($"  FAIL [{name}/{id}] CompileMatches {disagreement}"); }
         }
 
         foreach (var v in concat.EnumerateArray())
@@ -465,6 +469,28 @@ class Program
 
         Console.WriteLine($"{name}: {pass}/{total} pass" + (fail == 0 ? "" : $", {fail} fail"));
         return fail;
+    }
+
+    /// <summary>Where Expr.CompileMatches disagrees with a matches vector, how; null where it agrees. A pattern
+    /// Matches refuses is refused when compiled, with the same message. Any other gives the vector's answer,
+    /// <paramref name="expected"/> (null where the vector expects an error), twice in a row, so a test that kept
+    /// state between calls would show.</summary>
+    static string CompiledMatchesDisagreement(string input, string pattern, bool? expected)
+    {
+        Func<string, bool> test = null;
+        string compileError = null;
+        try { test = Expr.CompileMatches(pattern); } catch (ExpressionError e) { compileError = e.Message; }
+        if (expected == null)
+        {
+            if (compileError == null) return "compiled a pattern matches refuses";
+            string matchesError = null;
+            try { Expr.Matches(input, pattern); } catch (Exception e) { matchesError = e.Message; }
+            return compileError == matchesError ? null : $"refused with \"{compileError}\", where matches refused with \"{matchesError}\"";
+        }
+        if (test == null) return $"refused a pattern matches accepts: {compileError}";
+        bool first = test(input);
+        bool second = test(input);
+        return first == expected && second == expected ? null : $"gave {first}, then {second}";
     }
 
     /// <summary>Every node <c>type</c> in a vector file's expression trees.</summary>

@@ -311,7 +311,8 @@ fn expression_vectors() {
 }
 
 /// The public surface beside `evaluate`: `evaluates(type_uri)`,
-/// `matches(input, pattern)` and `concat(parts)`. Then a cross-check of
+/// `matches(input, pattern)`, `MatchesPattern::new(pattern)` and
+/// `concat(parts)`. Then a cross-check of
 /// `evaluates` against the evaluate vectors themselves: every node class they
 /// exercise is either one the kernel folds, or a leaf this harness's `resolve`
 /// answers — so a class the fold handles cannot be missing from `evaluates`.
@@ -348,6 +349,13 @@ fn run_surface_file(name: &str, exercised: &BTreeSet<String>) -> (usize, usize) 
             match got {
                 Ok(b) => eprintln!("FAIL [{name}/{id}] matches gave {b}"),
                 Err(e) => eprintln!("FAIL [{name}/{id}] matches gave an error: {}", e.0),
+            }
+        }
+        match compiled_matches_disagreement(v) {
+            None => pass += 1,
+            Some(disagreement) => {
+                fail += 1;
+                eprintln!("FAIL [{name}/{id}] MatchesPattern {disagreement}");
             }
         }
     }
@@ -389,6 +397,37 @@ fn run_surface_file(name: &str, exercised: &BTreeSet<String>) -> (usize, usize) 
     let total = pass + fail;
     println!("{name}: {pass}/{total} pass");
     (pass, total)
+}
+
+/// Where `MatchesPattern` disagrees with a `matches` vector, how; `None` where
+/// it agrees. A pattern `matches` refuses is refused when compiled, with the
+/// same message. Any other gives the vector's answer, twice in a row, so a test
+/// that kept state between calls would show.
+fn compiled_matches_disagreement(v: &J) -> Option<String> {
+    let input = v["input"].as_str().unwrap();
+    let pattern = v["pattern"].as_str().unwrap();
+    let compiled = MatchesPattern::new(pattern);
+    if v.get("expectError").and_then(|x| x.as_bool()).unwrap_or(false) {
+        let compile_error = match compiled {
+            Ok(_) => return Some("compiled a pattern matches refuses".to_string()),
+            Err(e) => e.0,
+        };
+        let matches_error = match matches(input, pattern) {
+            Ok(b) => format!("nothing (it gave {b})"),
+            Err(e) => e.0,
+        };
+        return (compile_error != matches_error).then(|| {
+            format!("refused with \"{compile_error}\", where matches refused with \"{matches_error}\"")
+        });
+    }
+    let test = match compiled {
+        Ok(test) => test,
+        Err(e) => return Some(format!("refused a pattern matches accepts: {}", e.0)),
+    };
+    let expected = v["expected"].as_bool();
+    let first = test.is_match(input);
+    let second = test.is_match(input);
+    (Some(first) != expected || Some(second) != expected).then(|| format!("gave {first}, then {second}"))
 }
 
 /// Every node `type` in a vector file's expression trees.
