@@ -13,7 +13,7 @@
 //! just a caller leaf that returns a list. The kernel NEVER touches a graph.
 //!
 //! ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an
-//! aggregate over non-numeric elements, Min/Max/Average on empty, a nested
+//! aggregate over non-numeric elements, Min/Max/Average/Median on empty, a nested
 //! list in Join, an out-of-subset Matches pattern, an
 //! `EpochMilliseconds`/`EpochDays` source that isn't a date-time or a date in
 //! its lexical form, a `UriPublisher`/`UriPackage`/`UriName` ref that isn't
@@ -451,6 +451,7 @@ const LIST_FOLDS: &[&str] = &[
     "kanonak.org/transformations/Min",
     "kanonak.org/transformations/Max",
     "kanonak.org/transformations/Average",
+    "kanonak.org/transformations/Median",
     "kanonak.org/transformations/Join",
     "kanonak.org/transformations/Reverse",
 ];
@@ -461,7 +462,7 @@ fn is_list_fold(typ: &str) -> bool {
 
 /// The `source`-operand folds for the non-iterating list family. Normative
 /// semantics frozen from the SDK reference engine: Sum on empty = 0;
-/// Min/Max/Average on empty = loud error; Count type-agnostic.
+/// Min/Max/Average/Median on empty = loud error; Count type-agnostic.
 fn list_fold(typ: &str, list: Vec<EvalValue>, node: &Json) -> Result<EvalValue, ExpressionError> {
     match typ {
         "kanonak.org/transformations/Count" => Ok(EvalValue::Num(list.len() as f64)),
@@ -495,6 +496,22 @@ fn list_fold(typ: &str, list: Vec<EvalValue>, node: &Json) -> Result<EvalValue, 
                 total += require_num(el, "Average")?;
             }
             Ok(EvalValue::Num(total / list.len() as f64))
+        }
+        "kanonak.org/transformations/Median" => {
+            if list.is_empty() {
+                return err("Median on an empty list is undefined; guard with IsSet");
+            }
+            let mut nums = Vec::with_capacity(list.len());
+            for el in &list {
+                nums.push(require_num(el, "Median")?);
+            }
+            nums.sort_by(f64::total_cmp);
+            let middle = nums.len() / 2;
+            Ok(EvalValue::Num(if nums.len() % 2 == 1 {
+                nums[middle]
+            } else {
+                (nums[middle - 1] + nums[middle]) / 2.0
+            }))
         }
         "kanonak.org/transformations/Join" => {
             let sep = node.get("separator").and_then(Json::as_str).unwrap_or("");
@@ -1897,6 +1914,7 @@ fn direct_children(typ: &str) -> Option<&'static [&'static str]> {
         | "kanonak.org/transformations/Min"
         | "kanonak.org/transformations/Max"
         | "kanonak.org/transformations/Average"
+        | "kanonak.org/transformations/Median"
         | "kanonak.org/transformations/Join"
         | "kanonak.org/transformations/Reverse" => Some(&["source"]),
         "kanonak.org/transformations/IsString"

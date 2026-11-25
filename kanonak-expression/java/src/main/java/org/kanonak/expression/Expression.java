@@ -29,7 +29,7 @@ import java.util.regex.PatternSyntaxException;
  * a caller leaf that returns a list. The kernel NEVER touches a graph.
  *
  * <p>ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an aggregate over
- * non-numeric elements, Min/Max/Average on empty, a nested list in Join, an out-of-subset
+ * non-numeric elements, Min/Max/Average/Median on empty, a nested list in Join, an out-of-subset
  * Matches pattern, an EpochMilliseconds/EpochDays source that isn't a date-time or a date in
  * its lexical form, a UriPublisher/UriPackage/UriName ref that isn't publisher/package/name, a
  * part given to {@code concat} that is a URI segment with no value);
@@ -939,7 +939,7 @@ public final class Expression {
      * folded by {@code listFold}. */
     private static final Set<String> LIST_FOLDS = Set.of(
         TX + "/Count", TX + "/Sum", TX + "/Min", TX + "/Max",
-        TX + "/Average", TX + "/Join", TX + "/Reverse");
+        TX + "/Average", TX + "/Median", TX + "/Join", TX + "/Reverse");
 
     private static boolean isListFold(String typ) {
         return LIST_FOLDS.contains(typ);
@@ -969,6 +969,14 @@ public final class Expression {
                 double total = 0;
                 for (Object el : items) total += requireNum(el, "Average");
                 return total / items.size();
+            }
+            case TX + "/Median": {
+                if (items.isEmpty()) throw err("Median on an empty list is undefined; guard with IsSet");
+                double[] nums = new double[items.size()];
+                for (int i = 0; i < nums.length; i++) nums[i] = requireNum(items.get(i), "Median");
+                java.util.Arrays.sort(nums);
+                int middle = nums.length / 2;
+                return nums.length % 2 == 1 ? nums[middle] : (nums[middle - 1] + nums[middle]) / 2;
             }
             case TX + "/Join": {
                 Object sepRaw = node.get("separator");
@@ -1492,7 +1500,7 @@ public final class Expression {
             case URI_PACKAGE: return new String[] {"uriPackageOf"};
             case URI_NAME: return new String[] {"uriNameOf"};
             case TX + "/Count": case TX + "/Sum": case TX + "/Min": case TX + "/Max": case TX + "/Average":
-            case TX + "/Join": case TX + "/Reverse":
+            case TX + "/Median": case TX + "/Join": case TX + "/Reverse":
                 return new String[] {"source"};
             case TX + "/IsString": case TX + "/IsNumber": case TX + "/IsReference": case TX + "/IsList":
                 return new String[] {"kindCheck"};

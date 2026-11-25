@@ -45,7 +45,7 @@
  *
  *   - COMPUTATIONS FAIL LOUD: an arithmetic/unary-numeric/boolean-logic
  *     operator whose operand is not a number, an aggregate over a non-numeric
- *     element, `Min`/`Max`/`Average` on an empty list, a nested list in
+ *     element, `Min`/`Max`/`Average`/`Median` on an empty list, a nested list in
  *     `Join`, a non-string `Matches` source, an out-of-subset `Matches`
  *     pattern, an `EpochMilliseconds`/`EpochDays` source that isn't a date-time
  *     or a date in its lexical form, a `UriPublisher`/`UriPackage`/`UriName`
@@ -427,6 +427,12 @@ const LIST_FOLDS: Record<string, ListFold> = {
     let total = 0;
     for (const el of list) total += requireNumber(el, 'Average');
     return total / list.length;
+  },
+  [`${TX}/Median`]: (list) => {
+    if (list.length === 0) throw new ExpressionError('Median on an empty list is undefined; guard with IsSet');
+    const sorted = list.map((el) => requireNumber(el, 'Median')).sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
   },
   [`${TX}/Join`]: (list, node) => {
     const sep = typeof node.separator === 'string' ? node.separator : '';
@@ -1646,6 +1652,7 @@ const DIRECT_CHILDREN: Record<string, readonly string[]> = {
   [`${TX}/Min`]: ['source'],
   [`${TX}/Max`]: ['source'],
   [`${TX}/Average`]: ['source'],
+  [`${TX}/Median`]: ['source'],
   [`${TX}/Join`]: ['source'],
   [`${TX}/Reverse`]: ['source'],
   [`${TX}/IsString`]: ['kindCheck'],

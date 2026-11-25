@@ -12,7 +12,7 @@
 // list. The kernel NEVER touches a graph.
 //
 // ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an
-// aggregate over non-numeric elements, Min/Max/Average on empty, a nested
+// aggregate over non-numeric elements, Min/Max/Average/Median on empty, a nested
 // list in Join, an out-of-subset Matches pattern, an
 // EpochMilliseconds/EpochDays source that isn't a date-time or a date in its
 // lexical form, a UriPublisher/UriPackage/UriName ref that isn't
@@ -46,6 +46,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -148,7 +149,7 @@ func iteratorBody(typ string) (string, bool) {
 func isListFold(typ string) bool {
 	switch typ {
 	case tx + "/Count", tx + "/Sum", tx + "/Min", tx + "/Max",
-		tx + "/Average", tx + "/Join", tx + "/Reverse":
+		tx + "/Average", tx + "/Median", tx + "/Join", tx + "/Reverse":
 		return true
 	}
 	return false
@@ -445,6 +446,20 @@ func listFold(typ string, items []Value, node Node) Value {
 			total += requireNum(el, "Average")
 		}
 		return total / float64(len(items))
+	case tx + "/Median":
+		if len(items) == 0 {
+			raise("Median on an empty list is undefined; guard with IsSet")
+		}
+		nums := make([]float64, 0, len(items))
+		for _, el := range items {
+			nums = append(nums, requireNum(el, "Median"))
+		}
+		sort.Float64s(nums)
+		middle := len(nums) / 2
+		if len(nums)%2 == 1 {
+			return nums[middle]
+		}
+		return (nums[middle-1] + nums[middle]) / 2
 	case tx + "/Join":
 		sep, _ := node["separator"].(string)
 		parts := make([]string, 0, len(items))
@@ -1824,6 +1839,7 @@ var directChildren = map[string][]string{
 	tx + "/Min":         {"source"},
 	tx + "/Max":         {"source"},
 	tx + "/Average":     {"source"},
+	tx + "/Median":      {"source"},
 	tx + "/Join":        {"source"},
 	tx + "/Reverse":     {"source"},
 	tx + "/IsString":    {"kindCheck"},

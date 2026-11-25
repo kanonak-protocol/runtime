@@ -13,7 +13,7 @@
 // returns a list. The kernel NEVER touches a graph.
 //
 // ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an
-// aggregate over non-numeric elements, Min/Max/Average on empty, a nested list
+// aggregate over non-numeric elements, Min/Max/Average/Median on empty, a nested list
 // in Join, an out-of-subset Matches pattern, an `EpochMilliseconds`/`EpochDays`
 // source that isn't a date-time or a date in its lexical form, a
 // `UriPublisher`/`UriPackage`/`UriName` ref that isn't `publisher/package/name`,
@@ -188,7 +188,7 @@ private func iteratorBody(_ typ: String) -> String? {
 private func isListFold(_ typ: String) -> Bool {
     switch typ {
     case "\(tx)/Count", "\(tx)/Sum", "\(tx)/Min", "\(tx)/Max",
-         "\(tx)/Average", "\(tx)/Join", "\(tx)/Reverse":
+         "\(tx)/Average", "\(tx)/Median", "\(tx)/Join", "\(tx)/Reverse":
         return true
     default:
         return false
@@ -386,6 +386,13 @@ private func listFold(_ typ: String, _ items: [EvalValue], _ node: ExprNode) thr
         var total = 0.0
         for el in items { total += try requireNum(el, "Average") }
         return .num(total / Double(items.count))
+    case "\(tx)/Median":
+        guard !items.isEmpty else {
+            throw ExpressionError("Median on an empty list is undefined; guard with IsSet")
+        }
+        let nums = try items.map { try requireNum($0, "Median") }.sorted()
+        let middle = nums.count / 2
+        return .num(nums.count % 2 == 1 ? nums[middle] : (nums[middle - 1] + nums[middle]) / 2)
     case "\(tx)/Join":
         let sep = node["separator"] as? String ?? ""
         var parts: [String] = []
@@ -1484,7 +1491,7 @@ private func directChildren(_ typ: String) -> [String]? {
     case uriPublisherType: return ["uriPublisherOf"]
     case uriPackageType: return ["uriPackageOf"]
     case uriNameType: return ["uriNameOf"]
-    case "\(tx)/Count", "\(tx)/Sum", "\(tx)/Min", "\(tx)/Max", "\(tx)/Average", "\(tx)/Join", "\(tx)/Reverse":
+    case "\(tx)/Count", "\(tx)/Sum", "\(tx)/Min", "\(tx)/Max", "\(tx)/Average", "\(tx)/Median", "\(tx)/Join", "\(tx)/Reverse":
         return ["source"]
     case "\(tx)/IsString", "\(tx)/IsNumber", "\(tx)/IsReference", "\(tx)/IsList":
         return ["kindCheck"]

@@ -1,6 +1,6 @@
 {
   "expressionRuntimeVersion": "2",
-  "description": "Behavior parity vectors for expressionRuntimeVersion 2 — the value-domain extension (number | string | ref | list), the list/aggregate/membership family, polymorphic Equals, kind predicates, lambda binding (Filter/ListMap/ForEach), Matches over the pinned RE2-compatible XSD-regex subset, NameBasedUuid, the RFC 9562 version 5 UUID of a name (1.2.0), StartsWith, a prefix test of one string by another (1.3.0), EpochMilliseconds and EpochDays, a date-time or a date read as the whole milliseconds or days since 1970-01-01 (1.4.0), and UriPublisher, UriPackage and UriName, a ref's three segments, absence for any other source (1.5.0). Runs IN ADDITION to expression-vectors.json (v1), every vector of which must pass unchanged under a v2 kernel — that file is the numeric-regression gate. `expected` and `env` values are Values: JSON numbers, strings, arrays (lists), and {\"ref\": \"publisher/package/name\"} objects (refs). Normative list-family semantics are the SDK reference engine's: Sum on empty = 0; Min/Max/Average on empty = loud error; Count type-agnostic; absence is the empty list; predicates fail closed on type-confused operands, computations fail loud.",
+  "description": "Behavior parity vectors for expressionRuntimeVersion 2 — the value-domain extension (number | string | ref | list), the list/aggregate/membership family, polymorphic Equals, kind predicates, lambda binding (Filter/ListMap/ForEach), Matches over the pinned RE2-compatible XSD-regex subset, NameBasedUuid, the RFC 9562 version 5 UUID of a name (1.2.0), StartsWith, a prefix test of one string by another (1.3.0), EpochMilliseconds and EpochDays, a date-time or a date read as the whole milliseconds or days since 1970-01-01 (1.4.0), UriPublisher, UriPackage and UriName, a ref's three segments, absence for any other source (1.5.0), and Median, the middle number of a list, or on an even count the Average of its two middle numbers (1.8.0). Runs IN ADDITION to expression-vectors.json (v1), every vector of which must pass unchanged under a v2 kernel — that file is the numeric-regression gate. `expected` and `env` values are Values: JSON numbers, strings, arrays (lists), and {\"ref\": \"publisher/package/name\"} objects (refs). Normative list-family semantics are the SDK reference engine's: Sum on empty = 0; Min/Max/Average on empty = loud error; Count type-agnostic; absence is the empty list; predicates fail closed on type-confused operands, computations fail loud.",
   "vectors": [
     {
       "id": "string-literal",
@@ -2946,6 +2946,92 @@
         "type": "kanonak.org/transformations/UriPackage",
         "uriPackageOf": { "type": "kanonak.org/transformations/UriLiteral", "refTo": "example.org/colors@1.0.0/red" }
       },
+      "expectError": true
+    },
+    {
+      "id": "median-odd-unsorted",
+      "description": "The middle number once sorted, whatever order the list holds them in",
+      "expr": {
+        "type": "kanonak.org/transformations/Median",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [5, 1, 3] },
+      "expected": 3
+    },
+    {
+      "id": "median-even",
+      "description": "On an even count, the Average of the two middle numbers",
+      "expr": {
+        "type": "kanonak.org/transformations/Median",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [4, 1, 3, 2] },
+      "expected": 2.5
+    },
+    {
+      "id": "median-single",
+      "expr": {
+        "type": "kanonak.org/transformations/Median",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [7] },
+      "expected": 7
+    },
+    {
+      "id": "median-duplicates-and-negatives",
+      "description": "Sorted -2, -2, 4, 10: the two middle numbers are -2 and 4",
+      "expr": {
+        "type": "kanonak.org/transformations/Median",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [-2, 10, -2, 4] },
+      "expected": 1
+    },
+    {
+      "id": "median-fractions",
+      "expr": {
+        "type": "kanonak.org/transformations/Median",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [0.5, 0.25, 0.125] },
+      "expected": 0.25
+    },
+    {
+      "id": "median-outlier",
+      "description": "One outlier moves an Average a long way, and a Median not at all",
+      "expr": {
+        "type": "kanonak.org/transformations/Median",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [1, 1, 2, 2, 1000000] },
+      "expected": 2
+    },
+    {
+      "id": "median-empty-errors",
+      "expr": {
+        "type": "kanonak.org/transformations/Median",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [] },
+      "expectError": true
+    },
+    {
+      "id": "median-non-numeric-errors",
+      "description": "Every element must be a number, not only the middle ones",
+      "expr": {
+        "type": "kanonak.org/transformations/Median",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [1, "a", 3, 4, 5] },
+      "expectError": true
+    },
+    {
+      "id": "median-ref-errors",
+      "expr": {
+        "type": "kanonak.org/transformations/Median",
+        "source": { "type": "kanonak.org/transformations/VarRef", "varName": "xs" }
+      },
+      "env": { "xs": [1, {"ref": "example.org/colors/red"}, 3] },
       "expectError": true
     }
   ]
