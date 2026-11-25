@@ -13,7 +13,7 @@ caller's ``resolve`` may return any value: a property read is just a caller
 leaf that returns a list. The kernel NEVER touches a graph.
 
 ERROR CONTRACT: computations fail LOUD (arithmetic on a non-number, an
-aggregate over non-numeric elements, Min/Max/Average on empty, a nested list
+aggregate over non-numeric elements, Min/Max/Average/Median on empty, a nested list
 in Join, an out-of-subset Matches pattern, an EpochMilliseconds/EpochDays
 source that isn't a date-time or a date in its lexical form, a
 UriPublisher/UriPackage/UriName ref that isn't ``publisher/package/name``, a
@@ -235,6 +235,7 @@ _LIST_FOLDS = {
     f"{TX}/Min",
     f"{TX}/Max",
     f"{TX}/Average",
+    f"{TX}/Median",
     f"{TX}/Join",
     f"{TX}/Reverse",
 }
@@ -394,6 +395,12 @@ def _list_fold(typ: str, items: List[Value], node: ExprNode) -> Value:
         if not items:
             raise ExpressionError("Average on an empty list is undefined; guard with IsSet")
         return float(sum(_require_num(el, "Average") for el in items)) / len(items)
+    if typ == f"{TX}/Median":
+        if not items:
+            raise ExpressionError("Median on an empty list is undefined; guard with IsSet")
+        nums = sorted(float(_require_num(el, "Median")) for el in items)
+        middle = len(nums) // 2
+        return nums[middle] if len(nums) % 2 == 1 else (nums[middle - 1] + nums[middle]) / 2
     if typ == f"{TX}/Join":
         sep = node.get("separator")
         sep = sep if isinstance(sep, str) else ""
@@ -1425,6 +1432,7 @@ _DIRECT_CHILDREN: Dict[str, Tuple[str, ...]] = {
     f"{TX}/Min": ("source",),
     f"{TX}/Max": ("source",),
     f"{TX}/Average": ("source",),
+    f"{TX}/Median": ("source",),
     f"{TX}/Join": ("source",),
     f"{TX}/Reverse": ("source",),
     f"{TX}/IsString": ("kindCheck",),

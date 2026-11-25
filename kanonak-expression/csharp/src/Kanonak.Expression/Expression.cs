@@ -417,7 +417,7 @@ namespace Kanonak.Expression
         static readonly HashSet<string> ListFolds = new HashSet<string>
         {
             TX + "/Count", TX + "/Sum", TX + "/Min", TX + "/Max",
-            TX + "/Average", TX + "/Join", TX + "/Reverse",
+            TX + "/Average", TX + "/Median", TX + "/Join", TX + "/Reverse",
         };
 
         static bool IsListFold(string typ) => typ != null && ListFolds.Contains(typ);
@@ -451,6 +451,15 @@ namespace Kanonak.Expression
                     double total = 0;
                     foreach (var el in items) total += RequireNum(el, "Average");
                     return total / items.Count;
+                }
+                case TX + "/Median":
+                {
+                    if (items.Count == 0) throw Err("Median on an empty list is undefined; guard with IsSet");
+                    var nums = new double[items.Count];
+                    for (int i = 0; i < nums.Length; i++) nums[i] = RequireNum(items[i], "Median");
+                    Array.Sort(nums);
+                    int middle = nums.Length / 2;
+                    return nums.Length % 2 == 1 ? nums[middle] : (nums[middle - 1] + nums[middle]) / 2;
                 }
                 case TX + "/Join":
                 {
@@ -1394,7 +1403,7 @@ namespace Kanonak.Expression
                 case URI_PACKAGE: return new[] { "uriPackageOf" };
                 case URI_NAME: return new[] { "uriNameOf" };
                 case TX + "/Count": case TX + "/Sum": case TX + "/Min": case TX + "/Max": case TX + "/Average":
-                case TX + "/Join": case TX + "/Reverse":
+                case TX + "/Median": case TX + "/Join": case TX + "/Reverse":
                     return new[] { "source" };
                 case TX + "/IsString": case TX + "/IsNumber": case TX + "/IsReference": case TX + "/IsList":
                     return new[] { "kindCheck" };

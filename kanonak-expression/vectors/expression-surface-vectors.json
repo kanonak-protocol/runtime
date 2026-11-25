@@ -133,6 +133,11 @@
       "expected": true
     },
     {
+      "id": "evaluates-tx-Median",
+      "type": "kanonak.org/transformations/Median",
+      "expected": true
+    },
+    {
       "id": "evaluates-tx-Join",
       "type": "kanonak.org/transformations/Join",
       "expected": true

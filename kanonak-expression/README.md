@@ -107,7 +107,7 @@ The v2 extension splits by role:
 
 - **Computations fail LOUD.** Arithmetic / unary-numeric / boolean-logic
   operators on a non-number, an aggregate over a non-numeric element,
-  `Min`/`Max`/`Average` on an empty list, a nested list in `Join`, a
+  `Min`/`Max`/`Average`/`Median` on an empty list, a nested list in `Join`, a
   non-string `Matches` source, an out-of-subset `Matches` pattern, a
   non-integer or negative `ListItemAt` index, a `NameBasedUuid` namespace
   that isn't a UUID in canonical text, a non-string or ill-formed name, an
@@ -145,7 +145,7 @@ those values are unreachable by construction.
 | `BooleanLogic` | `operands` (list) | And, Or |
 | (direct) | `operand` | Not |
 | (direct, ternary) | `clipValue`, `clipLower`, `clipUpper` | Clip |
-| `ListAggregate` | `source` | Count, Sum, Min, Max, Average |
+| `ListAggregate` | `source` | Count, Sum, Min, Max, Average, Median (1.8.0) |
 | `ListSourced` | `source` (+ data) | Join (`separator`), Reverse |
 | (direct) | `source`, `itemIndex` | ListItemAt |
 | (direct) | `haystack`, `needle` | Contains |
@@ -162,8 +162,10 @@ Literals: `IntegerLiteral`, `DecimalLiteral`, `BooleanLiteral` (→ `1`/`0`),
 inside ordered comparisons).
 
 List-family semantics are the SDK reference engine's, frozen as vectors:
-`Sum` on empty = 0; `Min`/`Max`/`Average` on empty = loud error; `Count`
-type-agnostic; `Join` stringifies numbers per the ECMAScript rule RFC 8785
+`Sum` on empty = 0; `Min`/`Max`/`Average`/`Median` on empty = loud error; `Count`
+type-agnostic; `Median` is the middle number once sorted, or on an even count
+the `Average` of the two middle numbers, `(a + b) / 2`, and every element must
+be a number, not only the middle ones; `Join` stringifies numbers per the ECMAScript rule RFC 8785
 pins (the same serialization the canonical layer implements in every port)
 and refs to their local name; `ForEach` flattens one level (an empty body
 list contributes nothing — absence doing the skip).
